@@ -1,16 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" role="img" aria-label="TFactory">
-  <!-- TFactory logo: Gruvbox-green flask/test-tube on Gruvbox bg0 -->
-  <rect width="256" height="256" rx="56" fill="#282828"/>
-  <g stroke="#b8bb26" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none">
-    <!-- Flask body + neck -->
-    <path d="M 96 56 L 96 96 L 56 200 a 16 16 0 0 0 14 24 L 186 224 a 16 16 0 0 0 14 -24 L 160 96 L 160 56"/>
-    <!-- Top closure -->
-    <path d="M 88 56 L 168 56"/>
-    <!-- Liquid line -->
-    <path d="M 76 156 L 180 156" stroke="#fabd2f"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="CFactory">
+  <title>CFactory</title>
+  <!-- CFactory: a radar scope on Gruvbox bg0 — the control tower watching the pipeline -->
+  <defs>
+    <radialGradient id="sweep" cx="32" cy="32" r="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8ec07c" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#8ec07c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- badge -->
+  <rect x="0" y="0" width="64" height="64" rx="16" fill="#282828"/>
+  <!-- radar rings + crosshair (gruvbox blue) -->
+  <g fill="none" stroke="#83a598" stroke-linecap="round">
+    <circle cx="32" cy="32" r="19" stroke-opacity="0.55" stroke-width="2"/>
+    <circle cx="32" cy="32" r="11" stroke-opacity="0.40" stroke-width="2"/>
+    <path d="M13 32 H51 M32 13 V51" stroke-opacity="0.22" stroke-width="1.6"/>
   </g>
-  <!-- Bubbles -->
-  <circle cx="118" cy="186" r="5" fill="#83a598"/>
-  <circle cx="140" cy="200" r="4" fill="#d3869b"/>
-  <circle cx="152" cy="172" r="3" fill="#fe8019"/>
+  <!-- sweep wedge (straight-up clockwise to up-right) -->
+  <path d="M32 32 L32 13 A19 19 0 0 1 47.6 22.6 Z" fill="url(#sweep)"/>
+  <!-- bright leading edge of the sweep (gruvbox bright aqua) -->
+  <path d="M32 32 L47.6 22.6" stroke="#8ec07c" stroke-width="2.4" stroke-linecap="round"/>
+  <!-- monitored blips (the pipeline being watched) -->
+  <g fill="#ebdbb2">
+    <circle cx="32" cy="32" r="2.6"/>
+    <circle cx="21" cy="41" r="2.2" fill-opacity="0.80"/>
+    <circle cx="43" cy="42" r="2.2" fill-opacity="0.80"/>
+  </g>
+  <!-- active blip near the sweep (gruvbox bright yellow) with halo -->
+  <circle cx="41" cy="24" r="4.8" fill="#fabd2f" fill-opacity="0.22"/>
+  <circle cx="41" cy="24" r="2.7" fill="#fabd2f"/>
 </svg>

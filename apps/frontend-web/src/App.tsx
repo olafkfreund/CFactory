@@ -1,5 +1,12 @@
-import { useEffect, useState } from "react";
-import { fetchHealth, type Health } from "./api";
+import { useCallback, useEffect, useState } from "react";
+import {
+  fetchHealth,
+  fetchWorkItems,
+  refresh,
+  type Health,
+  type ServiceState,
+  type WorkItem,
+} from "./api";
 
 type BackendState =
   | { kind: "loading" }
@@ -7,26 +14,46 @@ type BackendState =
   | { kind: "error"; message: string };
 
 const STAGES = [
-  { key: "plan", label: "Plan", service: "PFactory" },
-  { key: "code", label: "Code", service: "AIFactory" },
-  { key: "test", label: "Test", service: "TFactory" },
+  { key: "pfactory", label: "Plan", service: "PFactory" },
+  { key: "aifactory", label: "Code", service: "AIFactory" },
+  { key: "tfactory", label: "Test", service: "TFactory" },
 ] as const;
 
 export default function App() {
-  const [state, setState] = useState<BackendState>({ kind: "loading" });
+  const [backend, setBackend] = useState<BackendState>({ kind: "loading" });
+  const [items, setItems] = useState<WorkItem[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setItems(await fetchWorkItems());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
   useEffect(() => {
-    let active = true;
     fetchHealth()
-      .then((health) => active && setState({ kind: "ok", health }))
+      .then((health) => setBackend({ kind: "ok", health }))
       .catch((err: unknown) =>
-        active &&
-        setState({ kind: "error", message: err instanceof Error ? err.message : String(err) }),
+        setBackend({ kind: "error", message: err instanceof Error ? err.message : String(err) }),
       );
-    return () => {
-      active = false;
-    };
-  }, []);
+    void load();
+  }, [load]);
+
+  const onRefresh = useCallback(async () => {
+    setBusy(true);
+    try {
+      await refresh();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [load]);
 
   return (
     <div className="app">
@@ -36,34 +63,63 @@ export default function App() {
           CFactory
           <span className="brand-sub">cockpit</span>
         </div>
-        <BackendPill state={state} />
+        <div className="topbar-right">
+          <BackendPill state={backend} />
+          <button className="btn" onClick={onRefresh} disabled={busy}>
+            {busy ? "refreshing…" : "Refresh"}
+          </button>
+        </div>
       </header>
 
       <main className="main">
         <section className="hero">
           <h1>Pipeline control tower</h1>
           <p>
-            One pane of glass across PFactory → AIFactory → TFactory. The board
-            below will thread each WorkItem through plan, code and test.
+            Every work item, threaded across PFactory → AIFactory → TFactory by its
+            GitHub issue. Hit <strong>Refresh</strong> to poll the services.
           </p>
         </section>
 
+        {error && <div className="banner banner--error">{error}</div>}
+
         <section className="board" aria-label="Pipeline board">
-          {STAGES.map((stage) => (
-            <div className="column" key={stage.key}>
-              <div className="column-head">
-                <span className="column-title">{stage.label}</span>
-                <span className="column-svc">{stage.service}</span>
+          <div className="board-head">
+            <div className="cell cell--key">Work item</div>
+            {STAGES.map((s) => (
+              <div className="cell" key={s.key}>
+                {s.label} <span className="cell-svc">{s.service}</span>
               </div>
-              <div className="column-body">
-                <p className="empty">No work items yet</p>
+            ))}
+          </div>
+
+          {items.length === 0 ? (
+            <p className="empty">No work items yet — Refresh to poll the services.</p>
+          ) : (
+            items.map((wi) => (
+              <div className="board-row" key={wi.correlation_key}>
+                <div className="cell cell--key">
+                  <span className="wi-key">#{wi.correlation_key}</span>
+                  {wi.title && <span className="wi-title">{wi.title}</span>}
+                </div>
+                {STAGES.map((s) => (
+                  <div className="cell" key={s.key}>
+                    <StatusBadge state={wi[s.key]} />
+                  </div>
+                ))}
               </div>
-            </div>
-          ))}
+            ))
+          )}
         </section>
       </main>
     </div>
   );
+}
+
+function StatusBadge({ state }: { state: ServiceState }) {
+  if (!state || !state.status) {
+    return <span className="badge badge--idle">—</span>;
+  }
+  return <span className="badge badge--active" title={state.task_id ?? ""}>{state.status}</span>;
 }
 
 function BackendPill({ state }: { state: BackendState }) {

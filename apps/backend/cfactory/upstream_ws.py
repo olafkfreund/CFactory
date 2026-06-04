@@ -64,8 +64,10 @@ async def handle_message(
     event = parse_upstream_message(service, raw)
     if event is None:
         return None
-    work_item = await run_in_threadpool(store.upsert_from_event, event)
-    await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
+    work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
+    # Idempotent: a duplicate upstream message is not re-broadcast.
+    if applied:
+        await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
     return event
 
 

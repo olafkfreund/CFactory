@@ -22,6 +22,15 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
+    """True if this (service, status) is already in the timeline — the RFC-0001
+    idempotency key ``(service, correlation_key, status)`` (the key is the row)."""
+    return any(
+        e.get("service") == event.service.value and e.get("status") == event.status
+        for e in (timeline or [])
+    )
+
+
 class WorkItemRow(Base):
     __tablename__ = "work_items"
 
@@ -60,9 +69,20 @@ class WorkItemStore:
         if create:
             Base.metadata.create_all(self._engine)
 
-    def upsert_from_event(self, event: CompletionEvent) -> WorkItem:
+    def upsert_from_event(self, event: CompletionEvent) -> tuple[WorkItem, bool]:
+        """Thread a completion event into its WorkItem.
+
+        Idempotent by ``(service, correlation_key, status)`` per RFC-0001 §7: a
+        duplicate (the same service already recorded at the same status for this
+        key) is a no-op — the existing item is returned with ``applied=False`` and
+        the timeline is left untouched, so retried/duplicated deliveries don't
+        double-count. Returns ``(work_item, applied)``.
+        """
         with self._session.begin() as session:
             row = self._get_row(session, event.correlation_key)
+            if row is not None and _already_recorded(row.timeline, event):
+                return row.to_model(), False
+
             if row is None:
                 row = WorkItemRow(correlation_key=event.correlation_key, timeline=[])
                 session.add(row)
@@ -74,7 +94,7 @@ class WorkItemStore:
             row.timeline = [*(row.timeline or []), event.model_dump(mode="json")]
             row.updated_at = _now()
             session.flush()
-            return row.to_model()
+            return row.to_model(), True
 
     def upsert_snapshot(
         self,

@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
 
-from cfactory.app import create_app
-
-client = TestClient(create_app())
-
-
-def test_health_ok():
+def test_health_ok(client):
     resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
@@ -18,7 +12,7 @@ def test_health_ok():
     assert "aifactory" in body["upstreams"]
 
 
-def test_events_accepts_normalized_envelope():
+def test_events_accepts_normalized_envelope(client):
     payload = {
         "correlation_key": "42",
         "service": "tfactory",
@@ -32,7 +26,7 @@ def test_events_accepts_normalized_envelope():
     assert resp.json() == {"status": "accepted", "correlation_key": "42"}
 
 
-def test_events_rejects_bad_service():
+def test_events_rejects_bad_service(client):
     payload = {
         "correlation_key": "42",
         "service": "not-a-service",

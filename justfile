@@ -32,6 +32,14 @@ ui:
 ui-build:
     cd apps/frontend-web && npm run build
 
+# Apply database migrations (uses CFACTORY_DATABASE_URL, else local SQLite).
+db-upgrade:
+    cd apps/backend && .venv/bin/alembic upgrade head
+
+# Autogenerate a new migration: just db-revision "message".
+db-revision MSG:
+    cd apps/backend && .venv/bin/alembic revision --autogenerate -m "{{MSG}}"
+
 # Format Nix files.
 fmt:
     nixpkgs-fmt flake.nix

@@ -8,3 +8,5 @@ pydantic-settings>=2.7
 httpx>=0.28
 websockets>=14.0
 psycopg[binary]>=3.2
+sqlalchemy>=2.0
+alembic>=1.14

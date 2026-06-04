@@ -20,6 +20,8 @@ from . import __version__
 from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
 from .copilot import Copilot, get_copilot
+from .copilot.tools import rollups as compute_rollups
+from .copilot.tools import summarize_timeline
 from .models import CompletionEvent
 from .store import WorkItemStore, get_store
 from .upstream_ws import start_subscribers
@@ -127,6 +129,10 @@ def create_app() -> FastAPI:
         items = store.list()
         return {"count": len(items), "items": [wi.model_dump(mode="json") for wi in items]}
 
+    @app.get("/api/rollups")
+    def get_rollups(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
+        return compute_rollups(store)
+
     @app.get("/api/workitems/{correlation_key}")
     def get_workitem(
         correlation_key: str, store: WorkItemStore = Depends(store_dep)
@@ -135,6 +141,15 @@ def create_app() -> FastAPI:
         if wi is None:
             raise HTTPException(status_code=404, detail=f"no work item for {correlation_key!r}")
         return wi.model_dump(mode="json")
+
+    @app.get("/api/workitems/{correlation_key}/timeline")
+    def get_timeline(
+        correlation_key: str, store: WorkItemStore = Depends(store_dep)
+    ) -> dict[str, object]:
+        summary = summarize_timeline(store, correlation_key)
+        if summary is None:
+            raise HTTPException(status_code=404, detail=f"no work item for {correlation_key!r}")
+        return summary
 
     @app.post("/api/copilot/ask")
     async def copilot_ask(req: AskRequest, copilot: Copilot = Depends(copilot_dep)) -> dict[str, object]:

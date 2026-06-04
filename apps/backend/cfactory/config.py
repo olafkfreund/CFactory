@@ -28,6 +28,22 @@ class Settings(BaseSettings):
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None
 
+    # Opt-in: connect to each upstream service's WebSocket on startup (#10).
+    # Off by default so dev/tests don't reconnect-loop against down services.
+    subscribe_upstreams: bool = False
+
+    def upstream_ws_urls(self) -> dict[str, str]:
+        """Derive ws(s):// URLs for each service's live feed from its API URL."""
+        def to_ws(url: str) -> str:
+            ws = url.replace("https://", "wss://").replace("http://", "ws://")
+            return ws.rstrip("/") + "/api/ws"
+
+        return {
+            "pfactory": to_ws(self.pfactory_api_url),
+            "aifactory": to_ws(self.aifactory_api_url),
+            "tfactory": to_ws(self.tfactory_api_url),
+        }
+
 
 _settings: Settings | None = None
 

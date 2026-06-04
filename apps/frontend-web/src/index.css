@@ -91,6 +91,20 @@ body {
   gap: 0.75rem;
 }
 
+.live {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.live--on {
+  color: var(--green);
+}
+
+.live--off {
+  color: var(--muted);
+}
+
 .btn {
   font-family: "JetBrains Mono", monospace;
   font-size: 0.78rem;

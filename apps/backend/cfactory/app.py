@@ -1,20 +1,26 @@
 """FastAPI application factory for the CFactory cockpit API.
 
-Skeleton (#5) + WorkItem persistence (#6): /health, a /api/events ingress that
-upserts the WorkItem correlation store, and a read API over WorkItems. Adapters
-(#7-#9), WebSocket fan-in (#10) and the board (#12) build on this.
+Skeleton (#5) + WorkItem persistence (#6) + adapters (#7-#9) + live WebSocket
+(#10): /health, an event ingress, a poll-and-hydrate refresh, a read API, and a
+broadcast hub that pushes WorkItem updates to connected cockpits.
 """
 
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException
+import asyncio
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from . import __version__
 from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
 from .models import CompletionEvent
 from .store import WorkItemStore, get_store
+from .upstream_ws import start_subscribers
+from .ws import get_manager
 
 
 def store_dep() -> WorkItemStore:
@@ -27,12 +33,29 @@ def adapters_dep() -> list[BaseHTTPAdapter]:
     return build_adapters()
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    tasks: list[asyncio.Task[None]] = []
+    if settings.subscribe_upstreams:
+        tasks = start_subscribers(get_store(), get_manager(), settings)
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
+    manager = get_manager()
     app = FastAPI(
         title="CFactory",
         version=__version__,
         summary="Agentic control-tower cockpit over the PARR pipeline.",
+        lifespan=lifespan,
     )
 
     # Allow the Vite dev server (default :3110) to call the API during development.
@@ -58,12 +81,15 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/api/events")
-    def ingest_event(event: CompletionEvent, store: WorkItemStore = Depends(store_dep)) -> dict[str, str]:
-        store.upsert_from_event(event)
+    async def ingest_event(
+        event: CompletionEvent, store: WorkItemStore = Depends(store_dep)
+    ) -> dict[str, str]:
+        work_item = await run_in_threadpool(store.upsert_from_event, event)
+        await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
         return {"status": "accepted", "correlation_key": event.correlation_key}
 
     @app.post("/api/refresh")
-    def refresh(
+    async def refresh(
         store: WorkItemStore = Depends(store_dep),
         adapters: list[BaseHTTPAdapter] = Depends(adapters_dep),
     ) -> dict[str, object]:
@@ -72,11 +98,16 @@ def create_app() -> FastAPI:
         result: dict[str, object] = {}
         for adapter in adapters:
             try:
-                result[adapter.service.value] = hydrate(store, adapter.list_items())
+                items = await run_in_threadpool(adapter.list_items)
+                result[adapter.service.value] = await run_in_threadpool(hydrate, store, items)
             except AdapterError as exc:
                 result[adapter.service.value] = {"error": str(exc)}
             finally:
                 adapter.close()
+        snapshot = await run_in_threadpool(store.list)
+        await manager.broadcast(
+            {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
+        )
         return {"refreshed": result}
 
     @app.get("/api/workitems")
@@ -85,11 +116,26 @@ def create_app() -> FastAPI:
         return {"count": len(items), "items": [wi.model_dump(mode="json") for wi in items]}
 
     @app.get("/api/workitems/{correlation_key}")
-    def get_workitem(correlation_key: str, store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
+    def get_workitem(
+        correlation_key: str, store: WorkItemStore = Depends(store_dep)
+    ) -> dict[str, object]:
         wi = store.get(correlation_key)
         if wi is None:
             raise HTTPException(status_code=404, detail=f"no work item for {correlation_key!r}")
         return wi.model_dump(mode="json")
+
+    @app.websocket("/api/ws")
+    async def cockpit_feed(websocket: WebSocket) -> None:
+        await manager.connect(websocket)
+        try:
+            while True:
+                # We don't expect client messages; this keeps the socket open
+                # and raises WebSocketDisconnect when the client goes away.
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            manager.disconnect(websocket)
 
     return app
 

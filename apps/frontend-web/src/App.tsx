@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   fetchHealth,
   fetchWorkItems,
+  openFeed,
   refresh,
   type Health,
   type ServiceState,
@@ -23,6 +24,7 @@ export default function App() {
   const [backend, setBackend] = useState<BackendState>({ kind: "loading" });
   const [items, setItems] = useState<WorkItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -42,6 +44,25 @@ export default function App() {
       );
     void load();
   }, [load]);
+
+  // Live feed: push updates without polling.
+  useEffect(() => {
+    const ws = openFeed(
+      (msg) => {
+        if (msg.type === "snapshot") {
+          setItems(msg.items);
+        } else {
+          setItems((prev) => {
+            const rest = prev.filter((w) => w.correlation_key !== msg.item.correlation_key);
+            return [msg.item, ...rest];
+          });
+        }
+      },
+      () => setLive(true),
+      () => setLive(false),
+    );
+    return () => ws.close();
+  }, []);
 
   const onRefresh = useCallback(async () => {
     setBusy(true);
@@ -64,6 +85,9 @@ export default function App() {
           <span className="brand-sub">cockpit</span>
         </div>
         <div className="topbar-right">
+          <span className={`live ${live ? "live--on" : "live--off"}`} title={live ? "live feed connected" : "live feed offline"}>
+            {live ? "● live" : "○ offline"}
+          </span>
           <BackendPill state={backend} />
           <button className="btn" onClick={onRefresh} disabled={busy}>
             {busy ? "refreshing…" : "Refresh"}

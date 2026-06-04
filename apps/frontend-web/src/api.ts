@@ -40,6 +40,26 @@ export async function fetchWorkItems(): Promise<WorkItem[]> {
   return body.items;
 }
 
+export type FeedMessage =
+  | { type: "workitem"; item: WorkItem }
+  | { type: "snapshot"; items: WorkItem[] };
+
+// Open the live cockpit feed. Returns the socket so the caller can close it.
+export function openFeed(onMessage: (msg: FeedMessage) => void, onOpen?: () => void, onClose?: () => void): WebSocket {
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${window.location.host}/api/ws`);
+  ws.onmessage = (ev) => {
+    try {
+      onMessage(JSON.parse(ev.data) as FeedMessage);
+    } catch {
+      /* ignore malformed frames */
+    }
+  };
+  if (onOpen) ws.onopen = onOpen;
+  if (onClose) ws.onclose = onClose;
+  return ws;
+}
+
 // Best-effort poll of all upstream services; returns the per-service summary.
 export async function refresh(): Promise<Record<string, unknown>> {
   const resp = await fetch("/api/refresh", { method: "POST" });

@@ -11,7 +11,8 @@ export default defineConfig({
     port: 3110,
     proxy: {
       "/health": BACKEND,
-      "/api": BACKEND,
+      // ws: true so the /api/ws cockpit feed proxies through too.
+      "/api": { target: BACKEND, ws: true },
     },
   },
 });

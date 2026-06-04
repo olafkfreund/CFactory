@@ -16,6 +16,8 @@ is happening and proposes the next move.
 CFactory is the newest member of the **[Factory family](/family/)** — and the
 piece that turns the others into a suite.
 
+> **Part of the [Factory family](https://factory.freundcloud.com/)** — a governed, verified, observable autonomous software factory. [PFactory](https://pfactory.freundcloud.com/) plans · [AIFactory](https://aifactory.freundcloud.com/) builds · [TFactory](https://tfactory.freundcloud.com/) verifies · **CFactory** watches over all four. → **[Why Factory](https://factory.freundcloud.com/why/)**
+
 ---
 
 ## The problem it solves

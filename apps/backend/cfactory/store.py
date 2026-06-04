@@ -15,7 +15,7 @@ from sqlalchemy.types import JSON
 
 from .config import Settings, get_settings
 from .db import Base, make_engine
-from .models import CompletionEvent, ServiceState, WorkItem
+from .models import CompletionEvent, Service, ServiceState, WorkItem
 
 
 def _now() -> datetime:
@@ -72,6 +72,31 @@ class WorkItemStore:
 
             # Reassign (not .append) so SQLAlchemy detects the JSON column change.
             row.timeline = [*(row.timeline or []), event.model_dump(mode="json")]
+            row.updated_at = _now()
+            session.flush()
+            return row.to_model()
+
+    def upsert_snapshot(
+        self,
+        correlation_key: str,
+        service: Service,
+        state: ServiceState,
+        *,
+        title: str | None = None,
+    ) -> WorkItem:
+        """Update a service slice from a polled snapshot (no timeline entry).
+
+        Used by the REST adapters (#7-#9), which reflect current upstream state
+        rather than discrete events.
+        """
+        with self._session.begin() as session:
+            row = self._get_row(session, correlation_key)
+            if row is None:
+                row = WorkItemRow(correlation_key=correlation_key, timeline=[])
+                session.add(row)
+            setattr(row, service.value, state.model_dump())
+            if title and not row.title:
+                row.title = title
             row.updated_at = _now()
             session.flush()
             return row.to_model()

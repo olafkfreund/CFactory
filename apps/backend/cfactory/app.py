@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
+from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
 from .models import CompletionEvent
 from .store import WorkItemStore, get_store
@@ -19,6 +20,11 @@ from .store import WorkItemStore, get_store
 def store_dep() -> WorkItemStore:
     """Dependency seam — overridden in tests with a temp store."""
     return get_store()
+
+
+def adapters_dep() -> list[BaseHTTPAdapter]:
+    """Dependency seam — overridden in tests with mock-transport adapters."""
+    return build_adapters()
 
 
 def create_app() -> FastAPI:
@@ -55,6 +61,23 @@ def create_app() -> FastAPI:
     def ingest_event(event: CompletionEvent, store: WorkItemStore = Depends(store_dep)) -> dict[str, str]:
         store.upsert_from_event(event)
         return {"status": "accepted", "correlation_key": event.correlation_key}
+
+    @app.post("/api/refresh")
+    def refresh(
+        store: WorkItemStore = Depends(store_dep),
+        adapters: list[BaseHTTPAdapter] = Depends(adapters_dep),
+    ) -> dict[str, object]:
+        """Poll every upstream service and hydrate the store. Best-effort:
+        an unreachable service is reported, not fatal."""
+        result: dict[str, object] = {}
+        for adapter in adapters:
+            try:
+                result[adapter.service.value] = hydrate(store, adapter.list_items())
+            except AdapterError as exc:
+                result[adapter.service.value] = {"error": str(exc)}
+            finally:
+                adapter.close()
+        return {"refreshed": result}
 
     @app.get("/api/workitems")
     def list_workitems(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:

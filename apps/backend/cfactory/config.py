@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Off by default so dev/tests don't reconnect-loop against down services.
     subscribe_upstreams: bool = False
 
+    # Agentic copilot (#13). Model id for the Claude Agent SDK; the SDK reads
+    # ANTHROPIC_API_KEY from the environment.
+    copilot_model: str = "claude-sonnet-4-6"
+
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""
         def to_ws(url: str) -> str:

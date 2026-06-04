@@ -14,13 +14,20 @@ from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
+from pydantic import BaseModel
+
 from . import __version__
 from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
+from .copilot import Copilot, get_copilot
 from .models import CompletionEvent
 from .store import WorkItemStore, get_store
 from .upstream_ws import start_subscribers
 from .ws import get_manager
+
+
+class AskRequest(BaseModel):
+    question: str
 
 
 def store_dep() -> WorkItemStore:
@@ -31,6 +38,11 @@ def store_dep() -> WorkItemStore:
 def adapters_dep() -> list[BaseHTTPAdapter]:
     """Dependency seam — overridden in tests with mock-transport adapters."""
     return build_adapters()
+
+
+def copilot_dep() -> Copilot:
+    """Dependency seam — overridden in tests with a fake-runner copilot."""
+    return get_copilot()
 
 
 @asynccontextmanager
@@ -123,6 +135,11 @@ def create_app() -> FastAPI:
         if wi is None:
             raise HTTPException(status_code=404, detail=f"no work item for {correlation_key!r}")
         return wi.model_dump(mode="json")
+
+    @app.post("/api/copilot/ask")
+    async def copilot_ask(req: AskRequest, copilot: Copilot = Depends(copilot_dep)) -> dict[str, object]:
+        result = await run_in_threadpool(copilot.ask, req.question)
+        return {"answer": result.answer, "work_items_considered": result.work_items_considered}
 
     @app.websocket("/api/ws")
     async def cockpit_feed(websocket: WebSocket) -> None:

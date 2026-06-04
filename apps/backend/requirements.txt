@@ -11,3 +11,4 @@ wsproto>=1.2
 psycopg[binary]>=3.2
 sqlalchemy>=2.0
 alembic>=1.14
+claude-agent-sdk>=0.1.16

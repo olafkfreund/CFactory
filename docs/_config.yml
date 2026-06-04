@@ -1,0 +1,44 @@
+title: CFactory
+description: The agentic control-tower cockpit over the PARR pipeline — one pane of glass and an LLM copilot across PFactory, AIFactory and TFactory. Part of the Factory family.
+
+# Keep the remote theme reference so the legacy Pages auto-builder is happy,
+# but override its layout via _layouts/default.html (local layouts always
+# supersede remote-theme layouts). Our custom CSS loads after cayman's.
+remote_theme: pages-themes/cayman@v0.2.0
+
+plugins:
+  - jekyll-remote-theme
+  - jekyll-relative-links
+
+relative_links:
+  enabled: true
+  collections: true
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    css_class: highlight
+
+# Blog — posts live under /blog/<year>/<month>/<day>/<title>/
+permalink: /blog/:year/:month/:day/:title/
+defaults:
+  - scope:
+      path: ""
+      type: posts
+    values:
+      layout: post
+
+show_downloads: false
+
+exclude:
+  - vendor/
+  - Gemfile
+  - Gemfile.lock
+
+# Repo metadata (used by the custom layout)
+repo_url: https://github.com/olafkfreund/CFactory
+release_tag: v0.1.0-skeleton
+release_url: https://github.com/olafkfreund/CFactory/releases

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+apps/backend/.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+apps/frontend-web/dist/
+*.log
+
+# Nix / direnv
+.direnv/
+result
+result-*
+
+# Local env + workspace
+.env
+.cfactory/
+
+# Editor
+.vscode/
+.idea/

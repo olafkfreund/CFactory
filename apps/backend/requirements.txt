@@ -1,0 +1,10 @@
+# CFactory backend — runtime dependencies.
+# Pinned loosely for the skeleton; tighten as the API stabilises.
+
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic>=2.10
+pydantic-settings>=2.7
+httpx>=0.28
+websockets>=14.0
+psycopg[binary]>=3.2

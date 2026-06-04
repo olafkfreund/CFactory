@@ -95,12 +95,23 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/api/events")
+    @app.post("/api/events/completion")
     async def ingest_event(
         event: CompletionEvent, store: WorkItemStore = Depends(store_dep)
     ) -> dict[str, str]:
-        work_item = await run_in_threadpool(store.upsert_from_event, event)
-        await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
-        return {"status": "accepted", "correlation_key": event.correlation_key}
+        """Ingest an RFC-0001 completion event. Idempotent by
+        (service, correlation_key, status): a duplicate is accepted but is a
+        no-op (no timeline append, no re-broadcast). Both ``/api/events`` and the
+        RFC-documented ``/api/events/completion`` resolve here."""
+        work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
+        if applied:
+            await manager.broadcast(
+                {"type": "workitem", "item": work_item.model_dump(mode="json")}
+            )
+        return {
+            "status": "accepted" if applied else "duplicate",
+            "correlation_key": event.correlation_key,
+        }
 
     @app.post("/api/refresh")
     async def refresh(

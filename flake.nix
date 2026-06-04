@@ -72,6 +72,9 @@
           env = {
             CFACTORY_BACKEND_PORT = "3111";
             CFACTORY_FRONTEND_PORT = "3110";
+            # A dev shell must not inherit a production NODE_ENV — otherwise
+            # `npm install` omits devDependencies (vite, typescript, @types/*).
+            NODE_ENV = "development";
           };
 
           # ────────────────────────────────────────────────────────────

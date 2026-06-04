@@ -8,6 +8,7 @@ on this shell.
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
 from .config import get_settings
@@ -20,6 +21,15 @@ def create_app() -> FastAPI:
         title="CFactory",
         version=__version__,
         summary="Agentic control-tower cockpit over the PARR pipeline.",
+    )
+
+    # Allow the Vite dev server (default :3110) to call the API during development.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[f"http://localhost:{settings.frontend_port}", "http://localhost:3110"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     @app.get("/health")

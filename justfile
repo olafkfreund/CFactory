@@ -20,6 +20,18 @@ run:
 test *ARGS:
     PYTHONPATH=apps/backend apps/backend/.venv/bin/pytest -v {{ARGS}}
 
+# Install frontend dependencies.
+ui-install:
+    cd apps/frontend-web && npm install
+
+# Run the cockpit dev server (port 3110, proxies /api + /health to 3111).
+ui:
+    cd apps/frontend-web && npm run dev
+
+# Type-check + production build of the cockpit.
+ui-build:
+    cd apps/frontend-web && npm run build
+
 # Format Nix files.
 fmt:
     nixpkgs-fmt flake.nix

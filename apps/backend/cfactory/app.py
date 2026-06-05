@@ -20,6 +20,7 @@ import httpx
 
 from . import __version__
 from .actions import PreparedAction, execute_action, propose
+from .auth import require_scope
 from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
 from .copilot import Copilot, get_copilot
@@ -204,9 +205,13 @@ def create_app() -> FastAPI:
     async def execute_prepared_action(
         action: PreparedAction,
         transport: httpx.BaseTransport | None = Depends(action_transport_dep),
+        _scope: str | None = Depends(require_scope("write")),
     ) -> dict[str, object]:
         """Run a CONFIRMED PreparedAction against its target service. This is the
-        explicit write step — the caller has already reviewed the action."""
+        explicit write step — the caller has already reviewed the action.
+
+        Requires the ``write`` scope when API keys are configured; in local
+        single-user mode (no keys) it is open."""
         return await run_in_threadpool(
             execute_action, action, settings=settings, transport=transport
         )

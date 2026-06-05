@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # ANTHROPIC_API_KEY from the environment.
     copilot_model: str = "claude-sonnet-4-6"
 
+    # Scoped API keys (#20). Local-first: when empty/None, auth enforcement is
+    # OPEN (single-user local mode). When set, requests must carry a known key
+    # with the required scope. Format: "<key>:read,write;<key2>:read".
+    api_keys: str | None = None
+
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""
         def to_ws(url: str) -> str:

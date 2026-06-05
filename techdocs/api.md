@@ -35,6 +35,7 @@ CLI — it *consumes* the other services' REST/WebSocket surfaces (see
 | `GET /api/workitems` | List all correlation-keyed work items |
 | `GET /api/workitems/{correlation_key}` | Get one work item |
 | `GET /api/workitems/{correlation_key}/timeline` | Ordered event timeline + total span |
+| `GET /api/workitems/{correlation_key}/process` | Live process detail (phase, progress %, subtasks) — proxied from the code task. See [Task detail](task-detail.md) |
 
 ### Insights (read)
 

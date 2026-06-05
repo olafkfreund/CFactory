@@ -4,7 +4,8 @@ import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import ServicesView from "./ServicesView";
 import TokensView from "./TokensView";
-import { motion } from "framer-motion";
+import TaskDetail from "./TaskDetail";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   fetchHealth,
   fetchProgress,
@@ -202,11 +203,15 @@ function Board({ items, progress }: { items: WorkItem[]; progress: Record<string
     return m;
   }, [items]);
 
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Resolve against the latest items so the open drawer updates live.
+  const selected = selectedKey ? items.find((w) => w.correlation_key === selectedKey) ?? null : null;
+
   return (
     <>
       <div className="page-head">
         <h1>Pipeline</h1>
-        <p>Every work item threaded across plan → code → test by GitHub issue.</p>
+        <p>Every work item threaded across plan → code → test by GitHub issue. Click a card for live detail.</p>
       </div>
       <section className="board" aria-label="Pipeline board">
         {STAGES.map((stage) => (
@@ -222,21 +227,41 @@ function Board({ items, progress }: { items: WorkItem[]; progress: Record<string
                 <p className="col-empty">No work items</p>
               ) : (
                 byStage[stage.key].map((wi) => (
-                  <Card key={wi.correlation_key} wi={wi} lp={progress[wi.correlation_key]} />
+                  <Card
+                    key={wi.correlation_key}
+                    wi={wi}
+                    lp={progress[wi.correlation_key]}
+                    onOpen={() => setSelectedKey(wi.correlation_key)}
+                  />
                 ))
               )}
             </div>
           </div>
         ))}
       </section>
+      <AnimatePresence>
+        {selected && (
+          <TaskDetail
+            wi={selected}
+            lp={progress[selected.correlation_key]}
+            onClose={() => setSelectedKey(null)}
+          />
+        )}
+      </AnimatePresence>
     </>
   );
 }
 
-function Card({ wi, lp }: { wi: WorkItem; lp?: LiveProgress }) {
+function Card({ wi, lp, onOpen }: { wi: WorkItem; lp?: LiveProgress; onOpen: () => void }) {
   const last = wi.timeline.length ? wi.timeline[wi.timeline.length - 1].updated_at : null;
   return (
-    <article className={`card-wi ${lp ? "card-wi--live" : ""}`}>
+    <article
+      className={`card-wi card-wi--clickable ${lp ? "card-wi--live" : ""}`}
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onOpen()}
+    >
       <div className="card-wi__head">
         <span className="wi-key">#{wi.correlation_key}</span>
         {lp ? <LiveBadge lp={lp} /> : last && (

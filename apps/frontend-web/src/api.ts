@@ -148,6 +148,40 @@ export function openAgentConsole(wsPath: string): WebSocket {
   return ws;
 }
 
+// --- Task process detail (#45): rich live state for one work item's task ---
+
+export interface ProcessSubtask {
+  title: string | null;
+  status: string | null;
+}
+
+export interface ProcessDetail {
+  available: boolean;
+  correlation_key: string;
+  service?: string;
+  task_id?: string | null;
+  title?: string | null;
+  status?: string | null;
+  phase?: string | null;
+  reason?: string;
+  progress?: {
+    phase: string | null;
+    phase_percent: number | null;
+    overall_percent: number | null;
+    current_subtask: string | null;
+    message: string | null;
+  };
+  subtasks?: ProcessSubtask[];
+  branch?: string | null;
+  updated_at?: string | null;
+}
+
+export async function fetchProcess(correlationKey: string): Promise<ProcessDetail> {
+  const resp = await fetch(`/api/workitems/${encodeURIComponent(correlationKey)}/process`);
+  if (!resp.ok) throw new Error(`process error: HTTP ${resp.status}`);
+  return (await resp.json()) as ProcessDetail;
+}
+
 export interface Anomaly {
   kind: string;
   severity: string;

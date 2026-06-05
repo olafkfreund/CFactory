@@ -31,6 +31,7 @@ from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline, token_totals
 from .live_agents import LiveAgentsResult, discover_live_agents
 from .live_agent_proxy import ConnectFn, proxy_agent_console
+from .task_process import build_process_detail
 from .models import CompletionEvent, Service
 from .progress import LiveProgressHub, get_progress_hub, start_progress, stop_progress
 from .store import WorkItemStore, get_store
@@ -265,6 +266,25 @@ def create_app() -> FastAPI:
         if summary is None:
             raise HTTPException(status_code=404, detail=f"no work item for {correlation_key!r}")
         return summary
+
+    @app.get("/api/workitems/{correlation_key}/process")
+    async def get_process(
+        correlation_key: str,
+        store: WorkItemStore = Depends(store_dep),
+        adapters: list[BaseHTTPAdapter] = Depends(adapters_dep),
+    ) -> dict[str, object]:
+        """Rich live process detail for the work item's code task (#45).
+
+        Proxies + normalizes the active AIFactory task (phase, progress %, current
+        subtask, subtask list) from its REST detail endpoint. Best-effort:
+        ``available: false`` when there's no task or the service is unreachable."""
+        try:
+            return await run_in_threadpool(
+                build_process_detail, store, adapters, correlation_key
+            )
+        finally:
+            for adapter in adapters:
+                adapter.close()
 
     @app.post("/api/actions/propose")
     async def propose_action(

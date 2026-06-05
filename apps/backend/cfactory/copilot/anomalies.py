@@ -20,8 +20,6 @@ _TERMINAL_OK = {"done", "merged", "triaged", "emitted", "completed", "accept",
 
 # A stage with no new event for this long (and not terminal) is "stuck".
 _DEFAULT_STALE_SECONDS = 86_400  # 24h
-# This many failing test events ⇒ a handback loop.
-_HANDBACK_LOOP_THRESHOLD = 2
 
 
 @dataclass
@@ -50,11 +48,21 @@ def _detect_for_item(wi: WorkItem, now: datetime, stale_seconds: int) -> list[An
             found.append(Anomaly("failure", "high", wi.correlation_key, wi.title,
                                   f"{stage} stage status={s.status!r}"))
 
-    # 2. Repeated handback loop — multiple failing test events.
-    fail_tests = [e for e in wi.timeline if e.service is Service.TFACTORY and _is_failure(e.status)]
-    if len(fail_tests) >= _HANDBACK_LOOP_THRESHOLD:
+    # 2. Handback loop — a failing test event followed by a return to code.
+    # Counts test→code bounces. (RFC-0001 idempotency dedups identical events,
+    # so we detect bounces by the test-fail→later-code transition, not a raw
+    # repeat count.)
+    tl = wi.timeline
+    handbacks = sum(
+        1
+        for i, e in enumerate(tl)
+        if e.service is Service.TFACTORY
+        and _is_failure(e.status)
+        and any(later.service is Service.AIFACTORY for later in tl[i + 1:])
+    )
+    if handbacks:
         found.append(Anomaly("handback_loop", "high", wi.correlation_key, wi.title,
-                             f"{len(fail_tests)} failing test events — code↔test bouncing"))
+                             f"{handbacks} test-failure→code handback(s) — code↔test bouncing"))
 
     # 3. Stuck / stale — last event old and not in a terminal-OK state.
     if wi.timeline:

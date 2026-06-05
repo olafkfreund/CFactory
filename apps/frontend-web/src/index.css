@@ -158,8 +158,49 @@ body {
   color: var(--faint); font-size: 0.74rem; font-family: "JetBrains Mono", monospace;
 }
 .mc-agent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.mc-agent-dot--live { background: var(--green); box-shadow: 0 0 0 0 rgba(184, 187, 38, 0.6); animation: mc-pulse 2s infinite; }
+@keyframes mc-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(184, 187, 38, 0.5); }
+  70% { box-shadow: 0 0 0 5px rgba(184, 187, 38, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(184, 187, 38, 0); }
+}
 .mc-agent-sub { color: var(--code); font-size: 0.64rem; }
 .mc-note { color: var(--faint); font-size: 0.76rem; margin: 0.7rem 0 0; }
+
+/* Live agent terminal tiles (#35/#36) */
+.mc-agent-card {
+  border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--panel-2);
+}
+.mc-agent-head {
+  display: flex; align-items: center; gap: 0.4rem; width: 100%;
+  padding: 0.35rem 0.5rem; border: 0; cursor: pointer;
+  background: var(--panel); color: var(--muted);
+  font-family: "JetBrains Mono", monospace; font-size: 0.66rem; text-align: left;
+}
+.mc-agent-head:hover { background: var(--panel-2); color: var(--text); }
+.mc-agent-key { color: var(--text); font-weight: 600; }
+.mc-agent-expand { margin-left: auto; color: var(--faint); }
+.mc-term { height: 110px; padding: 0.25rem; }
+.mc-term .xterm, .mc-term .xterm-viewport { background: transparent !important; }
+
+.mc-term-overlay {
+  position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55); padding: 2rem;
+}
+.mc-term-modal {
+  width: min(960px, 92vw); background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.mc-term-modal-head {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--border); font-size: 0.8rem; color: var(--text);
+}
+.mc-term-modal .mc-term { height: min(60vh, 520px); padding: 0.5rem; }
+.mc-term-close {
+  margin-left: auto; border: 0; background: transparent; color: var(--muted);
+  cursor: pointer; font-size: 0.9rem;
+}
+.mc-term-close:hover { color: var(--text); }
 .tk-pending { color: var(--faint); font-style: italic; }
 
 @media (max-width: 900px) { .mc-grid { grid-template-columns: 1fr; } }

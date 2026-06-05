@@ -42,6 +42,23 @@ def test_token_totals_aggregates_and_flags_instrumented(store):
     assert t["by_work_item"][0]["correlation_key"] == "2"
 
 
+def test_token_totals_aggregates_all_three_services(store):
+    # Now that PFactory (#60) and TFactory (#224) emit the usage block too, one
+    # work item threaded across all three stages sums and flags each instrumented.
+    _ev(store, "9", Service.PFACTORY, "emitted", _u(300, 60, 0.05))
+    _ev(store, "9", Service.AIFACTORY, "done", _u(2000, 400, 0.50))
+    _ev(store, "9", Service.TFACTORY, "triaged", _u(150, 30, 0.03))
+
+    t = token_totals(store)
+    assert t["total"]["total_tokens"] == 300 + 60 + 2000 + 400 + 150 + 30
+    assert round(t["total"]["cost_usd"], 2) == 0.58
+    for svc in ("pfactory", "aifactory", "tfactory"):
+        assert t["by_service"][svc]["instrumented"] is True, svc
+    # one work item carrying all three stages' usage
+    assert t["by_work_item"][0]["correlation_key"] == "9"
+    assert t["by_work_item"][0]["total_tokens"] == 2940
+
+
 def test_usage_not_double_counted_on_duplicate(store):
     _ev(store, "1", Service.AIFACTORY, "done", _u(100, 50, 0.20))
     _ev(store, "1", Service.AIFACTORY, "done", _u(100, 50, 0.20))  # idempotent dup

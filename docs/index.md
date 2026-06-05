@@ -51,6 +51,12 @@ agentic SDLC needs.
 - **Advise + confirm, never silent.** The copilot can *prepare* actions — approve
   a gate, trigger a handoff, kick a handback — but every write waits for an
   explicit human click. Human-in-the-loop by design.
+- **Watch agents work, live.** When a build is running, the cockpit streams each
+  AIFactory agent's terminal straight into Mission Control — a read-only window
+  into what the agent is doing *right now*, no extra tabs.
+- **See the cost.** Every stage reports token usage and cost via the shared
+  RFC-0001 `usage` block, so the Tokens & cost page totals real spend across
+  plan, code and test — per work item and per service.
 
 ## Where it fits
 

@@ -77,6 +77,27 @@ An LLM layer (Claude Agent SDK) whose tools are CFactory's *own* functions:
   action* (target service, endpoint, payload, rationale) that only executes on an
   explicit human click. **No autonomous writes.**
 
+## Live agent terminals
+
+When AIFactory is executing, the cockpit can stream each agent's terminal into
+Mission Control. AIFactory exposes a per-task **rmux** console (a server-side
+terminal multiplexer); CFactory's backend lists the active agents
+(`GET /api/live-agents`), opens each console WebSocket **server-side**, and
+re-streams the raw ANSI bytes to an xterm.js tile in the browser
+(`WS /api/live-agents/{key}/ws`).
+
+The proxy is **read-only and single-origin by design**: the cockpit never
+attaches or forwards keystrokes, and the AIFactory URL and token never leave the
+backend — the browser only ever talks to CFactory. It degrades cleanly when
+rmux is disabled or no agents are running.
+
+## Token & cost
+
+Every service attaches the RFC-0001 v1.1 `usage` block (input/output tokens,
+cost, model) to its completion event. CFactory aggregates them into the
+**Tokens & cost** page — totals and a per-service, per-work-item breakdown — so
+real LLM spend across plan, code and test is visible in one place.
+
 ## Tech stack
 
 Built on the same skeleton as the rest of the family, so security and operations

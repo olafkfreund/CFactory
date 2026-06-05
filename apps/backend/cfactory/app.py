@@ -22,6 +22,7 @@ from . import __version__
 from .actions import PreparedAction, execute_action, propose
 from .audit import AuditStore, get_audit_store
 from .auth import require_scope
+from .enterprise import identity_dep
 from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
 from .copilot import Copilot, get_copilot
@@ -213,12 +214,15 @@ def create_app() -> FastAPI:
         transport: httpx.BaseTransport | None = Depends(action_transport_dep),
         audit: AuditStore = Depends(audit_dep),
         _scope: str | None = Depends(require_scope("write")),
+        actor: str = Depends(identity_dep),
     ) -> dict[str, object]:
         """Run a CONFIRMED PreparedAction against its target service. This is the
         explicit write step — the caller has already reviewed the action.
 
         Every confirmed action is recorded in the audit log (the HITL trail)
-        before the result is returned.
+        before the result is returned. The audit ``actor`` is the caller
+        identity from the identity seam (the API key when keys are configured,
+        else ``"local"``).
 
         Requires the ``write`` scope when API keys are configured; in local
         single-user mode (no keys) it is open."""
@@ -227,7 +231,7 @@ def create_app() -> FastAPI:
         )
         await run_in_threadpool(
             audit.record,
-            actor="cockpit",
+            actor=actor,
             kind=action.kind,
             correlation_key=action.correlation_key,
             target_service=action.target_service,

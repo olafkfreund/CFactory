@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # with the required scope. Format: "<key>:read,write;<key2>:read".
     api_keys: str | None = None
 
+    # HMAC secret anchoring the tamper-evident audit chain (#21). Each audit
+    # entry's hash is HMAC-SHA256 over its canonical fields chained to the prior
+    # entry's hash, so any after-the-fact mutation breaks the chain. The default
+    # below is a CLEARLY-LABELLED dev secret: set CFACTORY_AUDIT_HMAC_SECRET to a
+    # real secret in any hosted/shared deployment.
+    audit_hmac_secret: str = "dev-insecure-audit-hmac-secret-change-me"
+
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""
         def to_ws(url: str) -> str:

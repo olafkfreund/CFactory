@@ -14,7 +14,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from cfactory.app import action_transport_dep, create_app, store_dep
+from cfactory.app import action_transport_dep, audit_dep, create_app, store_dep
+from cfactory.audit import AuditStore
 from cfactory.auth import KeyStore, keystore_dep, parse_api_keys
 
 # A valid PreparedAction body for the execute endpoint.
@@ -42,6 +43,8 @@ def _make_client(store, keys: dict[str, set[str]] | None) -> TestClient:
     app = create_app()
     app.dependency_overrides[store_dep] = lambda: store
     app.dependency_overrides[action_transport_dep] = lambda: _OkTransport()
+    # Hermetic in-memory audit store so execute never touches the workspace DB.
+    app.dependency_overrides[audit_dep] = lambda: AuditStore("sqlite://")
     if keys is not None:
         app.dependency_overrides[keystore_dep] = lambda: KeyStore(keys)
     return TestClient(app)

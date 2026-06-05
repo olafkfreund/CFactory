@@ -18,7 +18,8 @@ from cfactory.actions import (
     propose_kick_handback,
     propose_trigger_handoff,
 )
-from cfactory.app import action_transport_dep, create_app, store_dep
+from cfactory.app import action_transport_dep, audit_dep, create_app, store_dep
+from cfactory.audit import AuditStore
 from cfactory.models import CompletionEvent, Service
 from fastapi.testclient import TestClient
 
@@ -232,9 +233,13 @@ def test_execute_endpoint_runs_confirmed_action(client_with_transport):
 
 
 @pytest.fixture
-def client_with_transport(store):
+def client_with_transport(store, tmp_path):
     recorder = _RecordingTransport()
     app = create_app()
     app.dependency_overrides[store_dep] = lambda: store
     app.dependency_overrides[action_transport_dep] = lambda: recorder
+    # Hermetic audit store so the execute endpoint never touches the shared
+    # workspace DB.
+    audit = AuditStore(f"sqlite:///{tmp_path / 'audit.db'}")
+    app.dependency_overrides[audit_dep] = lambda: audit
     return TestClient(app), recorder

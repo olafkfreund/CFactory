@@ -5,6 +5,7 @@ export interface Health {
   status: string;
   service: string;
   version: string;
+  multi_tenant?: boolean;
   upstreams: Record<string, string>;
 }
 
@@ -14,13 +15,20 @@ export interface ServiceState {
   phase: string | null;
 }
 
+export interface TimelineEvent {
+  service: string;
+  status: string | null;
+  phase: string | null;
+  updated_at: string;
+}
+
 export interface WorkItem {
   correlation_key: string;
   title: string | null;
   pfactory: ServiceState;
   aifactory: ServiceState;
   tfactory: ServiceState;
-  timeline: unknown[];
+  timeline: TimelineEvent[];
 }
 
 export async function fetchHealth(): Promise<Health> {

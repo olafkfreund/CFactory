@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     pfactory_api_url: str = "http://localhost:3102"
     tfactory_api_url: str = "http://localhost:3103"
 
+    # Service token for AIFactory's live agent console WebSocket (#34). When set,
+    # the live-agents proxy sends it as `Authorization: Bearer <token>` to the
+    # upstream rmux WS. Leave unset for local dev where AIFactory runs with
+    # DISABLE_AUTH. The token stays server-side — it is never sent to the browser.
+    aifactory_token: str | None = None
+
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None
 

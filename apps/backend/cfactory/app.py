@@ -30,6 +30,7 @@ from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline, token_totals
 from .live_agents import LiveAgentsResult, discover_live_agents
+from .live_agent_proxy import ConnectFn, proxy_agent_console
 from .models import CompletionEvent, Service
 from .progress import LiveProgressHub, get_progress_hub, start_progress, stop_progress
 from .store import WorkItemStore, get_store
@@ -75,6 +76,14 @@ def action_transport_dep() -> httpx.BaseTransport | None:
     """Dependency seam — overridden in tests with a MockTransport. Defaults to
     None so production uses real network transport."""
     return None
+
+
+def live_agent_connect_dep() -> ConnectFn:
+    """Dependency seam for the upstream rmux WS client — overridden in tests with
+    a fake upstream. Defaults to the real ``websockets.connect``."""
+    import websockets
+
+    return websockets.connect
 
 
 @asynccontextmanager
@@ -215,6 +224,29 @@ def create_app() -> FastAPI:
             "count": len(result.agents),
             "agents": [a.model_dump(mode="json") for a in result.agents],
         }
+
+    @app.websocket("/api/live-agents/{correlation_key}/ws")
+    async def live_agent_ws(
+        websocket: WebSocket,
+        correlation_key: str,
+        adapters: list[BaseHTTPAdapter] = Depends(adapters_dep),
+        connect: ConnectFn = Depends(live_agent_connect_dep),
+    ) -> None:
+        """Stream one AIFactory agent's rmux console to the cockpit (#34).
+
+        Read-only server-side proxy: resolves the correlation key to a spec_id,
+        opens AIFactory's agent-console WS, and pumps ANSI bytes down. The
+        AIFactory URL and token never leave this process."""
+        ai = next((a for a in adapters if isinstance(a, AIFactoryAdapter)), None)
+        try:
+            if ai is None:
+                await websocket.accept()
+                await websocket.close(code=4404, reason="aifactory adapter unavailable")
+                return
+            await proxy_agent_console(websocket, correlation_key, ai, settings, connect=connect)
+        finally:
+            for adapter in adapters:
+                adapter.close()
 
     @app.get("/api/workitems/{correlation_key}")
     def get_workitem(

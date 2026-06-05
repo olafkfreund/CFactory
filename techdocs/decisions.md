@@ -71,6 +71,12 @@ only as named, documented seams (`enterprise.py`'s `AuthProvider` Protocol and
 > **Accepted** · Product
 
 The RFC-0001 v1.1 `usage` block is additive and present only when a service instruments
-it (AIFactory today; PFactory/TFactory pending). CFactory aggregates whatever it gets
-and exposes an `instrumented` flag per service, so the UI shows "not instrumented yet"
-honestly rather than implying zero cost. See `copilot/tools.py::token_totals`.
+it. CFactory aggregates whatever it gets and exposes an `instrumented` flag per service,
+so the UI shows "not instrumented yet" honestly rather than implying zero cost. See
+`copilot/tools.py::token_totals`.
+
+> **Update (2026-06-05):** all three services now emit the `usage` block —
+> AIFactory, plus PFactory (Plan) and TFactory (Test). The Tokens & cost page now
+> shows real per-service, per-work-item spend across the whole pipeline. The
+> `instrumented` flag and the honest "not instrumented yet" fallback remain for
+> any service or run that emits no usage (e.g. a deterministic, LLM-free plan run).

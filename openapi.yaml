@@ -1,0 +1,388 @@
+# Curated OpenAPI summary of CFactory's REST surface.
+#
+# This is a HAND-MAINTAINED subset registered in the Backstage software catalog.
+# The live, authoritative contract is the FastAPI app's own GET /openapi.json
+# (served by apps/backend/cfactory/app.py). Keep the two in rough sync; prefer
+# the live spec when they disagree.
+openapi: 3.0.3
+info:
+  title: CFactory API
+  version: 0.1.0
+  summary: Agentic control-tower cockpit over the PARR pipeline.
+  description: >-
+    Read-first, advise-and-confirm cockpit over the three Factory services
+    (PFactory · AIFactory · TFactory). Ingests normalized completion events,
+    hydrates a correlation-keyed WorkItem store, exposes board/rollup/anomaly
+    reads, an LLM copilot, and a propose → confirm → execute action flow with a
+    tamper-evident audit trail.
+  license:
+    name: MIT OR GPL-3.0
+servers:
+  - url: http://localhost:3111
+    description: Local backend (CFACTORY_BACKEND_PORT, default 3111)
+  - url: https://cfactory.freundcloud.com
+    description: Hosted cockpit
+
+tags:
+  - name: Health
+  - name: Events
+  - name: WorkItems
+  - name: Insights
+  - name: Copilot
+  - name: Actions
+  - name: Audit
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness + configured upstream endpoints
+      responses:
+        "200":
+          description: Service status and resolved upstream URLs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: cfactory }
+                  version: { type: string }
+                  multi_tenant: { type: boolean }
+                  upstreams:
+                    type: object
+                    properties:
+                      aifactory: { type: string }
+                      pfactory: { type: string }
+                      tfactory: { type: string }
+
+  /api/events:
+    post:
+      tags: [Events]
+      summary: Ingest an RFC-0001 completion event
+      description: >-
+        Idempotent by (service, correlation_key, status). A duplicate is
+        accepted but is a no-op (no timeline append, no re-broadcast). The
+        RFC-documented alias `/api/events/completion` resolves to the same
+        handler.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompletionEvent" }
+      responses:
+        "200":
+          description: Accepted (or duplicate no-op).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [accepted, duplicate] }
+                  correlation_key: { type: string }
+
+  /api/events/completion:
+    post:
+      tags: [Events]
+      summary: Ingest an RFC-0001 completion event (RFC-documented alias)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompletionEvent" }
+      responses:
+        "200": { description: Accepted (or duplicate no-op). }
+
+  /api/refresh:
+    post:
+      tags: [WorkItems]
+      summary: Poll every upstream service and hydrate the store
+      description: >-
+        Best-effort: an unreachable service is reported in the result map, not
+        fatal. Broadcasts a board snapshot to connected cockpits.
+      responses:
+        "200":
+          description: Per-service refresh result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  refreshed: { type: object, additionalProperties: true }
+
+  /api/workitems:
+    get:
+      tags: [WorkItems]
+      summary: List all correlation-keyed work items
+      responses:
+        "200":
+          description: The full board.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkItem" }
+
+  /api/workitems/{correlation_key}:
+    get:
+      tags: [WorkItems]
+      summary: Get one work item by correlation key
+      parameters:
+        - { name: correlation_key, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The work item.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkItem" }
+        "404": { description: No work item for the key. }
+
+  /api/workitems/{correlation_key}/timeline:
+    get:
+      tags: [WorkItems]
+      summary: Ordered event timeline for one work item
+      parameters:
+        - { name: correlation_key, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Timeline with total span in seconds.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  correlation_key: { type: string }
+                  title: { type: string, nullable: true }
+                  event_count: { type: integer }
+                  span_seconds: { type: number, nullable: true }
+                  events: { type: array, items: { type: object } }
+        "404": { description: No work item for the key. }
+
+  /api/rollups:
+    get:
+      tags: [Insights]
+      summary: Aggregate counts + latency across the board
+      responses:
+        "200":
+          description: Roll-up metrics (cost present once a service emits RFC-0001 usage).
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/tokens:
+    get:
+      tags: [Insights]
+      summary: Aggregate token/cost usage from the RFC-0001 usage block
+      description: >-
+        Totals + by_service (with an `instrumented` flag so the UI can say "not
+        instrumented yet" honestly) + by_work_item.
+      responses:
+        "200":
+          description: Token/cost totals.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/progress:
+    get:
+      tags: [Insights]
+      summary: Live in-flight progress snapshot
+      responses:
+        "200":
+          description: Current progress items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  items: { type: array, items: { type: object } }
+
+  /api/anomalies:
+    get:
+      tags: [Insights]
+      summary: Detected pipeline anomalies
+      description: Stuck phases, handback loops, gate/test failures.
+      responses:
+        "200":
+          description: Detected anomalies.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  anomalies: { type: array, items: { type: object } }
+
+  /api/copilot/ask:
+    post:
+      tags: [Copilot]
+      summary: Ask the read-only pipeline copilot a question
+      description: >-
+        Reasons over a compact board snapshot via the Claude Agent SDK. Never
+        writes to an upstream service.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string }
+      responses:
+        "200":
+          description: The copilot's answer.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer: { type: string }
+                  work_items_considered: { type: integer }
+
+  /api/actions/propose:
+    post:
+      tags: [Actions]
+      summary: Build (but do NOT execute) a PreparedAction
+      description: >-
+        Advise-only — never touches an upstream service. Kinds: `approve_gate`,
+        `trigger_handoff`, `kick_handback`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, correlation_key]
+              properties:
+                kind: { type: string, enum: [approve_gate, trigger_handoff, kick_handback] }
+                correlation_key: { type: string }
+      responses:
+        "200":
+          description: A described, not-yet-executed action.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreparedAction" }
+        "400": { description: Unknown action kind. }
+        "404": { description: No work item for the key. }
+
+  /api/actions/execute:
+    post:
+      tags: [Actions]
+      summary: Run a CONFIRMED PreparedAction against its target service
+      description: >-
+        The explicit write step. Requires the `write` scope when API keys are
+        configured (open in local single-user mode). Every confirmed action is
+        recorded in the tamper-evident audit log before the result is returned.
+      security:
+        - bearerApiKey: []
+        - apiKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PreparedAction" }
+      responses:
+        "200":
+          description: Upstream call result (best-effort; never raises).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status_code: { type: integer }
+                  ok: { type: boolean }
+                  body: {}
+                  error: { type: string }
+        "401": { description: Missing or invalid API key (when keys configured). }
+        "403": { description: API key lacks the write scope. }
+
+  /api/audit:
+    get:
+      tags: [Audit]
+      summary: Recent confirmed actions (the human-in-the-loop trail)
+      responses:
+        "200":
+          description: Audit entries, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  entries: { type: array, items: { type: object } }
+
+components:
+  securitySchemes:
+    bearerApiKey:
+      type: http
+      scheme: bearer
+      description: >-
+        `Authorization: Bearer <key>`. Scoped keys configured via
+        CFACTORY_API_KEYS (`<key>:read,write;...`). Open when no keys are set.
+    apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    TokenUsage:
+      type: object
+      description: RFC-0001 v1.1 additive per-stage token/cost usage.
+      properties:
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        total_tokens: { type: integer }
+        cost_usd: { type: number }
+        model: { type: string, nullable: true }
+    CompletionEvent:
+      type: object
+      required: [correlation_key, service, task_id, status, updated_at]
+      properties:
+        correlation_key: { type: string }
+        service: { type: string, enum: [pfactory, aifactory, tfactory] }
+        task_id: { type: string }
+        status: { type: string }
+        phase: { type: string, nullable: true }
+        updated_at: { type: string, format: date-time }
+        usage:
+          allOf: [{ $ref: "#/components/schemas/TokenUsage" }]
+          nullable: true
+    ServiceState:
+      type: object
+      properties:
+        task_id: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        phase: { type: string, nullable: true }
+        usage:
+          allOf: [{ $ref: "#/components/schemas/TokenUsage" }]
+          nullable: true
+    WorkItem:
+      type: object
+      required: [correlation_key]
+      properties:
+        correlation_key: { type: string }
+        title: { type: string, nullable: true }
+        pfactory: { $ref: "#/components/schemas/ServiceState" }
+        aifactory: { $ref: "#/components/schemas/ServiceState" }
+        tfactory: { $ref: "#/components/schemas/ServiceState" }
+        timeline:
+          type: array
+          items: { $ref: "#/components/schemas/CompletionEvent" }
+    PreparedAction:
+      type: object
+      required: [kind, correlation_key, target_service, method, endpoint, payload, rationale]
+      properties:
+        kind: { type: string, enum: [approve_gate, trigger_handoff, kick_handback] }
+        correlation_key: { type: string }
+        target_service: { type: string, enum: [pfactory, aifactory, tfactory] }
+        method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE] }
+        endpoint:
+          type: string
+          description: Root-relative path on the target service (SSRF-guarded).
+        payload: { type: object, additionalProperties: true }
+        rationale: { type: string }

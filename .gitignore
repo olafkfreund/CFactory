@@ -24,3 +24,7 @@ result-*
 # Editor
 .vscode/
 .idea/
+
+# Backstage TechDocs build output + toolchain venv
+/site/
+.techdocs-venv/

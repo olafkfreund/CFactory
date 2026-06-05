@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # Off by default so dev/tests don't reconnect-loop against down services.
     subscribe_upstreams: bool = False
 
+    # Opt-in live progress (#v2 P3): poll PFactory/TFactory + subscribe AIFactory
+    # progress, broadcasting {type:"progress"}. Off by default (siblings + Postgres).
+    live_progress: bool = False
+    poll_interval_seconds: float = 4.0
+
     # Agentic copilot (#13). Model id for the Claude Agent SDK; the SDK reads
     # ANTHROPIC_API_KEY from the environment.
     copilot_model: str = "claude-sonnet-4-6"

@@ -200,6 +200,14 @@ body {
 .wi-time { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--faint); font-size: 0.72rem; }
 .card-wi__title { font-size: 0.92rem; font-weight: 500; margin-bottom: 0.6rem; line-height: 1.35; }
 .card-wi__foot { color: var(--faint); font-size: 0.72rem; font-family: "JetBrains Mono", monospace; }
+.card-wi--live { border-color: rgba(184, 187, 38, 0.5); box-shadow: 0 0 14px rgba(184, 187, 38, 0.12); }
+.live-badge {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-family: "JetBrains Mono", monospace; font-size: 0.68rem; font-weight: 600;
+  color: var(--green); border: 1px solid rgba(184, 187, 38, 0.4); border-radius: 999px;
+  padding: 0.1rem 0.45rem; background: rgba(184, 187, 38, 0.1);
+}
+.live-badge-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 
 .stage-chips { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.55rem; }
 .schip {

@@ -4,12 +4,15 @@ import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import ServicesView from "./ServicesView";
 import TokensView from "./TokensView";
+import { motion } from "framer-motion";
 import {
   fetchHealth,
+  fetchProgress,
   fetchWorkItems,
   openFeed,
   refresh as apiRefresh,
   type Health,
+  type LiveProgress,
   type ServiceState,
   type WorkItem,
 } from "./api";
@@ -76,6 +79,7 @@ export default function App() {
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [progress, setProgress] = useState<Record<string, LiveProgress>>({});
 
   const load = useCallback(async () => {
     try {
@@ -85,6 +89,9 @@ export default function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+    fetchProgress()
+      .then((ps) => setProgress(Object.fromEntries(ps.map((p) => [p.correlation_key, p]))))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -100,6 +107,8 @@ export default function App() {
     const ws = openFeed(
       (msg) => {
         if (msg.type === "snapshot") setItems(msg.items);
+        else if (msg.type === "progress")
+          setProgress((prev) => ({ ...prev, [msg.item.correlation_key]: msg.item }));
         else
           setItems((prev) => [
             msg.item,
@@ -175,7 +184,7 @@ export default function App() {
         <main className="content">
           {error && <div className="banner banner--error">{error}</div>}
           {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
-          {view === "pipeline" && <Board items={items} />}
+          {view === "pipeline" && <Board items={items} progress={progress} />}
           {view === "tokens" && <TokensView reloadSignal={tick} />}
           {view === "copilot" && <CopilotPanel reloadSignal={tick} />}
           {view === "audit" && <AuditView reloadSignal={tick} />}
@@ -186,7 +195,7 @@ export default function App() {
   );
 }
 
-function Board({ items }: { items: WorkItem[] }) {
+function Board({ items, progress }: { items: WorkItem[]; progress: Record<string, LiveProgress> }) {
   const byStage = useMemo(() => {
     const m: Record<StageKey, WorkItem[]> = { pfactory: [], aifactory: [], tfactory: [] };
     for (const wi of items) m[furthestStage(wi)].push(wi);
@@ -212,7 +221,9 @@ function Board({ items }: { items: WorkItem[] }) {
               {byStage[stage.key].length === 0 ? (
                 <p className="col-empty">No work items</p>
               ) : (
-                byStage[stage.key].map((wi) => <Card key={wi.correlation_key} wi={wi} />)
+                byStage[stage.key].map((wi) => (
+                  <Card key={wi.correlation_key} wi={wi} lp={progress[wi.correlation_key]} />
+                ))
               )}
             </div>
           </div>
@@ -222,13 +233,13 @@ function Board({ items }: { items: WorkItem[] }) {
   );
 }
 
-function Card({ wi }: { wi: WorkItem }) {
+function Card({ wi, lp }: { wi: WorkItem; lp?: LiveProgress }) {
   const last = wi.timeline.length ? wi.timeline[wi.timeline.length - 1].updated_at : null;
   return (
-    <article className="card-wi">
+    <article className={`card-wi ${lp ? "card-wi--live" : ""}`}>
       <div className="card-wi__head">
         <span className="wi-key">#{wi.correlation_key}</span>
-        {last && (
+        {lp ? <LiveBadge lp={lp} /> : last && (
           <span className="wi-time"><IconClock /> {relTime(last)}</span>
         )}
       </div>
@@ -240,6 +251,20 @@ function Card({ wi }: { wi: WorkItem }) {
       </div>
       <div className="card-wi__foot">{wi.timeline.length} events</div>
     </article>
+  );
+}
+
+function LiveBadge({ lp }: { lp: LiveProgress }) {
+  return (
+    <motion.span
+      className="live-badge"
+      title={lp.subtask || lp.phase || "active"}
+      animate={{ opacity: [1, 0.55, 1] }}
+      transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+    >
+      <span className="live-badge-dot" />
+      {lp.percent != null ? `${Math.round(lp.percent)}%` : lp.phase || "live"}
+    </motion.span>
   );
 }
 

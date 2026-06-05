@@ -77,9 +77,25 @@ export async function fetchWorkItems(): Promise<WorkItem[]> {
   return body.items;
 }
 
+export interface LiveProgress {
+  correlation_key: string;
+  service: string;
+  phase: string | null;
+  percent: number | null;
+  subtask?: string | null;
+  updated_at: string;
+}
+
 export type FeedMessage =
   | { type: "workitem"; item: WorkItem }
-  | { type: "snapshot"; items: WorkItem[] };
+  | { type: "snapshot"; items: WorkItem[] }
+  | { type: "progress"; item: LiveProgress };
+
+export async function fetchProgress(): Promise<LiveProgress[]> {
+  const resp = await fetch("/api/progress");
+  if (!resp.ok) throw new Error(`progress error: HTTP ${resp.status}`);
+  return ((await resp.json()) as { items: LiveProgress[] }).items;
+}
 
 // Open the live cockpit feed. Returns the socket so the caller can close it.
 export function openFeed(onMessage: (msg: FeedMessage) => void, onOpen?: () => void, onClose?: () => void): WebSocket {

@@ -30,6 +30,7 @@ from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline, token_totals
 from .models import CompletionEvent
+from .progress import LiveProgressHub, get_progress_hub, start_progress, stop_progress
 from .store import WorkItemStore, get_store
 from .upstream_ws import start_subscribers
 from .ws import get_manager
@@ -64,6 +65,11 @@ def audit_dep() -> AuditStore:
     return get_audit_store()
 
 
+def progress_hub_dep() -> LiveProgressHub:
+    """Dependency seam — overridden in tests with a fresh hub."""
+    return get_progress_hub()
+
+
 def action_transport_dep() -> httpx.BaseTransport | None:
     """Dependency seam — overridden in tests with a MockTransport. Defaults to
     None so production uses real network transport."""
@@ -76,6 +82,7 @@ async def lifespan(app: FastAPI):
     tasks: list[asyncio.Task[None]] = []
     if settings.subscribe_upstreams:
         tasks = start_subscribers(get_store(), get_manager(), settings)
+    progress_tasks = start_progress(get_progress_hub(), get_manager(), settings)
     try:
         yield
     finally:
@@ -83,6 +90,7 @@ async def lifespan(app: FastAPI):
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await stop_progress(progress_tasks)
 
 
 def create_app() -> FastAPI:
@@ -171,6 +179,11 @@ def create_app() -> FastAPI:
     @app.get("/api/tokens")
     def get_tokens(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
         return token_totals(store)
+
+    @app.get("/api/progress")
+    def get_progress(hub: LiveProgressHub = Depends(progress_hub_dep)) -> dict[str, object]:
+        items = hub.snapshot()
+        return {"count": len(items), "items": [p.model_dump(mode="json") for p in items]}
 
     @app.get("/api/anomalies")
     def get_anomalies(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:

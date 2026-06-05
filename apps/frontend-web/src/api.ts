@@ -113,6 +113,41 @@ export function openFeed(onMessage: (msg: FeedMessage) => void, onOpen?: () => v
   return ws;
 }
 
+// --- Live agents (#33/#34): AIFactory rmux consoles proxied by the backend ---
+
+export interface LiveAgent {
+  correlation_key: string;
+  spec_id: string;
+  service: string;
+  title: string | null;
+  phase: string | null;
+  status: string | null;
+  // Cockpit-side proxy path the backend re-streams from; never a raw AIFactory URL.
+  ws_path: string;
+}
+
+export interface LiveAgentsResponse {
+  rmux_enabled: boolean;
+  count: number;
+  agents: LiveAgent[];
+}
+
+export async function fetchLiveAgents(): Promise<LiveAgentsResponse> {
+  const resp = await fetch("/api/live-agents");
+  if (!resp.ok) throw new Error(`live-agents error: HTTP ${resp.status}`);
+  return (await resp.json()) as LiveAgentsResponse;
+}
+
+// Open one agent's console stream (read-only ANSI bytes for xterm.js). The
+// caller writes incoming frames to a terminal and closes the socket on unmount.
+export function openAgentConsole(wsPath: string): WebSocket {
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  const path = wsPath.startsWith("/") ? wsPath : `/${wsPath}`;
+  const ws = new WebSocket(`${proto}://${window.location.host}${path}`);
+  ws.binaryType = "arraybuffer";
+  return ws;
+}
+
 export interface Anomaly {
   kind: string;
   severity: string;

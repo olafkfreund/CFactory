@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { fetchAnomalies, fetchRollups, fetchTokens, type Anomaly, type Rollups, type TokenTotals, type WorkItem } from "./api";
 import { useCountUp } from "./motion";
+import LiveAgents from "./LiveAgents";
 
 const NODES = [
   { key: "pfactory", label: "Plan", svc: "PFactory", color: "var(--plan)", cx: 110 },
@@ -135,19 +136,7 @@ export default function MissionControl({ items, reloadSignal }: { items: WorkIte
           )}
         </div>
 
-        <div className="mc-panel">
-          <h2 className="panel-title">Live agents</h2>
-          <div className="mc-agents">
-            {[0, 1, 2].map((i) => (
-              <div className="mc-agent-ph" key={i}>
-                <span className="mc-agent-dot" />
-                rmux live view
-                <span className="mc-agent-sub">Phase 5</span>
-              </div>
-            ))}
-          </div>
-          <p className="mc-note">Live agent terminals (AIFactory rmux) arrive in Phase 5.</p>
-        </div>
+        <LiveAgents reloadSignal={reloadSignal} />
       </div>
     </>
   );

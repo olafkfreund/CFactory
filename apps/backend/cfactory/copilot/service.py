@@ -102,10 +102,15 @@ class Copilot:
         self._runner = runner or _default_runner(self._settings.copilot_model)
 
     def ask(self, question: str) -> CopilotAnswer:
+        from .anomalies import anomalies_summary_line
         from .tools import rollups_summary_line
 
         items = self._store.list()
-        context = f"{rollups_summary_line(self._store)}\n\n{build_board_snapshot(self._store)}"
+        context = (
+            f"{rollups_summary_line(self._store)}\n"
+            f"{anomalies_summary_line(self._store)}\n\n"
+            f"{build_board_snapshot(self._store)}"
+        )
         answer = self._runner(question, context, SYSTEM_PROMPT)
         return CopilotAnswer(answer=answer, work_items_considered=len(items))
 

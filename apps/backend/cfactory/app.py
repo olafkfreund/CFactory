@@ -20,6 +20,7 @@ from . import __version__
 from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
 from .copilot import Copilot, get_copilot
+from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline
 from .models import CompletionEvent
@@ -143,6 +144,11 @@ def create_app() -> FastAPI:
     @app.get("/api/rollups")
     def get_rollups(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
         return compute_rollups(store)
+
+    @app.get("/api/anomalies")
+    def get_anomalies(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
+        found = detect_anomalies(store)
+        return {"count": len(found), "anomalies": found}
 
     @app.get("/api/workitems/{correlation_key}")
     def get_workitem(

@@ -9,10 +9,39 @@ export interface Health {
   upstreams: Record<string, string>;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  model?: string | null;
+}
+
 export interface ServiceState {
   task_id: string | null;
   status: string | null;
   phase: string | null;
+  usage?: TokenUsage | null;
+}
+
+export interface ServiceTokens {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  instrumented: boolean;
+}
+
+export interface TokenTotals {
+  total: { input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number };
+  by_service: Record<string, ServiceTokens>;
+  by_work_item: { correlation_key: string; title: string | null; total_tokens: number; cost_usd: number }[];
+}
+
+export async function fetchTokens(): Promise<TokenTotals> {
+  const resp = await fetch("/api/tokens");
+  if (!resp.ok) throw new Error(`tokens error: HTTP ${resp.status}`);
+  return (await resp.json()) as TokenTotals;
 }
 
 export interface TimelineEvent {

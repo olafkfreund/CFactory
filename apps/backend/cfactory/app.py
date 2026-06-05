@@ -28,7 +28,7 @@ from .config import get_settings
 from .copilot import Copilot, get_copilot
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
-from .copilot.tools import summarize_timeline
+from .copilot.tools import summarize_timeline, token_totals
 from .models import CompletionEvent
 from .store import WorkItemStore, get_store
 from .upstream_ws import start_subscribers
@@ -167,6 +167,10 @@ def create_app() -> FastAPI:
     @app.get("/api/rollups")
     def get_rollups(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
         return compute_rollups(store)
+
+    @app.get("/api/tokens")
+    def get_tokens(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
+        return token_totals(store)
 
     @app.get("/api/anomalies")
     def get_anomalies(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:

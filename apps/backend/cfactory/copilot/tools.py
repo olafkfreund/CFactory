@@ -66,6 +66,7 @@ def rollups(store: WorkItemStore) -> dict:
     by_status: Counter[str] = Counter()
     spans: list[float] = []
     total_events = 0
+    cost = 0.0
     for wi in items:
         if wi.pfactory.status:
             by_stage["plan"] += 1
@@ -76,6 +77,8 @@ def rollups(store: WorkItemStore) -> dict:
         for s in (wi.pfactory, wi.aifactory, wi.tfactory):
             if s.status:
                 by_status[s.status] += 1
+            if s.usage:
+                cost += s.usage.cost_usd
         total_events += len(wi.timeline)
         if len(wi.timeline) >= 2:
             spans.append((wi.timeline[-1].updated_at - wi.timeline[0].updated_at).total_seconds())
@@ -88,8 +91,48 @@ def rollups(store: WorkItemStore) -> dict:
         "by_status": dict(by_status),
         "total_events": total_events,
         "latency": latency,
-        "cost": None,  # not tracked yet
+        "cost": cost if cost else None,  # real once a service emits RFC-0001 usage
     }
+
+
+def token_totals(store: WorkItemStore) -> dict:
+    """Aggregate token/cost usage from the RFC-0001 `usage` block (#token-spine).
+
+    Returns total + by_service (with an `instrumented` flag so the UI can show
+    'not instrumented yet' honestly) + by_work_item. `by_project` is deferred —
+    CFactory has no project dimension on the WorkItem yet.
+    """
+    services = ("pfactory", "aifactory", "tfactory")
+    keys = ("input_tokens", "output_tokens", "total_tokens")
+    by_service = {
+        s: {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0,
+            "instrumented": False}
+        for s in services
+    }
+    total = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+    by_work_item: list[dict] = []
+
+    for wi in store.list():
+        wi_tot = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+        for svc in services:
+            u = getattr(wi, svc).usage
+            if u is None:
+                continue
+            b = by_service[svc]
+            b["instrumented"] = True
+            for k in keys:
+                v = getattr(u, k)
+                b[k] += v
+                wi_tot[k] += v
+                total[k] += v
+            b["cost_usd"] += u.cost_usd
+            wi_tot["cost_usd"] += u.cost_usd
+            total["cost_usd"] += u.cost_usd
+        if wi_tot["total_tokens"] or wi_tot["cost_usd"]:
+            by_work_item.append({"correlation_key": wi.correlation_key, "title": wi.title, **wi_tot})
+
+    by_work_item.sort(key=lambda w: w["total_tokens"], reverse=True)
+    return {"total": total, "by_service": by_service, "by_work_item": by_work_item}
 
 
 def rollups_summary_line(store: WorkItemStore) -> str:

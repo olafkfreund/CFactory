@@ -28,10 +28,25 @@ class Stage(str, Enum):
     TEST = "test"
 
 
+class TokenUsage(BaseModel):
+    """LLM token/cost usage for one stage (RFC-0001 v1.1 additive `usage` block).
+
+    Optional everywhere — only present when a service instruments and emits it
+    (AIFactory does today; PFactory/TFactory pending). Aggregated by CFactory.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+    model: str | None = None
+
+
 class CompletionEvent(BaseModel):
     """Normalized completion envelope emitted by the three services (see Factory#4).
 
     Standard schema all services conform to; consumed by the webhook ingress (#11).
+    The optional ``usage`` block (RFC-0001 v1.1) carries per-stage token/cost.
     """
 
     correlation_key: str
@@ -40,6 +55,7 @@ class CompletionEvent(BaseModel):
     status: str
     phase: str | None = None
     updated_at: datetime
+    usage: TokenUsage | None = None
 
 
 class ServiceState(BaseModel):
@@ -48,6 +64,7 @@ class ServiceState(BaseModel):
     task_id: str | None = None
     status: str | None = None
     phase: str | None = None
+    usage: TokenUsage | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

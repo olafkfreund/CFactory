@@ -3,6 +3,7 @@ import AuditView from "./AuditView";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import ServicesView from "./ServicesView";
+import TokensView from "./TokensView";
 import {
   fetchHealth,
   fetchWorkItems,
@@ -22,9 +23,10 @@ import {
   IconPipeline,
   IconRefresh,
   IconServices,
+  IconTokens,
 } from "./icons";
 
-type View = "overview" | "pipeline" | "copilot" | "audit" | "services";
+type View = "overview" | "pipeline" | "tokens" | "copilot" | "audit" | "services";
 type Backend =
   | { kind: "loading" }
   | { kind: "ok"; health: Health }
@@ -33,6 +35,7 @@ type Backend =
 const NAV: { id: View; label: string; Icon: typeof IconPipeline }[] = [
   { id: "overview", label: "Mission Control", Icon: IconInsights },
   { id: "pipeline", label: "Pipeline", Icon: IconPipeline },
+  { id: "tokens", label: "Tokens", Icon: IconTokens },
   { id: "copilot", label: "Copilot", Icon: IconCopilot },
   { id: "audit", label: "Audit", Icon: IconAudit },
   { id: "services", label: "Services", Icon: IconServices },
@@ -173,6 +176,7 @@ export default function App() {
           {error && <div className="banner banner--error">{error}</div>}
           {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
           {view === "pipeline" && <Board items={items} />}
+          {view === "tokens" && <TokensView reloadSignal={tick} />}
           {view === "copilot" && <CopilotPanel reloadSignal={tick} />}
           {view === "audit" && <AuditView reloadSignal={tick} />}
           {view === "services" && <ServicesView backend={backend} />}

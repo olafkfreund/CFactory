@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { fetchAnomalies, fetchRollups, type Anomaly, type Rollups, type WorkItem } from "./api";
+import { fetchAnomalies, fetchRollups, fetchTokens, type Anomaly, type Rollups, type TokenTotals, type WorkItem } from "./api";
 import { useCountUp } from "./motion";
 
 const NODES = [
@@ -30,10 +30,12 @@ export default function MissionControl({ items, reloadSignal }: { items: WorkIte
   const reduced = useReducedMotion();
   const [rollups, setRollups] = useState<Rollups | null>(null);
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
+  const [tokens, setTokens] = useState<TokenTotals | null>(null);
 
   useEffect(() => {
     fetchRollups().then(setRollups).catch(() => setRollups(null));
     fetchAnomalies().then(setAnomalies).catch(() => setAnomalies([]));
+    fetchTokens().then(setTokens).catch(() => setTokens(null));
   }, [reloadSignal]);
 
   const counts = useMemo(() => {
@@ -56,7 +58,12 @@ export default function MissionControl({ items, reloadSignal }: { items: WorkIte
         <Stat label="Events" value={totalEvents} accent="var(--violet)" />
         <Stat label="Anomalies" value={anomalies.length} accent={anomalies.length ? "var(--red)" : "var(--green)"} />
         <StatText label="Avg latency" text={fmtDur(rollups?.latency?.avg_seconds)} accent="var(--muted)" />
-        <StatText label="Cost (USD)" text="—" sub="instrumented in P1" accent="var(--code)" />
+        <StatText
+          label="Cost (USD)"
+          text={tokens && tokens.total.cost_usd > 0 ? `$${tokens.total.cost_usd.toFixed(2)}` : "—"}
+          sub={tokens && tokens.total.total_tokens > 0 ? undefined : "awaiting usage"}
+          accent="var(--code)"
+        />
       </div>
 
       <section className="mc-flow">

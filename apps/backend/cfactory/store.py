@@ -87,7 +87,9 @@ class WorkItemStore:
                 row = WorkItemRow(correlation_key=event.correlation_key, timeline=[])
                 session.add(row)
 
-            slice_ = ServiceState(task_id=event.task_id, status=event.status, phase=event.phase)
+            slice_ = ServiceState(
+                task_id=event.task_id, status=event.status, phase=event.phase, usage=event.usage
+            )
             setattr(row, event.service.value, slice_.model_dump())
 
             # Reassign (not .append) so SQLAlchemy detects the JSON column change.

@@ -157,6 +157,7 @@ body {
 .mc-agent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .mc-agent-sub { color: var(--code); font-size: 0.64rem; }
 .mc-note { color: var(--faint); font-size: 0.76rem; margin: 0.7rem 0 0; }
+.tk-pending { color: var(--faint); font-style: italic; }
 
 @media (max-width: 900px) { .mc-grid { grid-template-columns: 1fr; } }
 

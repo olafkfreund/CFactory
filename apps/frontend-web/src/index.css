@@ -1,34 +1,37 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
+/* Gruvbox dark — same theme system as AIFactory & TFactory.
+   CFactory's own brand accent is gruvbox blue/aqua (vs AIFactory yellow,
+   TFactory green); pipeline stages are tinted to each sibling's color. */
 :root {
-  --bg: #0c0c0e;
-  --sidebar: #131317;
-  --panel: #161619;
-  --panel-2: #1c1c21;
-  --card: #17171b;
-  --border: #2a2a31;
-  --border-soft: #232329;
-  --text: #ececf1;
-  --muted: #8a8a96;
-  --faint: #5c5c66;
+  --bg: #282828;          /* bg0  */
+  --sidebar: #1d2021;     /* bg0_h */
+  --panel: #32302f;       /* bg0_s / card */
+  --panel-2: #3c3836;     /* bg1  */
+  --card: #32302f;
+  --border: #504945;      /* bg2  */
+  --border-soft: #3c3836; /* bg1  */
+  --text: #ebdbb2;        /* fg1  */
+  --muted: #a89984;       /* fg4  */
+  --faint: #7c6f64;       /* gray */
 
-  --cyan: #34d3da;
-  --violet: #8b7cf6;
-  --brand: linear-gradient(135deg, #8b7cf6, #34d3da);
+  --cyan: #83a598;        /* gruvbox blue  — CFactory accent */
+  --violet: #d3869b;      /* gruvbox purple */
+  --brand: linear-gradient(135deg, #83a598, #8ec07c); /* blue -> aqua */
 
-  --plan: #8b7cf6;   /* PFactory */
-  --code: #e0a44e;   /* AIFactory */
-  --test: #5fb84e;   /* TFactory */
-  --green: #4ade80;
-  --red: #f87171;
-  --amber: #fbbf24;
+  --plan: #d3869b;   /* PFactory — gruvbox purple */
+  --code: #fabd2f;   /* AIFactory — gruvbox yellow */
+  --test: #b8bb26;   /* TFactory — gruvbox green */
+  --green: #b8bb26;  /* gruvbox green */
+  --red: #fb4934;    /* gruvbox red */
+  --amber: #fabd2f;  /* gruvbox yellow */
 }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
   margin: 0;
-  font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -143,7 +146,7 @@ body {
 }
 .mc-svg { width: 100%; height: auto; display: block; }
 .mc-node-count { font: 700 26px "JetBrains Mono", monospace; }
-.mc-node-lbl { font: 600 13px "IBM Plex Sans", sans-serif; }
+.mc-node-lbl { font: 600 13px "Hanken Grotesk", sans-serif; }
 .mc-node-svc { font: 500 11px "JetBrains Mono", monospace; }
 
 .mc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }

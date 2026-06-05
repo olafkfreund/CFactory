@@ -16,7 +16,10 @@ from starlette.concurrency import run_in_threadpool
 
 from pydantic import BaseModel
 
+import httpx
+
 from . import __version__
+from .actions import PreparedAction, execute_action, propose
 from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
 from .copilot import Copilot, get_copilot
@@ -33,6 +36,11 @@ class AskRequest(BaseModel):
     question: str
 
 
+class ProposeRequest(BaseModel):
+    kind: str
+    correlation_key: str
+
+
 def store_dep() -> WorkItemStore:
     """Dependency seam — overridden in tests with a temp store."""
     return get_store()
@@ -46,6 +54,12 @@ def adapters_dep() -> list[BaseHTTPAdapter]:
 def copilot_dep() -> Copilot:
     """Dependency seam — overridden in tests with a fake-runner copilot."""
     return get_copilot()
+
+
+def action_transport_dep() -> httpx.BaseTransport | None:
+    """Dependency seam — overridden in tests with a MockTransport. Defaults to
+    None so production uses real network transport."""
+    return None
 
 
 @asynccontextmanager
@@ -167,6 +181,35 @@ def create_app() -> FastAPI:
         if summary is None:
             raise HTTPException(status_code=404, detail=f"no work item for {correlation_key!r}")
         return summary
+
+    @app.post("/api/actions/propose")
+    async def propose_action(
+        req: ProposeRequest, store: WorkItemStore = Depends(store_dep)
+    ) -> PreparedAction:
+        """Build (but do NOT execute) a PreparedAction for the given work item.
+
+        Advise-only: this never touches an upstream service. 400 for an unknown
+        kind; 404 if there's no work item for the correlation key."""
+        try:
+            action = await run_in_threadpool(propose, store, req.kind, req.correlation_key)
+        except KeyError:
+            raise HTTPException(status_code=400, detail=f"unknown action kind: {req.kind!r}")
+        if action is None:
+            raise HTTPException(
+                status_code=404, detail=f"no work item for {req.correlation_key!r}"
+            )
+        return action
+
+    @app.post("/api/actions/execute")
+    async def execute_prepared_action(
+        action: PreparedAction,
+        transport: httpx.BaseTransport | None = Depends(action_transport_dep),
+    ) -> dict[str, object]:
+        """Run a CONFIRMED PreparedAction against its target service. This is the
+        explicit write step — the caller has already reviewed the action."""
+        return await run_in_threadpool(
+            execute_action, action, settings=settings, transport=transport
+        )
 
     @app.post("/api/copilot/ask")
     async def copilot_ask(req: AskRequest, copilot: Copilot = Depends(copilot_dep)) -> dict[str, object]:

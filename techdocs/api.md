@@ -45,6 +45,16 @@ CLI — it *consumes* the other services' REST/WebSocket surfaces (see
 | `GET /api/progress` | Live in-flight progress snapshot |
 | `GET /api/anomalies` | Stuck phases, handback loops, gate/test failures |
 
+### Live agents (read-only)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/live-agents` | Active AIFactory agent sessions to stream (capability-gated) |
+| `WS /api/live-agents/{correlation_key}/ws` | Proxy of an agent's rmux console — ANSI pane bytes for xterm.js |
+
+See [Live agents](live-agents.md) for the data path, the read-only guarantee, and
+the `CFACTORY_AIFACTORY_TOKEN` / `AIFACTORY_RMUX_ENABLED` wiring.
+
 ### Copilot
 
 | Method & path | Purpose |

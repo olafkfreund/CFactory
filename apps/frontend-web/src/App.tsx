@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import CopilotPanel from "./CopilotPanel";
 import {
   fetchHealth,
   fetchWorkItems,
@@ -26,11 +27,13 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [insightsTick, setInsightsTick] = useState(0);
 
   const load = useCallback(async () => {
     try {
       setItems(await fetchWorkItems());
       setError(null);
+      setInsightsTick((t) => t + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -134,6 +137,8 @@ export default function App() {
             ))
           )}
         </section>
+
+        <CopilotPanel reloadSignal={insightsTick} />
       </main>
     </div>
   );

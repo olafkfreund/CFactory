@@ -247,3 +247,129 @@ body {
     display: none;
   }
 }
+
+/* ── Copilot + insights ─────────────────────────────────── */
+.copilot {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.panel-title {
+  font-size: 0.95rem;
+  margin: 0 0 0.6rem;
+}
+
+.insights,
+.chat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.55rem;
+  font-size: 0.84rem;
+}
+
+.card--rollup {
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.card--ok {
+  color: var(--green);
+}
+.card--high {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.08);
+}
+.card--medium {
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.2rem;
+}
+.card-kind {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+}
+.card-key {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--cyan);
+}
+.card-detail {
+  color: var(--text);
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+}
+.chat-thread {
+  flex: 1;
+  min-height: 220px;
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.chat-hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.bubble {
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.bubble--you {
+  align-self: flex-end;
+  background: rgba(139, 124, 246, 0.18);
+  border: 1px solid rgba(139, 124, 246, 0.4);
+}
+.bubble--copilot {
+  align-self: flex-start;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.bubble-role {
+  display: block;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+.chat-input {
+  display: flex;
+  gap: 0.5rem;
+}
+.chat-input input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 0.5rem 0.7rem;
+  font-size: 0.86rem;
+}
+
+@media (max-width: 720px) {
+  .copilot {
+    grid-template-columns: 1fr;
+  }
+}

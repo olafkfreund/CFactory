@@ -60,6 +60,44 @@ export function openFeed(onMessage: (msg: FeedMessage) => void, onOpen?: () => v
   return ws;
 }
 
+export interface Anomaly {
+  kind: string;
+  severity: string;
+  correlation_key: string;
+  title: string | null;
+  detail: string;
+}
+
+export interface Rollups {
+  total_work_items: number;
+  by_stage: { plan: number; code: number; test: number };
+  total_events: number;
+  latency: { avg_seconds: number; max_seconds: number } | null;
+}
+
+export async function askCopilot(question: string): Promise<string> {
+  const resp = await fetch("/api/copilot/ask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!resp.ok) throw new Error(`copilot error: HTTP ${resp.status}`);
+  const body = (await resp.json()) as { answer: string };
+  return body.answer;
+}
+
+export async function fetchAnomalies(): Promise<Anomaly[]> {
+  const resp = await fetch("/api/anomalies");
+  if (!resp.ok) throw new Error(`anomalies error: HTTP ${resp.status}`);
+  return ((await resp.json()) as { anomalies: Anomaly[] }).anomalies;
+}
+
+export async function fetchRollups(): Promise<Rollups> {
+  const resp = await fetch("/api/rollups");
+  if (!resp.ok) throw new Error(`rollups error: HTTP ${resp.status}`);
+  return (await resp.json()) as Rollups;
+}
+
 // Best-effort poll of all upstream services; returns the per-service summary.
 export async function refresh(): Promise<Record<string, unknown>> {
   const resp = await fetch("/api/refresh", { method: "POST" });

@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cfactory.fullname" . }}
+  labels:
+    {{- include "cfactory.labels" . | nindent 4 }}
+spec:
+  # v0.x: cockpit WebSocket fan-out is single-replica only — see values.yaml.
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    # Tear down before bringing up: one replica, and we don't want two pods
+    # both holding the upstream WS subscriptions during a version switch.
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "cfactory.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cfactory.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll pods on ConfigMap change.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "cfactory.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cfactory
+          image: {{ include "cfactory.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "cfactory.fullname" . }}-config
+          env:
+            {{- if .Values.database.enabled }}
+            # WorkItem correlation store. Supplied out-of-band as a Secret.
+            - name: CFACTORY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.secretKey }}
+            {{- end }}
+            {{- if .Values.apiKeys.enabled }}
+            # Scoped API keys. Format: "<key>:read,write;<key2>:read".
+            - name: CFACTORY_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeys.existingSecret }}
+                  key: {{ .Values.apiKeys.secretKey }}
+            {{- end }}
+            {{- with .Values.config.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem=true demands writable paths be emptyDir.
+            - name: tmp
+              mountPath: /tmp
+            # Workspace root (CFACTORY_WORKSPACE_ROOT default ~/.cfactory).
+            - name: cfactory-data
+              mountPath: /home/nonroot/.cfactory
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cfactory-data
+          emptyDir: {}

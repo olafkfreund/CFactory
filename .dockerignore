@@ -1,0 +1,48 @@
+# Keep the build context small and reproducible.
+
+# Python virtualenvs / caches
+.venv
+**/.venv
+venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+**/.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Nix / direnv
+.direnv
+.envrc
+result
+result-*
+
+# Node / frontend build artefacts (frontend is a separate image)
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+apps/frontend-web
+
+# VCS + editors
+.git
+.gitignore
+.github
+.idea
+.vscode
+*.swp
+
+# Local env + secrets
+.env
+**/.env
+*.env
+
+# Docs / charts / misc that don't belong in the backend image
+docs
+guides
+charts
+*.md
+.DS_Store

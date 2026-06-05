@@ -1,0 +1,135 @@
+# Default values for the CFactory chart.
+# This is the primary configuration surface for operators.
+#
+# Sections:
+#   image           — container image + pull config
+#   replicaCount    — pinned to 1 for v0.x (WebSocket fan-out limitation)
+#   resources       — CPU/memory requests + limits
+#   securityContext — non-root defaults; do not relax without review
+#   service         — ClusterIP by default
+#   serviceAccount  — dedicated SA, no automount of API token
+#   probes          — liveness/readiness hitting /health
+#   config          — CFACTORY_* runtime configuration (upstream URLs etc.)
+#   apiKeys         — scoped API keys (CFACTORY_API_KEYS) via Secret
+#   database        — CFACTORY_DATABASE_URL via Secret
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # Override with your private mirror.
+  repository: ghcr.io/dataseeek/cfactory
+  tag: ""  # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# v0.x: the cockpit WebSocket fan-out is single-replica only; >1 will need
+# a shared pub/sub backend. Keep at 1 until then.
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Non-root defaults. NEVER set runAsUser=0 or allowPrivilegeEscalation=true.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+  port: 80
+  # The backend listens on 3111 (uvicorn --port 3111).
+  targetPort: 3111
+  annotations: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # The app doesn't talk to the K8s API, so don't mount the token.
+  automountServiceAccountToken: false
+
+# Liveness/readiness both hit the app's /health endpoint. The readiness
+# window is generous so cold starts (DB connect, upstream subscribe) don't
+# get killed before the app is ready.
+probes:
+  liveness:
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+# CFACTORY_* runtime configuration. These map 1:1 to the Settings fields in
+# apps/backend/cfactory/config.py (env_prefix="CFACTORY_"). Plain (non-secret)
+# values are rendered as a ConfigMap and injected via envFrom.
+config:
+  # Server port the container listens on. Keep in sync with service.targetPort
+  # and the image's CMD (--port 3111).
+  backendPort: 3111
+  # Upstream service endpoints the adapters talk to. Canonical local port map:
+  # AIFactory 3101, PFactory 3102, TFactory 3103. In-cluster, point these at
+  # the upstream Services (e.g. http://aifactory.ai.svc.cluster.local:3101).
+  aifactoryApiUrl: "http://localhost:3101"
+  pfactoryApiUrl: "http://localhost:3102"
+  tfactoryApiUrl: "http://localhost:3103"
+  # Connect to each upstream's WebSocket on startup. Off by default so the pod
+  # doesn't reconnect-loop against upstreams that aren't up yet.
+  subscribeUpstreams: false
+  # Agentic copilot model id (the Claude Agent SDK reads ANTHROPIC_API_KEY
+  # from the environment — supply it via extraEnv / a Secret if needed).
+  copilotModel: "claude-sonnet-4-6"
+  # Extra free-form CFACTORY_* (or other) env vars, e.g.
+  #   - name: ANTHROPIC_API_KEY
+  #     valueFrom: { secretKeyRef: { name: cfactory-llm, key: anthropic-key } }
+  extraEnv: []
+
+# Scoped API keys (CFACTORY_API_KEYS). When empty, auth is OPEN (single-user
+# local mode). In production, set existingSecret to a Secret carrying the
+# "<key>:read,write;<key2>:read" string under the named key.
+apiKeys:
+  # When false, CFACTORY_API_KEYS is not injected (open mode).
+  enabled: false
+  # Name of a Secret holding the API keys string. Required when enabled=true.
+  existingSecret: cfactory-api-keys
+  secretKey: api-keys
+
+# WorkItem correlation store. When enabled, CFACTORY_DATABASE_URL is injected
+# from a Secret (key="database-url"). When disabled, the app runs without a
+# correlation store (database_url=None).
+database:
+  enabled: false
+  # Name of a Secret carrying the connection string under key "database-url".
+  existingSecret: cfactory-db
+  secretKey: database-url
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+global:
+  imagePullSecrets: []

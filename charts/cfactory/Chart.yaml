@@ -1,0 +1,27 @@
+apiVersion: v2
+name: cfactory
+description: |
+  CFactory — the cockpit/correlation service for the Factory family.
+  It fans in over the AIFactory / PFactory / TFactory upstreams, holds
+  the WorkItem correlation store, and serves the live cockpit feed.
+  This chart deploys the FastAPI backend (cfactory.app:app).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/dataseeek/CFactory
+sources:
+  - https://github.com/dataseeek/CFactory
+maintainers:
+  - name: DataSeek Team
+    email: olaf@freundcloud.com
+keywords:
+  - ai
+  - llm
+  - agent-orchestration
+  - claude
+  - cockpit
+annotations:
+  category: AI/MachineLearning
+# External Postgres only for now — production deployments point at a
+# managed instance via CFACTORY_DATABASE_URL (see values.yaml).
+dependencies: []

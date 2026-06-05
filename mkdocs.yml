@@ -1,0 +1,17 @@
+site_name: CFactory
+site_description: >-
+  Agentic control-tower cockpit over the PARR pipeline — architecture,
+  dependencies, decisions and API.
+
+# docs/ is the public Jekyll site; Backstage TechDocs lives in techdocs/.
+docs_dir: techdocs
+
+plugins:
+  - techdocs-core
+
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - Dependencies: dependencies.md
+  - Decisions: decisions.md
+  - API & WebSocket: api.md

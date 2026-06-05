@@ -39,14 +39,16 @@ docs.
 
 ## Real cost, across all three stages
 
-The Tokens & cost page used to be honest but thin: AIFactory reported real usage,
-while PFactory and TFactory showed "not instrumented yet". That gap is closed.
+The Tokens & cost page used to be honest but thin: every stage showed "not
+instrumented yet", because none of the three services actually attached cost to
+their completion events. That gap is closed.
 
 All three services now attach the shared **RFC-0001 `usage` block** — input and
 output tokens, cost, and model — to their completion events. PFactory sums the
 usage of its planning LLM calls; TFactory accumulates across its test sessions
-*and* handback retries; AIFactory was already there. CFactory aggregates the lot
-into per-service and per-work-item totals.
+*and* handback retries; AIFactory maps the per-task token tracking it already
+kept internally into the event. CFactory aggregates the lot into per-service and
+per-work-item totals.
 
 The result: when you ask "what did feature #182 cost to plan, build and verify?",
 the cockpit has a real number — not three tabs and a guess.

@@ -110,6 +110,7 @@ def create_app() -> FastAPI:
             "status": "ok",
             "service": "cfactory",
             "version": __version__,
+            "multi_tenant": settings.multi_tenant,
             "upstreams": {
                 "aifactory": settings.aifactory_api_url,
                 "pfactory": settings.pfactory_api_url,

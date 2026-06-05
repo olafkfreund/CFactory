@@ -14,3 +14,4 @@ data:
   CFACTORY_TFACTORY_API_URL: {{ .Values.config.tfactoryApiUrl | quote }}
   CFACTORY_SUBSCRIBE_UPSTREAMS: {{ .Values.config.subscribeUpstreams | quote }}
   CFACTORY_COPILOT_MODEL: {{ .Values.config.copilotModel | quote }}
+  CFACTORY_MULTI_TENANT: {{ .Values.config.multiTenant | quote }}

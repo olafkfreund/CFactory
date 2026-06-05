@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     # with the required scope. Format: "<key>:read,write;<key2>:read".
     api_keys: str | None = None
 
+    # Multi-tenant mode (#23). Local-first: OFF by default, so tenant resolution
+    # always yields the single "default" tenant (unchanged local behaviour). When
+    # CFACTORY_MULTI_TENANT=true (hosted deploy), the tenant is resolved per
+    # request from the "X-Tenant-Id" header (falling back to "default"). This is
+    # the resolution seam + the flag that turns it on; per-tenant *data scoping*
+    # of store/audit queries remains DEFERRED to the hosted deployment.
+    multi_tenant: bool = False
+
     # HMAC secret anchoring the tamper-evident audit chain (#21). Each audit
     # entry's hash is HMAC-SHA256 over its canonical fields chained to the prior
     # entry's hash, so any after-the-fact mutation breaks the chain. The default

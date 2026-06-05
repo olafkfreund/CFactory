@@ -102,6 +102,11 @@ config:
   # Agentic copilot model id (the Claude Agent SDK reads ANTHROPIC_API_KEY
   # from the environment — supply it via extraEnv / a Secret if needed).
   copilotModel: "claude-sonnet-4-6"
+  # Multi-tenant mode (CFACTORY_MULTI_TENANT). Off by default (single-tenant,
+  # "default"). When true, the tenant is resolved per request from the
+  # X-Tenant-Id header. Per-tenant data isolation of queries is still deferred;
+  # see guides/multi-tenant.md.
+  multiTenant: false
   # Extra free-form CFACTORY_* (or other) env vars, e.g.
   #   - name: ANTHROPIC_API_KEY
   #     valueFrom: { secretKeyRef: { name: cfactory-llm, key: anthropic-key } }

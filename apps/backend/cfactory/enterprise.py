@@ -31,13 +31,18 @@ from typing import Protocol, runtime_checkable
 from fastapi import Depends, Header, Request
 
 from .auth import KeyStore, keystore_dep
+from .config import get_settings
 
 # Identity used in local single-user mode (no IdP, no per-request identity).
 LOCAL_IDENTITY = "local"
 
-# Tenant used in local mode. Hosted multi-tenant scoping replaces this via a
-# real :func:`tenant_id_for` implementation.
+# Tenant used in local mode (and the fallback in multi-tenant mode when no
+# tenant is supplied). Hosted multi-tenant scoping resolves a real tenant id
+# via :func:`tenant_id_for`.
 DEFAULT_TENANT = "default"
+
+# Header carrying the tenant id when multi-tenant mode is enabled.
+TENANT_HEADER = "X-Tenant-Id"
 
 
 @runtime_checkable
@@ -123,11 +128,26 @@ def identity_from_keystore(keystore: KeyStore, request: Request) -> str:
 def tenant_id_for(request: Request) -> str:
     """Resolve the tenant for ``request`` — the multi-tenant isolation seam.
 
-    Local v1 always returns :data:`DEFAULT_TENANT`. Hosted CFactory replaces this
-    to derive the tenant from the authenticated principal (SCIM org / IdP claim)
-    and threads it through store/audit queries for per-tenant data isolation.
-    That query-scoping is DEFERRED to the hosted deployment (#23 / Epic #4).
+    Behaviour is gated by the ``CFACTORY_MULTI_TENANT`` flag (read via
+    :func:`cfactory.config.get_settings`):
+
+    * **OFF (default / local v1):** always returns :data:`DEFAULT_TENANT`,
+      preserving single-tenant local behaviour. NO query is tenant-scoped.
+    * **ON (hosted):** resolves the tenant from the :data:`TENANT_HEADER`
+      (``X-Tenant-Id``) request header, falling back to :data:`DEFAULT_TENANT`
+      when the header is absent or blank.
+
+    This is the resolution seam plus the flag that turns it on. Threading the
+    resolved tenant through store/audit queries for per-tenant data *isolation*
+    remains DEFERRED to the hosted deployment (#23 / Epic #4); a hosted
+    deployment may also replace this resolver to derive the tenant from the
+    authenticated principal (SCIM org / IdP claim) instead of the header.
     """
+    if not get_settings().multi_tenant:
+        return DEFAULT_TENANT
+    tenant = request.headers.get(TENANT_HEADER)
+    if tenant and tenant.strip():
+        return tenant.strip()
     return DEFAULT_TENANT
 
 

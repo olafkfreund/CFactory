@@ -25,7 +25,7 @@ type Phase = { loading: boolean; rmuxEnabled: boolean; agents: LiveAgent[] };
 
 /** One agent's live, read-only terminal. Streams ANSI bytes from the backend
  *  proxy into an xterm instance; disposes both on unmount. */
-function AgentTerminal({ agent, fontSize }: { agent: LiveAgent; fontSize: number }) {
+export function AgentTerminal({ agent, fontSize }: { agent: LiveAgent; fontSize: number }) {
   const host = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

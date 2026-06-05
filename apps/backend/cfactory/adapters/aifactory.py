@@ -26,6 +26,19 @@ class AIFactoryAdapter(BaseHTTPAdapter):
             return False
         return bool(data.get("rmux", False)) if isinstance(data, dict) else False
 
+    def get_task_detail(self, task_id: str) -> dict[str, Any] | None:
+        """Rich detail for one task: ``GET /api/tasks/{task_id}``.
+
+        Returns the raw task object (status, phase, ``executionProgress``,
+        ``subtasks``, …) or ``None`` when the task/service is unavailable —
+        best-effort so the cockpit's detail drawer degrades rather than errors.
+        """
+        try:
+            data = self._get_json(f"/api/tasks/{task_id}")
+        except AdapterError:
+            return None
+        return data if isinstance(data, dict) else None
+
     def _normalize(self, row: dict[str, Any]) -> AdapterItem | None:
         task_id = first(row, "id", "task_id")
         if task_id is None:

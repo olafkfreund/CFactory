@@ -16,3 +16,4 @@ nav:
   - Decisions: decisions.md
   - API & WebSocket: api.md
   - Live agents: live-agents.md
+  - Task detail: task-detail.md

@@ -37,6 +37,12 @@ spec:
     - component:pfactory
     - component:aifactory
     - component:tfactory
+  consumesApis:
+    # The cockpit observes the upstream products' REST + event surfaces.
+    - pfactory-api
+    - aifactory-web-api
+    - tfactory-web-api
+    - tfactory-completion-event
 ---
 apiVersion: backstage.io/v1alpha1
 kind: Component
@@ -59,6 +65,7 @@ spec:
   lifecycle: experimental
   owner: olafkfreund
   domain: public
+  subcomponentOf: cfactory
   consumesApis:
     - cfactory-api
 ---

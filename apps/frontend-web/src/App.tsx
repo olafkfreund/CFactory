@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AuditView from "./AuditView";
 import CopilotPanel from "./CopilotPanel";
+import MissionControl from "./MissionControl";
 import ServicesView from "./ServicesView";
 import {
   fetchHealth,
@@ -16,19 +17,21 @@ import {
   IconBrand,
   IconClock,
   IconCopilot,
+  IconInsights,
   IconLogout,
   IconPipeline,
   IconRefresh,
   IconServices,
 } from "./icons";
 
-type View = "pipeline" | "copilot" | "audit" | "services";
+type View = "overview" | "pipeline" | "copilot" | "audit" | "services";
 type Backend =
   | { kind: "loading" }
   | { kind: "ok"; health: Health }
   | { kind: "error"; message: string };
 
 const NAV: { id: View; label: string; Icon: typeof IconPipeline }[] = [
+  { id: "overview", label: "Mission Control", Icon: IconInsights },
   { id: "pipeline", label: "Pipeline", Icon: IconPipeline },
   { id: "copilot", label: "Copilot", Icon: IconCopilot },
   { id: "audit", label: "Audit", Icon: IconAudit },
@@ -65,7 +68,7 @@ function relTime(iso: string | null): string {
 export default function App() {
   const [backend, setBackend] = useState<Backend>({ kind: "loading" });
   const [items, setItems] = useState<WorkItem[]>([]);
-  const [view, setView] = useState<View>("pipeline");
+  const [view, setView] = useState<View>("overview");
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -168,6 +171,7 @@ export default function App() {
 
         <main className="content">
           {error && <div className="banner banner--error">{error}</div>}
+          {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
           {view === "pipeline" && <Board items={items} />}
           {view === "copilot" && <CopilotPanel reloadSignal={tick} />}
           {view === "audit" && <AuditView reloadSignal={tick} />}

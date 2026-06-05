@@ -129,6 +129,37 @@ body {
 .banner { margin-bottom: 1rem; padding: 0.65rem 0.9rem; border-radius: 9px; font-size: 0.85rem; }
 .banner--error { color: var(--red); background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.3); }
 
+/* ── Mission Control ───────────────────────────────────── */
+.mc-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.9rem; margin-bottom: 1.2rem; }
+.mc-stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem 1rem; }
+.mc-stat-v { font-size: 1.9rem; font-weight: 700; font-family: "JetBrains Mono", monospace; line-height: 1.1; }
+.mc-stat-l { color: var(--muted); font-size: 0.78rem; margin-top: 0.25rem; }
+.mc-stat-sub { color: var(--faint); }
+
+.mc-flow {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 0.5rem 1rem; margin-bottom: 1.2rem;
+  background-image: radial-gradient(120% 100% at 50% -20%, rgba(139, 124, 246, 0.08), transparent);
+}
+.mc-svg { width: 100%; height: auto; display: block; }
+.mc-node-count { font: 700 26px "JetBrains Mono", monospace; }
+.mc-node-lbl { font: 600 13px "IBM Plex Sans", sans-serif; }
+.mc-node-svc { font: 500 11px "JetBrains Mono", monospace; }
+
+.mc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
+.mc-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; }
+.mc-agents { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; }
+.mc-agent-ph {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.3rem;
+  height: 92px; border: 1px dashed var(--border); border-radius: 9px; background: var(--panel-2);
+  color: var(--faint); font-size: 0.74rem; font-family: "JetBrains Mono", monospace;
+}
+.mc-agent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.mc-agent-sub { color: var(--code); font-size: 0.64rem; }
+.mc-note { color: var(--faint); font-size: 0.76rem; margin: 0.7rem 0 0; }
+
+@media (max-width: 900px) { .mc-grid { grid-template-columns: 1fr; } }
+
 /* ── Pipeline board (kanban) ───────────────────────────── */
 .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; align-items: start; }
 .column {

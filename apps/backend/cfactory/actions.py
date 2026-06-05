@@ -11,13 +11,32 @@ This keeps the human in the loop: propose -> review -> confirm -> execute.
 from __future__ import annotations
 
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from .config import Settings, get_settings
 from .models import Service
 from .store import WorkItemStore
+
+# Only safe HTTP verbs for a confirmed write to an internal service.
+_ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+
+
+def is_safe_endpoint(endpoint: str) -> bool:
+    """True only for a strict root-relative path (no scheme, no host).
+
+    This is the SSRF guard: ``endpoint`` is combined with a fixed per-service
+    ``base_url``, but httpx would discard that base_url if given an absolute or
+    protocol-relative URL — letting a caller choose an arbitrary host/scheme.
+    Constrain it to ``/...`` paths so requests can only ever hit the resolved
+    upstream service.
+    """
+    if not isinstance(endpoint, str) or not endpoint.startswith("/") or endpoint.startswith("//"):
+        return False
+    parts = urlsplit(endpoint)
+    return parts.scheme == "" and parts.netloc == ""
 
 # Best-effort endpoint contracts for each target service. Kept as module
 # constants so they're easy to audit and adjust as the upstream surfaces firm up.
@@ -35,9 +54,26 @@ class PreparedAction(BaseModel):
     correlation_key: str
     target_service: str  # pfactory | aifactory | tfactory
     method: str  # e.g. "POST"
-    endpoint: str  # path on the target service
+    endpoint: str  # root-relative path on the target service (validated)
     payload: dict[str, Any]
     rationale: str  # human-readable "why"
+
+    @field_validator("endpoint")
+    @classmethod
+    def _validate_endpoint(cls, v: str) -> str:
+        # SSRF guard: reject absolute / protocol-relative URLs so the request
+        # can only ever target the resolved per-service base_url.
+        if not is_safe_endpoint(v):
+            raise ValueError("endpoint must be a root-relative path (no scheme or host)")
+        return v
+
+    @field_validator("method")
+    @classmethod
+    def _validate_method(cls, v: str) -> str:
+        m = v.upper()
+        if m not in _ALLOWED_METHODS:
+            raise ValueError(f"method must be one of {sorted(_ALLOWED_METHODS)}")
+        return m
 
 
 def propose_approve_gate(
@@ -161,6 +197,15 @@ def execute_action(
             "status_code": 0,
             "ok": False,
             "error": f"unknown target_service: {action.target_service!r}",
+        }
+
+    # Defense in depth: reject any non-root-relative endpoint that reached us
+    # (e.g. a programmatic caller bypassing the model validator).
+    if not is_safe_endpoint(action.endpoint):
+        return {
+            "status_code": 0,
+            "ok": False,
+            "error": "unsafe endpoint (must be a root-relative path)",
         }
 
     try:

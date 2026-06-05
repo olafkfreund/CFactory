@@ -14,6 +14,7 @@ import pytest
 from cfactory.actions import (
     PreparedAction,
     execute_action,
+    is_safe_endpoint,
     propose_approve_gate,
     propose_kick_handback,
     propose_trigger_handoff,
@@ -22,6 +23,7 @@ from cfactory.app import action_transport_dep, audit_dep, create_app, store_dep
 from cfactory.audit import AuditStore
 from cfactory.models import CompletionEvent, Service
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
 def _seed(store, *, service: Service, correlation_key: str, task_id: str,
@@ -230,6 +232,65 @@ def test_execute_endpoint_runs_confirmed_action(client_with_transport):
     req = recorder.requests[0]
     assert req.method == "POST"
     assert str(req.url) == "http://localhost:3101/api/tasks/create-and-run"
+
+
+# --------------------------------------------------------------------------
+# SSRF guard: endpoint must be a root-relative path; method allow-listed
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", [
+    "http://evil.example.com/steal",
+    "https://169.254.169.254/latest/meta-data/",
+    "//evil.example.com/x",
+    "ftp://host/x",
+    "not-a-path",
+])
+def test_is_safe_endpoint_rejects_absolute_and_protocol_relative(bad):
+    assert is_safe_endpoint(bad) is False
+
+
+@pytest.mark.parametrize("ok", ["/api/x", "/api/plans/1/approve", "/"])
+def test_is_safe_endpoint_allows_root_relative(ok):
+    assert is_safe_endpoint(ok) is True
+
+
+def test_prepared_action_rejects_absolute_endpoint():
+    with pytest.raises(ValidationError):
+        PreparedAction(kind="approve_gate", correlation_key="1", target_service="pfactory",
+                       method="POST", endpoint="http://169.254.169.254/x", payload={}, rationale="x")
+
+
+def test_prepared_action_rejects_bad_method():
+    with pytest.raises(ValidationError):
+        PreparedAction(kind="approve_gate", correlation_key="1", target_service="pfactory",
+                       method="CONNECT", endpoint="/api/x", payload={}, rationale="x")
+
+
+def test_execute_endpoint_rejects_absolute_endpoint_and_makes_no_call(client_with_transport):
+    """SSRF attempt: an absolute endpoint must be rejected at the boundary (422)
+    and must NOT result in any outbound request."""
+    api, recorder = client_with_transport
+    body = {
+        "kind": "approve_gate", "correlation_key": "42", "target_service": "pfactory",
+        "method": "GET", "endpoint": "http://169.254.169.254/latest/meta-data/",
+        "payload": {}, "rationale": "x",
+    }
+    resp = api.post("/api/actions/execute", json=body)
+    assert resp.status_code == 422
+    assert recorder.requests == []  # no SSRF — nothing was contacted
+
+
+def test_execute_action_guard_blocks_absolute_endpoint():
+    """Defense in depth: even if the model is bypassed (model_construct), the
+    executor refuses a non-root-relative endpoint and makes no request."""
+    recorder = _RecordingTransport()
+    action = PreparedAction.model_construct(
+        kind="approve_gate", correlation_key="1", target_service="pfactory",
+        method="GET", endpoint="http://169.254.169.254/x", payload={}, rationale="x",
+    )
+    result = execute_action(action, transport=recorder)
+    assert result["ok"] is False
+    assert recorder.requests == []
 
 
 @pytest.fixture

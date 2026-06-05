@@ -14,6 +14,7 @@ from sqlalchemy import engine_from_config, pool
 
 from cfactory.db import Base, resolve_database_url
 import cfactory.store  # noqa: F401  (registers WorkItemRow on Base.metadata)
+import cfactory.audit  # noqa: F401  (registers AuditEntry on Base.metadata)
 
 config = context.config
 

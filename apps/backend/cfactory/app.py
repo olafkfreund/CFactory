@@ -20,6 +20,7 @@ import httpx
 
 from . import __version__
 from .actions import PreparedAction, execute_action, propose
+from .audit import AuditStore, get_audit_store
 from .auth import require_scope
 from .adapters import AdapterError, BaseHTTPAdapter, build_adapters, hydrate
 from .config import get_settings
@@ -55,6 +56,11 @@ def adapters_dep() -> list[BaseHTTPAdapter]:
 def copilot_dep() -> Copilot:
     """Dependency seam — overridden in tests with a fake-runner copilot."""
     return get_copilot()
+
+
+def audit_dep() -> AuditStore:
+    """Dependency seam — overridden in tests with a temp AuditStore."""
+    return get_audit_store()
 
 
 def action_transport_dep() -> httpx.BaseTransport | None:
@@ -205,16 +211,40 @@ def create_app() -> FastAPI:
     async def execute_prepared_action(
         action: PreparedAction,
         transport: httpx.BaseTransport | None = Depends(action_transport_dep),
+        audit: AuditStore = Depends(audit_dep),
         _scope: str | None = Depends(require_scope("write")),
     ) -> dict[str, object]:
         """Run a CONFIRMED PreparedAction against its target service. This is the
         explicit write step — the caller has already reviewed the action.
 
+        Every confirmed action is recorded in the audit log (the HITL trail)
+        before the result is returned.
+
         Requires the ``write`` scope when API keys are configured; in local
         single-user mode (no keys) it is open."""
-        return await run_in_threadpool(
+        result = await run_in_threadpool(
             execute_action, action, settings=settings, transport=transport
         )
+        await run_in_threadpool(
+            audit.record,
+            actor="cockpit",
+            kind=action.kind,
+            correlation_key=action.correlation_key,
+            target_service=action.target_service,
+            endpoint=action.endpoint,
+            status_code=int(result.get("status_code", 0)),
+            ok=bool(result.get("ok", False)),
+        )
+        return result
+
+    @app.get("/api/audit")
+    def list_audit(audit: AuditStore = Depends(audit_dep)) -> dict[str, object]:
+        """Recent confirmed actions, newest first — the human-in-the-loop trail."""
+        entries = audit.list()
+        return {
+            "count": len(entries),
+            "entries": [e.model_dump(mode="json") for e in entries],
+        }
 
     @app.post("/api/copilot/ask")
     async def copilot_ask(req: AskRequest, copilot: Copilot = Depends(copilot_dep)) -> dict[str, object]:

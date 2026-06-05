@@ -98,6 +98,66 @@ export async function fetchRollups(): Promise<Rollups> {
   return (await resp.json()) as Rollups;
 }
 
+export interface PreparedAction {
+  kind: string;
+  correlation_key: string;
+  target_service: string;
+  method: string;
+  endpoint: string;
+  payload: Record<string, unknown>;
+  rationale: string;
+}
+
+export interface ExecuteResult {
+  status_code: number;
+  ok: boolean;
+  body?: unknown;
+  error?: string;
+}
+
+export interface AuditEntry {
+  id: number;
+  ts: string;
+  actor: string;
+  kind: string;
+  correlation_key: string;
+  target_service: string;
+  endpoint: string;
+  status_code: number;
+  ok: boolean;
+}
+
+// Build (but do NOT execute) a PreparedAction. Advise-only — no upstream write.
+export async function proposeAction(
+  kind: string,
+  correlation_key: string,
+): Promise<PreparedAction> {
+  const resp = await fetch("/api/actions/propose", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, correlation_key }),
+  });
+  if (!resp.ok) throw new Error(`propose failed: HTTP ${resp.status}`);
+  return (await resp.json()) as PreparedAction;
+}
+
+// Execute a CONFIRMED PreparedAction — the explicit human write step.
+export async function executeAction(action: PreparedAction): Promise<ExecuteResult> {
+  const resp = await fetch("/api/actions/execute", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(action),
+  });
+  if (!resp.ok) throw new Error(`execute failed: HTTP ${resp.status}`);
+  return (await resp.json()) as ExecuteResult;
+}
+
+export async function fetchAudit(): Promise<AuditEntry[]> {
+  const resp = await fetch("/api/audit");
+  if (!resp.ok) throw new Error(`audit error: HTTP ${resp.status}`);
+  return ((await resp.json()) as { count: number; entries: AuditEntry[] }).entries;
+}
+
 // Best-effort poll of all upstream services; returns the per-service summary.
 export async function refresh(): Promise<Record<string, unknown>> {
   const resp = await fetch("/api/refresh", { method: "POST" });

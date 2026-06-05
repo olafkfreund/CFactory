@@ -312,6 +312,66 @@ body {
   color: var(--text);
 }
 
+.card-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+.btn--sm {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.74rem;
+}
+.btn--ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.confirm {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.confirm-rationale {
+  font-size: 0.8rem;
+  color: var(--text);
+  margin-bottom: 0.35rem;
+}
+.confirm-target {
+  font-size: 0.74rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+.confirm-target code {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--cyan);
+}
+.audit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.1rem;
+  font-size: 0.78rem;
+  border-bottom: 1px solid var(--border);
+}
+.audit-row:last-child {
+  border-bottom: none;
+}
+.audit-ok {
+  color: var(--green);
+  font-family: "JetBrains Mono", monospace;
+}
+.audit-fail {
+  color: #f87171;
+  font-family: "JetBrains Mono", monospace;
+}
+.audit-ts {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+}
+
 .chat {
   display: flex;
   flex-direction: column;

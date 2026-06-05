@@ -26,6 +26,11 @@ export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
   const totalTokens = useCountUp(data?.total.total_tokens ?? 0);
   const totalCostCents = useCountUp(Math.round((data?.total.cost_usd ?? 0) * 100));
 
+  // Data-driven: which stages have not yet emitted an RFC-0001 usage block.
+  const awaiting = data
+    ? SERVICES.filter((s) => !data.by_service[s.key]?.instrumented).map((s) => s.svc)
+    : [];
+
   return (
     <>
       <div className="page-head">
@@ -82,7 +87,11 @@ export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
         )}
       </div>
 
-      <p className="mc-note">PFactory &amp; TFactory token instrumentation is pending (Phase-1 cross-repo PRs); AIFactory reports real usage today.</p>
+      <p className="mc-note">
+        {awaiting.length === 0
+          ? "All three stages report real usage from the RFC-0001 usage block."
+          : `Each stage reports tokens once it emits the RFC-0001 usage block — awaiting ${awaiting.join(" & ")}.`}
+      </p>
     </>
   );
 }

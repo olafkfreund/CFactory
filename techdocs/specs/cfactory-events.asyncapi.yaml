@@ -1,0 +1,110 @@
+asyncapi: '2.6.0'
+info:
+  title: CFactory completion-event ingress
+  version: '1.1'
+  description: >-
+    The RFC-0001 v1.1 completion-event envelope CFactory accepts from the
+    upstream Factory services (PFactory, AIFactory, TFactory). Upstream services
+    POST the envelope on terminal status; CFactory upserts it onto the WorkItem
+    timeline keyed by `correlation_key` (the GitHub issue number). Ingestion is
+    idempotent by the tuple `(service, correlation_key, status)`. Validated by the
+    Pydantic `CompletionEvent` model in apps/backend/cfactory/models.py.
+  contact:
+    name: Factory maintainers
+    url: https://factory.freundcloud.com/rfc/correlation-key/
+defaultContentType: application/json
+
+servers:
+  local:
+    url: localhost:3111
+    protocol: http
+    description: CFactory backend API (default dev port 3111).
+
+channels:
+  /api/events:
+    description: >-
+      Primary completion-event ingress. `/api/events/completion` is an alias to
+      the same handler. Returns `{status: accepted|duplicate, correlation_key}`
+      and broadcasts a `workitem` message on the /api/ws cockpit feed when applied.
+    publish:
+      operationId: ingestCompletionEvent
+      summary: Upstream service POSTs a completion event.
+      message:
+        $ref: '#/components/messages/CompletionEvent'
+
+components:
+  messages:
+    CompletionEvent:
+      name: CompletionEvent
+      title: RFC-0001 completion event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CompletionEvent'
+      examples:
+        - name: tfactory-triaged
+          payload:
+            correlation_key: '142'
+            service: tfactory
+            task_id: spec-001
+            status: triaged
+            phase: test
+            updated_at: '2026-06-05T12:00:00Z'
+        - name: aifactory-complete-with-usage
+          payload:
+            correlation_key: '142'
+            service: aifactory
+            task_id: af-spec-001
+            status: complete
+            phase: act
+            updated_at: '2026-06-05T11:40:00Z'
+            usage:
+              input_tokens: 18234
+              output_tokens: 4096
+              total_tokens: 22330
+              cost_usd: 0.21
+              model: claude-sonnet-4-6
+
+  schemas:
+    CompletionEvent:
+      type: object
+      required: [correlation_key, service, task_id, status, updated_at]
+      properties:
+        correlation_key:
+          type: string
+          description: >-
+            Shared key threading a unit of work across the family — the GitHub
+            issue number as a string. Synthetic fallback (pf-/af-/tf-) when no
+            issue exists yet. Never null.
+          example: '142'
+        service:
+          type: string
+          enum: [pfactory, aifactory, tfactory]
+          description: Emitting service. Selects the WorkItem slice updated.
+        task_id:
+          type: string
+          description: The emitting service's own task/spec/session id.
+        status:
+          type: string
+          description: Terminal status string for the stage (service-defined).
+          example: triaged
+        phase:
+          type: [string, 'null']
+          description: Coarse PARR phase, e.g. plan | act | test.
+        updated_at:
+          type: string
+          format: date-time
+          description: ISO-8601 UTC timestamp of the terminal transition.
+        usage:
+          $ref: '#/components/schemas/TokenUsage'
+    TokenUsage:
+      type: [object, 'null']
+      description: >-
+        Optional, additive RFC-0001 v1.1 block carrying per-stage LLM
+        token/cost so CFactory can aggregate spend by service / work item.
+        Absent from v1 emitters (consumers must tolerate its absence).
+      properties:
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        total_tokens: { type: integer }
+        cost_usd: { type: number }
+        model: { type: string, example: claude-sonnet-4-6 }

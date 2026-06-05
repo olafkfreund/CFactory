@@ -1,0 +1,8 @@
+# Backstage TechDocs build toolchain — pinned for reproducibility.
+#
+# mkdocs-techdocs-core is the plugin Backstage's TechDocs uses; it transitively
+# pins its own dependency set (mkdocs, mkdocs-material, pymdown-extensions, …)
+# with exact `==` versions, so this single top-level pin fixes the whole closure.
+#
+# Use from the devShell:  python3 -m mkdocs build -f mkdocs.yml
+mkdocs-techdocs-core==1.6.2

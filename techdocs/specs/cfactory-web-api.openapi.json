@@ -1,0 +1,734 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CFactory",
+    "summary": "Agentic control-tower cockpit over the PARR pipeline.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events/completion": {
+      "post": {
+        "summary": "Ingest Event",
+        "description": "Ingest an RFC-0001 completion event. Idempotent by\n(service, correlation_key, status): a duplicate is accepted but is a\nno-op (no timeline append, no re-broadcast). Both ``/api/events`` and the\nRFC-documented ``/api/events/completion`` resolve here.",
+        "operationId": "ingest_event_api_events_completion_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Ingest Event Api Events Completion Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events": {
+      "post": {
+        "summary": "Ingest Event",
+        "description": "Ingest an RFC-0001 completion event. Idempotent by\n(service, correlation_key, status): a duplicate is accepted but is a\nno-op (no timeline append, no re-broadcast). Both ``/api/events`` and the\nRFC-documented ``/api/events/completion`` resolve here.",
+        "operationId": "ingest_event_api_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Ingest Event Api Events Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/refresh": {
+      "post": {
+        "summary": "Refresh",
+        "description": "Poll every upstream service and hydrate the store. Best-effort:\nan unreachable service is reported, not fatal.",
+        "operationId": "refresh_api_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Refresh Api Refresh Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workitems": {
+      "get": {
+        "summary": "List Workitems",
+        "operationId": "list_workitems_api_workitems_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Workitems Api Workitems Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rollups": {
+      "get": {
+        "summary": "Get Rollups",
+        "operationId": "get_rollups_api_rollups_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Rollups Api Rollups Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tokens": {
+      "get": {
+        "summary": "Get Tokens",
+        "operationId": "get_tokens_api_tokens_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Tokens Api Tokens Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/progress": {
+      "get": {
+        "summary": "Get Progress",
+        "operationId": "get_progress_api_progress_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Progress Api Progress Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/anomalies": {
+      "get": {
+        "summary": "Get Anomalies",
+        "operationId": "get_anomalies_api_anomalies_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Anomalies Api Anomalies Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workitems/{correlation_key}": {
+      "get": {
+        "summary": "Get Workitem",
+        "operationId": "get_workitem_api_workitems__correlation_key__get",
+        "parameters": [
+          {
+            "name": "correlation_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Correlation Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Workitem Api Workitems  Correlation Key  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workitems/{correlation_key}/timeline": {
+      "get": {
+        "summary": "Get Timeline",
+        "operationId": "get_timeline_api_workitems__correlation_key__timeline_get",
+        "parameters": [
+          {
+            "name": "correlation_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Correlation Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Timeline Api Workitems  Correlation Key  Timeline Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/actions/propose": {
+      "post": {
+        "summary": "Propose Action",
+        "description": "Build (but do NOT execute) a PreparedAction for the given work item.\n\nAdvise-only: this never touches an upstream service. 400 for an unknown\nkind; 404 if there's no work item for the correlation key.",
+        "operationId": "propose_action_api_actions_propose_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreparedAction"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/actions/execute": {
+      "post": {
+        "summary": "Execute Prepared Action",
+        "description": "Run a CONFIRMED PreparedAction against its target service. This is the\nexplicit write step \u2014 the caller has already reviewed the action.\n\nEvery confirmed action is recorded in the audit log (the HITL trail)\nbefore the result is returned. The audit ``actor`` is the caller\nidentity from the identity seam (the API key when keys are configured,\nelse ``\"local\"``).\n\nRequires the ``write`` scope when API keys are configured; in local\nsingle-user mode (no keys) it is open.",
+        "operationId": "execute_prepared_action_api_actions_execute_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreparedAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Execute Prepared Action Api Actions Execute Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/audit": {
+      "get": {
+        "summary": "List Audit",
+        "description": "Recent confirmed actions, newest first \u2014 the human-in-the-loop trail.",
+        "operationId": "list_audit_api_audit_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Audit Api Audit Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/copilot/ask": {
+      "post": {
+        "summary": "Copilot Ask",
+        "operationId": "copilot_ask_api_copilot_ask_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Copilot Ask Api Copilot Ask Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AskRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "AskRequest"
+      },
+      "CompletionEvent": {
+        "properties": {
+          "correlation_key": {
+            "type": "string",
+            "title": "Correlation Key"
+          },
+          "service": {
+            "$ref": "#/components/schemas/Service"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "correlation_key",
+          "service",
+          "task_id",
+          "status",
+          "updated_at"
+        ],
+        "title": "CompletionEvent",
+        "description": "Normalized completion envelope emitted by the three services (see Factory#4).\n\nStandard schema all services conform to; consumed by the webhook ingress (#11).\nThe optional ``usage`` block (RFC-0001 v1.1) carries per-stage token/cost."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "PreparedAction": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "approve_gate",
+              "trigger_handoff",
+              "kick_handback"
+            ],
+            "title": "Kind"
+          },
+          "correlation_key": {
+            "type": "string",
+            "title": "Correlation Key"
+          },
+          "target_service": {
+            "type": "string",
+            "title": "Target Service"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "correlation_key",
+          "target_service",
+          "method",
+          "endpoint",
+          "payload",
+          "rationale"
+        ],
+        "title": "PreparedAction",
+        "description": "A fully-described, not-yet-executed write against an upstream service."
+      },
+      "ProposeRequest": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "correlation_key": {
+            "type": "string",
+            "title": "Correlation Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "correlation_key"
+        ],
+        "title": "ProposeRequest"
+      },
+      "Service": {
+        "type": "string",
+        "enum": [
+          "pfactory",
+          "aifactory",
+          "tfactory"
+        ],
+        "title": "Service"
+      },
+      "TokenUsage": {
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens",
+            "default": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens",
+            "default": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens",
+            "default": 0
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd",
+            "default": 0.0
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "title": "TokenUsage",
+        "description": "LLM token/cost usage for one stage (RFC-0001 v1.1 additive `usage` block).\n\nOptional everywhere \u2014 only present when a service instruments and emits it\n(AIFactory does today; PFactory/TFactory pending). Aggregated by CFactory."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

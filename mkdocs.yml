@@ -1,0 +1,42 @@
+# MkDocs configuration for Backstage TechDocs.
+#
+# NOTE: docs_dir is intentionally `techdocs/`, NOT `docs/`. The `docs/` directory
+# is the project's Jekyll GitHub Pages site and must not be consumed by MkDocs.
+#
+# Backstage builds this site from the Component entity's annotation
+# `backstage.io/techdocs-ref: dir:.` (catalog-info.yaml), which runs the TechDocs
+# generator against this mkdocs.yml at the repo root.
+
+site_name: CFactory
+site_description: >-
+  The agentic control-tower cockpit over the PARR pipeline — architecture,
+  the WorkItem correlation model, the REST/WS + completion-event APIs,
+  dependencies and decisions.
+
+docs_dir: techdocs
+
+repo_url: https://github.com/olafkfreund/CFactory
+edit_uri: edit/main/techdocs/
+
+plugins:
+  - techdocs-core
+
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - APIs:
+      - Overview: apis/index.md
+      - Web REST + WebSocket API: apis/rest-api.md
+      - Completion-event ingress: apis/events.md
+  - Dependencies: dependencies.md
+  - Decisions: decisions.md
+  - Glossary: glossary.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - toc:
+      permalink: true
+  - tables

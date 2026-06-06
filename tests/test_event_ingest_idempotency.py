@@ -110,3 +110,15 @@ def test_full_chain_threads_via_http(client):
 
     wi = client.get("/api/workitems/142").json()
     assert [e["service"] for e in wi["timeline"]] == ["pfactory", "aifactory", "tfactory"]
+
+
+def test_activity_feed_flattens_timeline(client):
+    # Activity powers the Audit page; it flattens completion events across items.
+    client.post("/api/events/completion", json=_payload("pfactory", "emitted"))
+    client.post("/api/events/completion", json=_payload("aifactory", "merged"))
+
+    data = client.get("/api/activity").json()
+    assert data["count"] == 2
+    assert {e["service"] for e in data["activity"]} == {"pfactory", "aifactory"}
+    entry = data["activity"][0]
+    assert {"service", "correlation_key", "status", "phase", "updated_at"} <= set(entry)

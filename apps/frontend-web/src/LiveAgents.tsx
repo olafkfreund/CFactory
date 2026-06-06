@@ -71,17 +71,52 @@ export function AgentTerminal({ agent, fontSize }: { agent: LiveAgent; fontSize:
   return <div className="mc-term" ref={host} />;
 }
 
+/** Animated robot-head avatar. Eyes blink and the antenna LED pulses while the
+ *  agent is live; all motion is pure CSS keyed off the `mc-bot--live` class. */
+function RobotHead({ live = true }: { live?: boolean }) {
+  return (
+    <svg
+      className={`mc-bot${live ? " mc-bot--live" : ""}`}
+      viewBox="0 0 32 32"
+      width="30"
+      height="30"
+      aria-hidden="true"
+    >
+      <line className="mc-bot-antenna" x1="16" y1="3.5" x2="16" y2="7.5" />
+      <circle className="mc-bot-led" cx="16" cy="2.6" r="1.7" />
+      <rect className="mc-bot-head" x="5" y="7.5" width="22" height="17.5" rx="5" />
+      <rect className="mc-bot-ear" x="2.4" y="13" width="2.6" height="6.5" rx="1.3" />
+      <rect className="mc-bot-ear" x="27" y="13" width="2.6" height="6.5" rx="1.3" />
+      <circle className="mc-bot-eye" cx="12" cy="15.5" r="2.2" />
+      <circle className="mc-bot-eye" cx="20" cy="15.5" r="2.2" />
+      <rect className="mc-bot-mouth" x="11" y="20.5" width="10" height="2.4" rx="1.2" />
+    </svg>
+  );
+}
+
+/** Small terminal/console glyph — the affordance for opening the live console. */
+function ConsoleIcon() {
+  return (
+    <svg className="mc-console-icn" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <rect x="2.5" y="4.5" width="19" height="15" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M6 10l3 2.5-3 2.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <line x1="12.5" y1="15" x2="17" y2="15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function AgentTile({ agent, onExpand }: { agent: LiveAgent; onExpand: () => void }) {
   return (
-    <div className="mc-agent-card">
-      <button className="mc-agent-head" onClick={onExpand} title="Expand">
-        <span className="mc-agent-dot mc-agent-dot--live" />
-        <span className="mc-agent-key">#{agent.correlation_key}</span>
-        {agent.phase && <span className="mc-agent-sub">{agent.phase}</span>}
-        <span className="mc-agent-expand">⤢</span>
-      </button>
-      <AgentTerminal agent={agent} fontSize={9} />
-    </div>
+    <button className="la-card" onClick={onExpand} title={`Open rmux console — #${agent.correlation_key}`}>
+      <RobotHead live />
+      <span className="la-bubble">
+        <span className="la-id">#{agent.correlation_key}</span>
+        {agent.phase && <span className="la-phase">{agent.phase}</span>}
+      </span>
+      <span className="la-console" aria-label="Open rmux console">
+        <ConsoleIcon />
+      </span>
+    </button>
   );
 }
 

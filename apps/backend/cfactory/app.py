@@ -178,6 +178,32 @@ def create_app() -> FastAPI:
         )
         return {"refreshed": result}
 
+    @app.get("/api/services")
+    async def services(
+        adapters: list[BaseHTTPAdapter] = Depends(adapters_dep),
+    ) -> dict[str, object]:
+        """Per-upstream reachability for the Services view. Best-effort: a probe
+        failure is reported as offline, never fatal."""
+        roles = {"pfactory": "Plan", "aifactory": "Code", "tfactory": "Test"}
+        urls = {
+            "aifactory": settings.aifactory_api_url,
+            "pfactory": settings.pfactory_api_url,
+            "tfactory": settings.tfactory_api_url,
+        }
+        out: list[dict[str, object]] = []
+        for adapter in adapters:
+            name = adapter.service.value
+            try:
+                online = await run_in_threadpool(adapter.health)
+            except Exception:
+                online = False
+            finally:
+                adapter.close()
+            out.append(
+                {"name": name, "role": roles.get(name, "—"), "url": urls.get(name, ""), "online": online}
+            )
+        return {"services": out}
+
     @app.get("/api/workitems")
     def list_workitems(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
         items = store.list()
@@ -345,6 +371,32 @@ def create_app() -> FastAPI:
             "count": len(entries),
             "entries": [e.model_dump(mode="json") for e in entries],
         }
+
+    @app.get("/api/activity")
+    def list_activity(
+        limit: int = 50, store: WorkItemStore = Depends(store_dep)
+    ) -> dict[str, object]:
+        """Live activity feed: completion events flattened across all work items,
+        newest first. Read-only; powers the Audit page's Activity panel so it
+        reflects real pipeline traffic even before any action is executed."""
+        items = store.list()
+        titles = {wi.correlation_key: wi.title for wi in items}
+        events: list[dict[str, object]] = []
+        for wi in items:
+            for ev in wi.timeline:
+                ts = ev.updated_at
+                events.append(
+                    {
+                        "service": ev.service.value,
+                        "correlation_key": ev.correlation_key,
+                        "status": ev.status,
+                        "phase": ev.phase,
+                        "updated_at": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                        "title": titles.get(ev.correlation_key),
+                    }
+                )
+        events.sort(key=lambda e: str(e["updated_at"]), reverse=True)
+        return {"count": len(events), "activity": events[: max(0, limit)]}
 
     @app.post("/api/copilot/ask")
     async def copilot_ask(req: AskRequest, copilot: Copilot = Depends(copilot_dep)) -> dict[str, object]:

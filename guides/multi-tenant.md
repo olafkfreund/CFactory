@@ -145,7 +145,7 @@ basics). A hosted values overlay typically combines all of the above:
 ```yaml
 config:
   aifactoryApiUrl: "http://aifactory.ai.svc.cluster.local:3101"
-  pfactoryApiUrl: "http://pfactory.ai.svc.cluster.local:3102"
+  pfactoryApiUrl: "http://pfactory.ai.svc.cluster.local:3105"
   tfactoryApiUrl: "http://tfactory.ai.svc.cluster.local:3103"
   multiTenant: true
   extraEnv:

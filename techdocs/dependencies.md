@@ -66,7 +66,7 @@ v1.1 additive `usage` (token/cost) block that CFactory aggregates.
 | `CFACTORY_FRONTEND_PORT` | `3110` | Cockpit UI / CORS origin |
 | `CFACTORY_WORKSPACE_ROOT` | `~/.cfactory` | Local state root |
 | `CFACTORY_AIFACTORY_API_URL` | `http://localhost:3101` | AIFactory upstream |
-| `CFACTORY_PFACTORY_API_URL` | `http://localhost:3102` | PFactory upstream |
+| `CFACTORY_PFACTORY_API_URL` | `http://localhost:3105` | PFactory upstream |
 | `CFACTORY_TFACTORY_API_URL` | `http://localhost:3103` | TFactory upstream |
 | `CFACTORY_DATABASE_URL` | `None` | Postgres (else local SQLite) |
 | `CFACTORY_SUBSCRIBE_UPSTREAMS` | `false` | Connect to upstream WS feeds on startup |

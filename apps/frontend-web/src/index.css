@@ -483,6 +483,31 @@ body {
 .svc-role { color: var(--muted); font-size: 0.82rem; margin-bottom: 0.7rem; }
 .svc-role-pill { font-size: 0.7rem; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0.1rem 0.45rem; }
 .svc-url { font-size: 0.76rem; color: var(--cyan); word-break: break-all; }
+.svc-url-row { display: flex; align-items: center; gap: 0.4rem; }
+.svc-url-row .svc-url { flex: 1; min-width: 0; }
+.svc-edit-btn {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--faint); cursor: pointer; padding: 0.15rem; border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.svc-edit-btn:hover { color: var(--cyan); background: var(--panel-2); }
+.svc-edit { display: flex; flex-direction: column; gap: 0.4rem; }
+.svc-edit-input {
+  width: 100%; box-sizing: border-box; font-size: 0.76rem; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 0.35rem 0.5rem;
+}
+.svc-edit-input:focus { outline: none; border-color: var(--cyan); }
+.svc-edit-actions { display: flex; gap: 0.4rem; }
+.svc-btn {
+  font: 600 0.74rem "Hanken Grotesk", sans-serif; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted);
+  border-radius: 7px; padding: 0.25rem 0.7rem; transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.svc-btn:hover:not(:disabled) { color: var(--text); border-color: var(--cyan); }
+.svc-btn:disabled { opacity: 0.5; cursor: default; }
+.svc-btn--save { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
+.svc-btn--save:hover:not(:disabled) { color: var(--bg); filter: brightness(1.08); }
+.svc-edit-err { color: var(--red); font-size: 0.72rem; }
 .svc-meta { display: flex; gap: 1.4rem; margin: 0; }
 .svc-meta dt { color: var(--faint); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .svc-meta dd { margin: 0.1rem 0 0; font-size: 0.85rem; }

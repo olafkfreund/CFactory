@@ -82,6 +82,24 @@ export async function fetchServices(): Promise<ServiceStatus[]> {
   return data.services ?? [];
 }
 
+export async function updateService(name: string, url: string): Promise<ServiceStatus> {
+  const resp = await fetch(`/api/services/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      detail = ((await resp.json()) as { detail?: string }).detail ?? detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail);
+  }
+  return (await resp.json()) as ServiceStatus;
+}
+
 export interface ActivityEntry {
   service: string;
   correlation_key: string;

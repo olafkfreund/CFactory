@@ -69,3 +69,11 @@ to the chart's appVersion when tag is empty.
 {{- $tag := .Values.image.tag | default .Chart.AppVersion }}
 {{- printf "%s:%s" .Values.image.repository $tag }}
 {{- end }}
+
+{{/*
+Frontend (cockpit UI) image reference.
+*/}}
+{{- define "cfactory.frontend.image" -}}
+{{- $tag := .Values.frontend.image.tag | default .Chart.AppVersion }}
+{{- printf "%s:%s" .Values.frontend.image.repository $tag }}
+{{- end }}

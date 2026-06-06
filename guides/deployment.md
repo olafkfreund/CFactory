@@ -28,7 +28,7 @@ family.
 ```bash
 docker run --rm -p 3111:3111 \
   -e CFACTORY_AIFACTORY_API_URL=http://host.docker.internal:3101 \
-  -e CFACTORY_PFACTORY_API_URL=http://host.docker.internal:3102 \
+  -e CFACTORY_PFACTORY_API_URL=http://host.docker.internal:3105 \
   -e CFACTORY_TFACTORY_API_URL=http://host.docker.internal:3103 \
   cfactory:dev
 ```
@@ -46,7 +46,7 @@ Useful environment variables (all prefixed `CFACTORY_`; see
 | ----------------------------- | ---------------------------------------------------------- |
 | `CFACTORY_BACKEND_PORT`       | Listen port (default 3111; matches the image CMD).         |
 | `CFACTORY_AIFACTORY_API_URL`  | AIFactory upstream base URL (local default `:3101`).       |
-| `CFACTORY_PFACTORY_API_URL`   | PFactory upstream base URL (local default `:3102`).        |
+| `CFACTORY_PFACTORY_API_URL`   | PFactory upstream base URL (local default `:3105`).        |
 | `CFACTORY_TFACTORY_API_URL`   | TFactory upstream base URL (local default `:3103`).        |
 | `CFACTORY_SUBSCRIBE_UPSTREAMS`| Connect to upstream WebSockets on startup (default false). |
 | `CFACTORY_DATABASE_URL`       | WorkItem correlation store DSN (optional).                 |
@@ -74,7 +74,7 @@ helm upgrade --install cfactory charts/cfactory \
   --set image.repository=ghcr.io/dataseeek/cfactory \
   --set image.tag=0.1.0 \
   --set config.aifactoryApiUrl=http://aifactory.ai.svc.cluster.local:3101 \
-  --set config.pfactoryApiUrl=http://pfactory.pf.svc.cluster.local:3102 \
+  --set config.pfactoryApiUrl=http://pfactory.pf.svc.cluster.local:3105 \
   --set config.tfactoryApiUrl=http://tfactory.tf.svc.cluster.local:3103
 ```
 

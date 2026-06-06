@@ -9,7 +9,7 @@ existing APIs — it runs no pipeline logic of its own.
 ```
         ┌───────────┐     ┌───────────┐     ┌───────────┐
         │ PFactory  │     │ AIFactory │     │ TFactory  │
-        │  :3102    │     │  :3101    │     │  :3103    │
+        │  :3105    │     │  :3101    │     │  :3103    │
         │  (Plan)   │ ──▶ │  (Act)    │ ──▶ │ (Verify)  │
         └─────┬─────┘     └─────┬─────┘     └─────┬─────┘
               │  REST · WebSocket · completion webhooks
@@ -22,8 +22,9 @@ existing APIs — it runs no pipeline logic of its own.
         └──────────────────────────────────────────────┘
 ```
 
-The canonical local upstream port map is **AIFactory 3101 · PFactory 3102 ·
-TFactory 3103** (`apps/backend/cfactory/config.py`); CFactory itself runs the
+The canonical local upstream port map (UI / API) is **AIFactory 3100/3101 ·
+TFactory 3102/3103 · PFactory 3104/3105** (`apps/backend/cfactory/config.py`);
+endpoints are editable at runtime from the Services view. CFactory itself runs the
 cockpit UI on **3110** and the backend API on **3111**.
 
 ## Components

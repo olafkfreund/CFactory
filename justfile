@@ -40,6 +40,43 @@ db-upgrade:
 db-revision MSG:
     cd apps/backend && .venv/bin/alembic revision --autogenerate -m "{{MSG}}"
 
+# ── Containers & Kubernetes ──────────────────────────────────────────────
+
+# Image registry/tag (override: just REGISTRY=myrepo TAG=v1 image-all).
+REGISTRY := "ghcr.io/dataseeek"
+TAG := "dev"
+
+# Build the backend image (Dockerfile, includes claude-agent-sdk via pip).
+image-backend:
+    docker build -t {{REGISTRY}}/cfactory:{{TAG}} -f Dockerfile .
+
+# Build the cockpit (frontend) image (nginx serving the Vite bundle).
+image-frontend:
+    docker build -t {{REGISTRY}}/cfactory-frontend:{{TAG}} apps/frontend-web
+
+# Build both images.
+image-all: image-backend image-frontend
+
+# Reproducible Nix builds (alternative to Docker).
+nix-frontend:
+    nix build .#frontend-static
+nix-backend-image:
+    nix build .#backend-image   # docker load < result
+
+# Render the Helm chart (ingress on) for review.
+helm-template *ARGS:
+    helm template cfactory charts/cfactory --set ingress.enabled=true {{ARGS}}
+
+# Lint the Helm chart.
+helm-lint:
+    helm lint charts/cfactory
+
+# Install/upgrade into the current kube-context (set image tags + ingress host).
+helm-install NAMESPACE="cfactory":
+    helm upgrade --install cfactory charts/cfactory \
+      --namespace {{NAMESPACE}} --create-namespace \
+      --set image.tag={{TAG}} --set frontend.image.tag={{TAG}}
+
 # Format Nix files.
 fmt:
     nixpkgs-fmt flake.nix

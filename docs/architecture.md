@@ -15,7 +15,7 @@ and (with a human click) triggers the services through their existing APIs.
 ```
         ┌───────────┐     ┌───────────┐     ┌───────────┐
         │ PFactory  │     │ AIFactory │     │ TFactory  │
-        │  :3102    │     │  :3101    │     │  :3103    │
+        │  :3105    │     │  :3101    │     │  :3103    │
         │  (Plan)   │ ──▶ │  (Act)    │ ──▶ │ (Verify)  │
         └─────┬─────┘     └─────┬─────┘     └─────┬─────┘
               │  REST · WebSocket · completion webhooks

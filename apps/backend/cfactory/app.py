@@ -24,7 +24,7 @@ from .audit import AuditStore, get_audit_store
 from .auth import require_scope
 from .enterprise import identity_dep
 from .adapters import AdapterError, AIFactoryAdapter, BaseHTTPAdapter, build_adapters, hydrate
-from .config import get_settings
+from .config import get_settings, load_service_overrides, set_service_url
 from .copilot import Copilot, get_copilot
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
@@ -46,6 +46,10 @@ class AskRequest(BaseModel):
 class ProposeRequest(BaseModel):
     kind: str
     correlation_key: str
+
+
+class ServiceEndpointUpdate(BaseModel):
+    url: str
 
 
 def store_dep() -> WorkItemStore:
@@ -106,6 +110,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    load_service_overrides(settings)  # apply any persisted endpoint edits
     manager = get_manager()
     app = FastAPI(
         title="CFactory",
@@ -203,6 +208,35 @@ def create_app() -> FastAPI:
                 {"name": name, "role": roles.get(name, "—"), "url": urls.get(name, ""), "online": online}
             )
         return {"services": out}
+
+    @app.put("/api/services/{name}")
+    async def update_service(
+        name: str,
+        update: ServiceEndpointUpdate,
+        _scope: str | None = Depends(require_scope("write")),
+    ) -> dict[str, object]:
+        """Edit an upstream service's endpoint URL. Persisted to the workspace so
+        it survives a restart, and effective immediately (adapters/health/refresh
+        read the live setting). Requires the ``write`` scope when API keys are set."""
+        try:
+            await run_in_threadpool(set_service_url, name, update.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        roles = {"pfactory": "Plan", "aifactory": "Code", "tfactory": "Test"}
+        online = False
+        for adapter in build_adapters():  # fresh — reads the just-updated setting
+            if adapter.service.value == name:
+                try:
+                    online = await run_in_threadpool(adapter.health)
+                except Exception:
+                    online = False
+            adapter.close()
+        return {
+            "name": name,
+            "role": roles.get(name, "—"),
+            "url": getattr(settings, f"{name}_api_url"),
+            "online": online,
+        }
 
     @app.get("/api/workitems")
     def list_workitems(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:

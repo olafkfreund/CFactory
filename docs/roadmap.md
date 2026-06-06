@@ -19,8 +19,8 @@ deep.
 - Wire PFactory → AIFactory inbound handoff with provenance
 - Adopt a shared correlation key (the GitHub issue number) end-to-end
 - Normalize the completion-event envelope across all three services
-- Resolve the PFactory/TFactory port collision (canonical map: AIFactory 3101,
-  PFactory 3102, TFactory 3103, CFactory 3110/3111)
+- Resolve the PFactory/TFactory port collision (canonical map, UI/API: AIFactory
+  3100/3101, TFactory 3102/3103, PFactory 3104/3105, CFactory 3110/3111)
 
 ## Phase 1 — Skeleton, correlation store & read-only cockpit *(shipped ✅)*
 

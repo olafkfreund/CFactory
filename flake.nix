@@ -35,11 +35,11 @@
 
             # Core dev tools
             git
-            gh           # GitHub CLI
-            just         # Justfile runner
-            ripgrep      # fast search in scripts
-            jq           # JSON in shell scripts
-            direnv       # auto-loading via .envrc
+            gh # GitHub CLI
+            just # Justfile runner
+            ripgrep # fast search in scripts
+            jq # JSON in shell scripts
+            direnv # auto-loading via .envrc
 
             # WorkItem correlation store (design: reuse the AIFactory Postgres layer).
             # Provides `psql` + libpq headers for psycopg builds. The server itself
@@ -86,10 +86,10 @@
             export CFACTORY_WORKSPACE_ROOT="''${CFACTORY_WORKSPACE_ROOT:-$HOME/.cfactory}"
 
             # Default upstream service endpoints the adapters talk to.
-            # Canonical local port map (see Factory#5): AIFactory 3101, PFactory 3102,
-            # TFactory 3103 (moving off the 3102 collision), CFactory 3110/3111.
+            # Canonical local port map (UI / API, see Factory#5): AIFactory 3100/3101,
+            # TFactory 3102/3103, PFactory 3104/3105, CFactory 3110/3111.
             export CFACTORY_AIFACTORY_API_URL="''${CFACTORY_AIFACTORY_API_URL:-http://localhost:3101}"
-            export CFACTORY_PFACTORY_API_URL="''${CFACTORY_PFACTORY_API_URL:-http://localhost:3102}"
+            export CFACTORY_PFACTORY_API_URL="''${CFACTORY_PFACTORY_API_URL:-http://localhost:3105}"
             export CFACTORY_TFACTORY_API_URL="''${CFACTORY_TFACTORY_API_URL:-http://localhost:3103}"
 
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
@@ -157,6 +157,84 @@
       devShells = forEachSystem (system: {
         default = mkDevShell system;
       });
+
+      # Nix-native build + reproducible OCI images (the "Both" packaging path
+      # alongside the Dockerfiles). Build with e.g.:
+      #   nix build .#frontend-static    # the cockpit UI dist/
+      #   nix build .#backend-image      # docker-loadable tar of the API image
+      packages = forEachSystem (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          version = "0.1.0";
+
+          # Reproducible build of the cockpit UI (Vite → dist). Hash is from
+          # `nix run nixpkgs#prefetch-npm-deps -- apps/frontend-web/package-lock.json`
+          # — re-run and update when package-lock.json changes.
+          frontend-static = pkgs.buildNpmPackage {
+            pname = "cfactory-frontend";
+            inherit version;
+            src = ./apps/frontend-web;
+            npmDepsHash = "sha256-xuij+mNmyJbpCxKNPVL98bXZOf6VHyhNHgrc+sCKCZU=";
+            installPhase = ''
+              runHook preInstall
+              cp -r dist $out
+              runHook postInstall
+            '';
+          };
+
+          # Backend runtime: a Python env from nixpkgs + the app source.
+          # NOTE: claude-agent-sdk is NOT in nixpkgs, so the live copilot
+          # (/api/copilot/ask) is unavailable in this image until that dep is
+          # packaged; the rest of the API runs. The Dockerfile path installs it
+          # via pip and is the recommended production backend image.
+          backendPythonEnv = pkgs.python313.withPackages (ps: with ps; [
+            fastapi
+            uvicorn
+            pydantic
+            pydantic-settings
+            httpx
+            websockets
+            wsproto
+            psycopg
+            sqlalchemy
+            alembic
+            anyio
+            starlette
+          ]);
+        in
+        {
+          inherit frontend-static;
+
+          backend-image = pkgs.dockerTools.buildLayeredImage {
+            name = "cfactory-backend";
+            tag = version;
+            contents = [ backendPythonEnv pkgs.coreutils pkgs.bashInteractive ];
+            extraCommands = ''
+              mkdir -p app/apps
+              cp -r ${./apps/backend} app/apps/backend
+            '';
+            config = {
+              WorkingDir = "/app";
+              Env = [ "PYTHONPATH=/app/apps/backend" "PYTHONUNBUFFERED=1" ];
+              ExposedPorts = { "3111/tcp" = { }; };
+              User = "65532:65532";
+              Cmd = [
+                "${backendPythonEnv}/bin/python"
+                "-m"
+                "uvicorn"
+                "cfactory.app:app"
+                "--host"
+                "0.0.0.0"
+                "--port"
+                "3111"
+                "--http"
+                "h11"
+                "--ws"
+                "wsproto"
+              ];
+            };
+          };
+        });
 
       # `nix fmt` runs nixpkgs-fmt across the repo.
       formatter = forEachSystem (system:

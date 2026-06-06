@@ -17,10 +17,12 @@ spec:
   selector:
     matchLabels:
       {{- include "cfactory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
   template:
     metadata:
       labels:
         {{- include "cfactory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
       annotations:
         # Roll pods on ConfigMap change.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}

@@ -6,6 +6,10 @@ via real environment variables or a .env file.
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,9 +24,10 @@ class Settings(BaseSettings):
     workspace_root: str = "~/.cfactory"
 
     # Upstream service endpoints the adapters talk to.
-    # Canonical local port map: AIFactory 3101, PFactory 3102, TFactory 3103.
+    # Canonical local port map (UI / API): AIFactory 3100/3101, TFactory 3102/3103,
+    # PFactory 3104/3105, CFactory 3110/3111. Editable at runtime via the Services view.
     aifactory_api_url: str = "http://localhost:3101"
-    pfactory_api_url: str = "http://localhost:3102"
+    pfactory_api_url: str = "http://localhost:3105"
     tfactory_api_url: str = "http://localhost:3103"
 
     # Service token for AIFactory's live agent console WebSocket (#34). When set,
@@ -89,3 +94,46 @@ def get_settings() -> Settings:
     if _settings is None:
         _settings = Settings()
     return _settings
+
+
+# ── Editable upstream endpoints ──────────────────────────────────────────────
+# The three upstream URLs can be edited at runtime from the Services view. Edits
+# mutate the shared Settings singleton (so every consumer picks them up live) and
+# are persisted to a small JSON file in the workspace, so they survive a restart.
+
+EDITABLE_SERVICES = ("aifactory", "pfactory", "tfactory")
+
+
+def _overrides_path(settings: Settings) -> Path:
+    return Path(os.path.expanduser(settings.workspace_root)) / "service-endpoints.json"
+
+
+def load_service_overrides(settings: Settings | None = None) -> Settings:
+    """Apply any persisted endpoint overrides onto the settings instance."""
+    settings = settings or get_settings()
+    try:
+        data = json.loads(_overrides_path(settings).read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return settings
+    if isinstance(data, dict):
+        for name in EDITABLE_SERVICES:
+            url = data.get(name)
+            if isinstance(url, str) and url:
+                setattr(settings, f"{name}_api_url", url)
+    return settings
+
+
+def set_service_url(name: str, url: str, settings: Settings | None = None) -> None:
+    """Update one upstream endpoint at runtime and persist it. Raises
+    ``ValueError`` on an unknown service or a malformed URL."""
+    settings = settings or get_settings()
+    if name not in EDITABLE_SERVICES:
+        raise ValueError(f"unknown service: {name!r}")
+    url = url.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise ValueError("url must start with http:// or https://")
+    setattr(settings, f"{name}_api_url", url)
+    path = _overrides_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = {n: getattr(settings, f"{n}_api_url") for n in EDITABLE_SERVICES}
+    path.write_text(json.dumps(current, indent=2))

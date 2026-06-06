@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType, type SVGProps } from "react";
-import { fetchServices, type Health, type ServiceStatus } from "./api";
-import { IconControlTower, IconDocument, IconRobot, IconFlask } from "./icons";
+import { fetchServices, updateService, type Health, type ServiceStatus } from "./api";
+import { IconControlTower, IconDocument, IconRobot, IconFlask, IconEdit } from "./icons";
 
 type Backend =
   | { kind: "loading" }
@@ -17,8 +17,14 @@ const ROLE: Record<string, { role: string; cls: string; Icon: IconCmp }> = {
 
 export default function ServicesView({ backend, reloadSignal }: { backend: Backend; reloadSignal: number }) {
   const health = backend.kind === "ok" ? backend.health : null;
-  // null = still probing; {} = probe failed / none reachable
   const [statuses, setStatuses] = useState<Record<string, ServiceStatus> | null>(null);
+
+  // Inline endpoint editing.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [urlOverride, setUrlOverride] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let alive = true;
@@ -35,11 +41,33 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
     };
   }, [reloadSignal]);
 
+  function startEdit(name: string, url: string) {
+    setEditing(name);
+    setDraft(url);
+    setSaveErr(null);
+  }
+  function cancelEdit() {
+    setEditing(null);
+    setSaveErr(null);
+  }
+  function save(name: string) {
+    setSaving(true);
+    setSaveErr(null);
+    updateService(name, draft.trim())
+      .then((res) => {
+        setUrlOverride((o) => ({ ...o, [name]: res.url }));
+        setStatuses((s) => ({ ...(s ?? {}), [name]: res }));
+        setEditing(null);
+      })
+      .catch((e: unknown) => setSaveErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSaving(false));
+  }
+
   return (
     <>
       <div className="page-head">
         <h1>Services</h1>
-        <p>The cockpit and the three upstream services it threads together.</p>
+        <p>The cockpit and the three upstream services it threads together — endpoints are editable.</p>
       </div>
 
       <div className="svc-grid">
@@ -66,6 +94,8 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
             const Icon = meta.Icon;
             const pending = statuses === null;
             const online = statuses?.[name]?.online ?? false;
+            const shownUrl = urlOverride[name] ?? url;
+            const isEditing = editing === name;
             return (
               <div className={`svc-card svc-card--${meta.cls}`} key={name}>
                 <div className="svc-top">
@@ -78,7 +108,36 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
                   </span>
                 </div>
                 <div className="svc-role"><span className="svc-role-pill">{meta.role}</span> endpoint configured</div>
-                <div className="svc-url mono">{url}</div>
+
+                {isEditing ? (
+                  <div className="svc-edit">
+                    <input
+                      className="svc-edit-input mono"
+                      value={draft}
+                      autoFocus
+                      placeholder="http://host:port"
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") save(name);
+                        if (e.key === "Escape") cancelEdit();
+                      }}
+                    />
+                    <div className="svc-edit-actions">
+                      <button className="svc-btn svc-btn--save" onClick={() => save(name)} disabled={saving}>
+                        {saving ? "Saving…" : "Save"}
+                      </button>
+                      <button className="svc-btn" onClick={cancelEdit} disabled={saving}>Cancel</button>
+                    </div>
+                    {saveErr && <div className="svc-edit-err">{saveErr}</div>}
+                  </div>
+                ) : (
+                  <div className="svc-url-row">
+                    <span className="svc-url mono">{shownUrl}</span>
+                    <button className="svc-edit-btn" title="Edit endpoint" aria-label={`Edit ${name} endpoint`} onClick={() => startEdit(name, shownUrl)}>
+                      <IconEdit size={14} />
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

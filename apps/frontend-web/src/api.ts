@@ -9,6 +9,13 @@ export interface Health {
   upstreams: Record<string, string>;
 }
 
+export interface ServiceStatus {
+  name: string;
+  role: string;
+  url: string;
+  online: boolean;
+}
+
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
@@ -66,6 +73,29 @@ export async function fetchHealth(): Promise<Health> {
     throw new Error(`backend returned HTTP ${resp.status}`);
   }
   return (await resp.json()) as Health;
+}
+
+export async function fetchServices(): Promise<ServiceStatus[]> {
+  const resp = await fetch("/api/services");
+  if (!resp.ok) throw new Error(`services error: HTTP ${resp.status}`);
+  const data = (await resp.json()) as { services: ServiceStatus[] };
+  return data.services ?? [];
+}
+
+export interface ActivityEntry {
+  service: string;
+  correlation_key: string;
+  status: string;
+  phase?: string | null;
+  updated_at: string;
+  title?: string | null;
+}
+
+export async function fetchActivity(limit = 50): Promise<ActivityEntry[]> {
+  const resp = await fetch(`/api/activity?limit=${limit}`);
+  if (!resp.ok) throw new Error(`activity error: HTTP ${resp.status}`);
+  const data = (await resp.json()) as { activity: ActivityEntry[] };
+  return data.activity ?? [];
 }
 
 export async function fetchWorkItems(): Promise<WorkItem[]> {

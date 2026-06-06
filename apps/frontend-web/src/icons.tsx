@@ -48,6 +48,24 @@ export const IconLogout = (p: IconProps) => (
 export const IconTokens = (p: IconProps) => (
   <Svg {...p}><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6" /><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" /></Svg>
 );
+export const IconRunning = (p: IconProps) => (
+  <Svg {...p}><path d="M21 12a9 9 0 1 1-6.2-8.6" /><path d="M9 12l2 2 4.5-4.5" /></Svg>
+);
+
+// Factory glyphs for the Services view (mirror the pipeline stage icons).
+export const IconControlTower = (p: IconProps) => (
+  <Svg {...p}><path d="M12 8v12" /><path d="M8 20h8" /><circle cx="12" cy="5.5" r="2" /><path d="M7.5 3a6 6 0 0 0 0 5M16.5 3a6 6 0 0 1 0 5" /></Svg>
+);
+export const IconDocument = (p: IconProps) => (
+  <Svg {...p}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M9 13h6M9 17h4" /></Svg>
+);
+export const IconRobot = (p: IconProps) => (
+  <Svg {...p}><rect x="5" y="8" width="14" height="11" rx="3" /><path d="M12 4v4" /><circle cx="12" cy="3.4" r="1" /><circle cx="9.5" cy="13" r="1.2" /><circle cx="14.5" cy="13" r="1.2" /><path d="M10 16h4" /><path d="M3 12v3M21 12v3" /></Svg>
+);
+export const IconFlask = (p: IconProps) => (
+  <Svg {...p}><path d="M9 3h6M10 3v6l-5.2 9.3A2 2 0 0 0 6.6 21h10.8a2 2 0 0 0 1.8-2.7L14 9V3" /><path d="M7 15h10" /></Svg>
+);
+
 export const IconClock = (p: IconProps) => (
   <Svg {...p} size={13}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></Svg>
 );

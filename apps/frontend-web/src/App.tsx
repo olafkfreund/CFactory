@@ -3,6 +3,7 @@ import AuditView from "./AuditView";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import ServicesView from "./ServicesView";
+import RunningTasksView from "./RunningTasksView";
 import TokensView from "./TokensView";
 import TaskDetail from "./TaskDetail";
 import { AnimatePresence, motion } from "framer-motion";
@@ -26,11 +27,12 @@ import {
   IconLogout,
   IconPipeline,
   IconRefresh,
+  IconRunning,
   IconServices,
   IconTokens,
 } from "./icons";
 
-type View = "overview" | "pipeline" | "tokens" | "copilot" | "audit" | "services";
+type View = "overview" | "pipeline" | "running" | "tokens" | "copilot" | "audit" | "services";
 type Backend =
   | { kind: "loading" }
   | { kind: "ok"; health: Health }
@@ -39,6 +41,7 @@ type Backend =
 const NAV: { id: View; label: string; Icon: typeof IconPipeline }[] = [
   { id: "overview", label: "Mission Control", Icon: IconInsights },
   { id: "pipeline", label: "Pipeline", Icon: IconPipeline },
+  { id: "running", label: "Running tasks", Icon: IconRunning },
   { id: "tokens", label: "Tokens", Icon: IconTokens },
   { id: "copilot", label: "Copilot", Icon: IconCopilot },
   { id: "audit", label: "Audit", Icon: IconAudit },
@@ -186,10 +189,11 @@ export default function App() {
           {error && <div className="banner banner--error">{error}</div>}
           {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
           {view === "pipeline" && <Board items={items} progress={progress} />}
+          {view === "running" && <RunningTasksView items={items} progress={progress} />}
           {view === "tokens" && <TokensView reloadSignal={tick} />}
           {view === "copilot" && <CopilotPanel reloadSignal={tick} />}
           {view === "audit" && <AuditView reloadSignal={tick} />}
-          {view === "services" && <ServicesView backend={backend} />}
+          {view === "services" && <ServicesView backend={backend} reloadSignal={tick} />}
         </main>
       </div>
     </div>

@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # Agentic copilot (#13). Model id for the Claude Agent SDK; the SDK reads
     # ANTHROPIC_API_KEY from the environment.
-    copilot_model: str = "claude-sonnet-4-6"
+    copilot_model: str = "claude-opus-4-8"
 
     # Scoped API keys (#20). Local-first: when empty/None, auth enforcement is
     # OPEN (single-user local mode). When set, requests must carry a known key

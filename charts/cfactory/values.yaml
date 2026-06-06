@@ -101,7 +101,7 @@ config:
   subscribeUpstreams: false
   # Agentic copilot model id (the Claude Agent SDK reads ANTHROPIC_API_KEY
   # from the environment — supply it via extraEnv / a Secret if needed).
-  copilotModel: "claude-sonnet-4-6"
+  copilotModel: "claude-opus-4-8"
   # Multi-tenant mode (CFACTORY_MULTI_TENANT). Off by default (single-tenant,
   # "default"). When true, the tenant is resolved per request from the
   # X-Tenant-Id header. Per-tenant data isolation of queries is still deferred;

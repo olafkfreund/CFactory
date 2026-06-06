@@ -71,7 +71,7 @@ v1.1 additive `usage` (token/cost) block that CFactory aggregates.
 | `CFACTORY_DATABASE_URL` | `None` | Postgres (else local SQLite) |
 | `CFACTORY_SUBSCRIBE_UPSTREAMS` | `false` | Connect to upstream WS feeds on startup |
 | `CFACTORY_LIVE_PROGRESS` | `false` | Poll/subscribe live progress |
-| `CFACTORY_COPILOT_MODEL` | `claude-sonnet-4-6` | Copilot model (SDK reads `ANTHROPIC_API_KEY`) |
+| `CFACTORY_COPILOT_MODEL` | `claude-opus-4-8` | Copilot model (SDK reads `ANTHROPIC_API_KEY`) |
 | `CFACTORY_API_KEYS` | `None` | Scoped keys `<key>:read,write;...`; OPEN when unset |
 | `CFACTORY_MULTI_TENANT` | `false` | Resolve tenant from `X-Tenant-Id` (hosted) |
 | `CFACTORY_AUDIT_HMAC_SECRET` | dev secret | Anchors the tamper-evident audit chain |

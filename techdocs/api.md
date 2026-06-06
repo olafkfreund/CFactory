@@ -64,7 +64,7 @@ the `CFACTORY_AIFACTORY_TOKEN` / `AIFACTORY_RMUX_ENABLED` wiring.
 
 The copilot reasons via the Claude Agent SDK behind a runner seam; it never writes to
 an upstream service. Model is set by `CFACTORY_COPILOT_MODEL` (default
-`claude-sonnet-4-6`); the SDK reads `ANTHROPIC_API_KEY` from the environment.
+`claude-opus-4-8`); the SDK reads `ANTHROPIC_API_KEY` from the environment.
 
 ### Actions — propose → confirm → execute
 

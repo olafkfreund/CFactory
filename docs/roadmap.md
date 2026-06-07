@@ -62,6 +62,26 @@ deep.
 - See [Live agents](https://github.com/olafkfreund/CFactory/blob/main/techdocs/live-agents.md)
   for the data path and the read-only guarantee.
 
+## Phase 6 — Operate, not just observe *(shipped ✅)*
+
+- **Running tasks** view — live progress across every sibling with
+  `All / Running / Failed / Done` filters, per-task progress and current phase ✅
+- Clickable **task detail drawer** — live process output plus the in-progress
+  **rmux** terminal ✅
+- **Audit** view — live completion-activity feed + a confirmed-actions log ✅
+- **Services** panel — per-service health with **editable upstream endpoints**
+  (repoint PFactory/AIFactory/TFactory without a redeploy) ✅
+- Settle the canonical port map end-to-end (port remap) ✅
+- Copilot defaults to **Claude Opus 4.8** ✅
+
+## Phase 7 — Ship continuously (GitOps) *(shipped ✅)*
+
+- Containerize the backend and the cockpit as separate images ✅
+- **Two-pod Helm chart** + a `devenv` workflow for local iteration ✅
+- CI: build and push sha-tagged images to **GHCR** on every push to `main` ✅
+- CD: bump image tags in **factory-gitops** so **ArgoCD** redeploys the k3d
+  cluster automatically ✅
+
 ## Cross-cutting — Token & cost instrumentation *(shipped ✅)*
 
 - All three stages now emit the RFC-0001 `usage` block on completion

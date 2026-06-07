@@ -98,6 +98,33 @@ cost, model) to its completion event. CFactory aggregates them into the
 **Tokens & cost** page — totals and a per-service, per-work-item breakdown — so
 real LLM spend across plan, code and test is visible in one place.
 
+## What the cockpit shows
+
+The UI is organised as seven views over the same correlated state:
+
+- **Mission Control** — the whole factory at a glance: PARR pipeline counts,
+  anomalies, and a live agent roster.
+- **Pipeline** — every work item as a card, threaded across plan → code → test by
+  its issue number; click for a detail drawer with live process output and the
+  agent's **rmux** terminal.
+- **Running tasks** — live progress across every sibling, filterable by
+  `All / Running / Failed / Done`, with per-task phase and progress.
+- **Tokens & cost** — real LLM spend, totalled per service and per work item.
+- **Copilot** — the agentic chat plus proactive insight cards.
+- **Audit** — the live completion-activity feed and the confirmed-actions log.
+- **Services** — per-service health with **editable upstream endpoints**, so the
+  cockpit can be repointed at a different PFactory/AIFactory/TFactory without a
+  redeploy.
+
+## Deployment
+
+CFactory ships as two container images — the **backend** and the **cockpit** —
+packaged as a **two-pod Helm chart** (with a `devenv` workflow for local
+iteration). Continuous deployment is GitOps-driven: on every push to `main`, CI
+builds and pushes sha-tagged images to **GHCR**, then bumps the image tags in the
+`factory-gitops` repo so **ArgoCD** reconciles and redeploys the k3d cluster — no
+manual rollout step.
+
 ## Tech stack
 
 Built on the same skeleton as the rest of the family, so security and operations
@@ -109,6 +136,8 @@ match:
 - **Store** — PostgreSQL (reusing AIFactory's data layer)
 - **Auth/security** — reuses AIFactory's enterprise modules (scoped keys, SAML/SCIM,
   tenant isolation, HMAC-anchored audit log)
-- **Dev env** — Nix flake + direnv
+- **Dev env** — Nix flake + direnv, plus a `devenv` workflow
+- **Packaging** — two container images (backend + cockpit), a two-pod Helm chart
+- **CD** — GitHub Actions → GHCR → `factory-gitops` → ArgoCD on k3d
 
 See the [roadmap](/roadmap/) for how this gets built, phase by phase.

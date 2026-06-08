@@ -47,8 +47,16 @@ class CompletionEvent(BaseModel):
 
     Standard schema all services conform to; consumed by the webhook ingress (#11).
     The optional ``usage`` block (RFC-0001 v1.1) carries per-stage token/cost.
+
+    ``id`` is the per-event idempotency key from the additive envelope upgrade
+    (AIFactory #466 / TFactory #282). When present the store dedups on it —
+    exactly-once per event — which both makes the outbox relay's re-delivery a
+    no-op and lets a legitimate re-run after handback (same service+status, new
+    ``id``) through, where the old ``(service, status)`` key wrongly collided.
+    Optional so legacy producers that don't emit it still ingest unchanged.
     """
 
+    id: str | None = None
     correlation_key: str
     service: Service
     task_id: str

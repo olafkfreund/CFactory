@@ -23,11 +23,21 @@ def _now() -> datetime:
 
 
 def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
-    """True if this (service, status) is already in the timeline — the RFC-0001
-    idempotency key ``(service, correlation_key, status)`` (the key is the row)."""
+    """True if this event is already in the timeline (idempotency check).
+
+    Prefers the per-event envelope ``id`` (#468 — AIFactory #466 / TFactory
+    #282): exactly-once on the ``id`` makes the outbox relay's re-delivery a
+    no-op *and* lets a legitimate re-run after handback through (same service +
+    status but a new ``id`` — the old ``(service, status)`` key collided on
+    those). Falls back to the legacy ``(service, correlation_key, status)`` key
+    for events from producers that don't yet emit an ``id``.
+    """
+    entries = timeline or []
+    if event.id:
+        return any(e.get("id") == event.id for e in entries)
     return any(
         e.get("service") == event.service.value and e.get("status") == event.status
-        for e in (timeline or [])
+        for e in entries
     )
 
 
@@ -72,11 +82,12 @@ class WorkItemStore:
     def upsert_from_event(self, event: CompletionEvent) -> tuple[WorkItem, bool]:
         """Thread a completion event into its WorkItem.
 
-        Idempotent by ``(service, correlation_key, status)`` per RFC-0001 §7: a
-        duplicate (the same service already recorded at the same status for this
-        key) is a no-op — the existing item is returned with ``applied=False`` and
-        the timeline is left untouched, so retried/duplicated deliveries don't
-        double-count. Returns ``(work_item, applied)``.
+        Idempotent by the envelope ``id`` when present, else the legacy
+        ``(service, correlation_key, status)`` key (see ``_already_recorded``):
+        a duplicate delivery is a no-op — the existing item is returned with
+        ``applied=False`` and the timeline is left untouched, so retried or
+        relay-replayed deliveries don't double-count. Returns
+        ``(work_item, applied)``.
         """
         with self._session.begin() as session:
             row = self._get_row(session, event.correlation_key)
@@ -88,7 +99,10 @@ class WorkItemStore:
                 session.add(row)
 
             slice_ = ServiceState(
-                task_id=event.task_id, status=event.status, phase=event.phase, usage=event.usage
+                task_id=event.task_id,
+                status=event.status,
+                phase=event.phase,
+                usage=event.usage,
             )
             setattr(row, event.service.value, slice_.model_dump())
 
@@ -130,7 +144,9 @@ class WorkItemStore:
 
     def list(self) -> list[WorkItem]:
         with self._session() as session:
-            rows = session.scalars(select(WorkItemRow).order_by(WorkItemRow.updated_at.desc()))
+            rows = session.scalars(
+                select(WorkItemRow).order_by(WorkItemRow.updated_at.desc())
+            )
             return [r.to_model() for r in rows]
 
     @staticmethod

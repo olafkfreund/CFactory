@@ -39,11 +39,21 @@ jobs:
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
+      # The cfactory / cfactory-frontend GHCR packages are user-owned and NOT
+      # linked to this repo, so the repo-scoped GITHUB_TOKEN can't push to them
+      # (HEAD blob → 403 Forbidden) despite `packages: write` above. Prefer a
+      # PAT with `write:packages` (secret GHCR_PAT) and fall back to the repo
+      # token so this stays non-breaking once the packages ARE linked.
+      # One-time setup (do ONE of):
+      #   - GHCR → cfactory & cfactory-frontend → Manage Actions access → add
+      #     this repo with Write (then GITHUB_TOKEN works, no secret needed), OR
+      #   - gh secret set GHCR_PAT --repo olafkfreund/CFactory   (classic PAT,
+      #     scope write:packages)
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Build + push backend
         uses: docker/build-push-action@v6

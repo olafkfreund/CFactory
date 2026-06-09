@@ -7,6 +7,7 @@ from .service import (
     get_copilot,
     make_runner,
     provider_status,
+    reset_copilot,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "get_copilot",
     "make_runner",
     "provider_status",
+    "reset_copilot",
 ]

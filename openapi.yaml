@@ -275,6 +275,57 @@ paths:
                     items: { type: string }
                   error: { type: string }
 
+  /api/settings:
+    get:
+      tags: [Settings]
+      summary: Editable cockpit settings (copilot provider + model)
+      description: >-
+        Returns the active copilot provider/model, the selectable providers, and
+        — for Ollama Cloud — live connectivity + available models. The API key is
+        never returned, only a has_key flag.
+      responses:
+        "200":
+          description: Current settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  copilot:
+                    type: object
+                    properties:
+                      provider: { type: string }
+                      model: { type: string }
+                      providers: { type: array, items: { type: string } }
+                      base_url: { type: string }
+                      has_key: { type: boolean }
+                      reachable: { type: boolean, nullable: true }
+                      models: { type: array, items: { type: string } }
+
+  /api/settings/copilot:
+    put:
+      tags: [Settings]
+      summary: Switch the copilot provider/model at runtime
+      description: >-
+        Persisted to the workspace (provider + model only — never the key) and
+        effective on the next copilot question. Requires the write scope when API
+        keys are configured.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, model]
+              properties:
+                provider: { type: string, enum: [claude, ollama] }
+                model: { type: string }
+      responses:
+        "200":
+          description: Updated settings (same shape as GET /api/settings).
+        "400":
+          description: Unknown provider or empty model.
+
   /api/actions/propose:
     post:
       tags: [Actions]

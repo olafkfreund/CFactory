@@ -36,6 +36,9 @@ export const IconInsights = (p: IconProps) => (
 export const IconAudit = (p: IconProps) => (
   <Svg {...p}><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z" /><path d="M9 12l2 2 4-4" /></Svg>
 );
+export const IconSettings = (p: IconProps) => (
+  <Svg {...p}><path d="M4 7h9M19 7h1M4 17h1M11 17h9" /><circle cx="16" cy="7" r="2.4" /><circle cx="8" cy="17" r="2.4" /></Svg>
+);
 export const IconServices = (p: IconProps) => (
   <Svg {...p}><rect x="3" y="4" width="18" height="6" rx="1.5" /><rect x="3" y="14" width="18" height="6" rx="1.5" /><path d="M7 7h.01M7 17h.01" /></Svg>
 );

@@ -205,3 +205,10 @@ def get_copilot() -> Copilot:
     if _copilot is None:
         _copilot = Copilot(get_store())
     return _copilot
+
+
+def reset_copilot() -> None:
+    """Drop the cached copilot so the next ``get_copilot()`` rebuilds its runner
+    from current settings — called after the provider/model is changed at runtime."""
+    global _copilot
+    _copilot = None

@@ -172,3 +172,52 @@ def set_service_url(name: str, url: str, settings: Settings | None = None) -> No
     path.parent.mkdir(parents=True, exist_ok=True)
     current = {n: getattr(settings, f"{n}_api_url") for n in EDITABLE_SERVICES}
     path.write_text(json.dumps(current, indent=2))
+
+
+# ── Editable copilot settings ────────────────────────────────────────────────
+# The copilot provider + model are editable at runtime from the Settings view.
+# Edits mutate the Settings singleton and persist to a small JSON file (provider
+# + model only — the API key is NEVER written to disk; it stays env/secret).
+
+COPILOT_PROVIDERS = ("claude", "ollama")
+
+
+def _copilot_settings_path(settings: Settings) -> Path:
+    return Path(os.path.expanduser(settings.workspace_root)) / "copilot-settings.json"
+
+
+def load_copilot_overrides(settings: Settings | None = None) -> Settings:
+    """Apply any persisted copilot provider/model overrides onto the settings."""
+    settings = settings or get_settings()
+    try:
+        data = json.loads(_copilot_settings_path(settings).read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return settings
+    if isinstance(data, dict):
+        provider = data.get("provider")
+        if isinstance(provider, str) and provider in COPILOT_PROVIDERS:
+            settings.copilot_provider = provider
+        model = data.get("model")
+        if isinstance(model, str) and model:
+            settings.copilot_model = model
+    return settings
+
+
+def set_copilot_settings(
+    provider: str, model: str, settings: Settings | None = None
+) -> None:
+    """Update the copilot provider + model at runtime and persist them. Raises
+    ``ValueError`` on an unknown provider or empty model. The API key is not
+    touched here — it is supplied via the environment/secret only."""
+    settings = settings or get_settings()
+    provider = (provider or "").strip().lower()
+    if provider not in COPILOT_PROVIDERS:
+        raise ValueError(f"unknown provider: {provider!r} (expected one of {COPILOT_PROVIDERS})")
+    model = (model or "").strip()
+    if not model:
+        raise ValueError("model must not be empty")
+    settings.copilot_provider = provider
+    settings.copilot_model = model
+    path = _copilot_settings_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"provider": provider, "model": model}, indent=2))

@@ -3,6 +3,7 @@ import AuditView from "./AuditView";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import ServicesView from "./ServicesView";
+import SettingsView from "./SettingsView";
 import RunningTasksView from "./RunningTasksView";
 import TokensView from "./TokensView";
 import TaskDetail from "./TaskDetail";
@@ -29,10 +30,19 @@ import {
   IconRefresh,
   IconRunning,
   IconServices,
+  IconSettings,
   IconTokens,
 } from "./icons";
 
-type View = "overview" | "pipeline" | "running" | "tokens" | "copilot" | "audit" | "services";
+type View =
+  | "overview"
+  | "pipeline"
+  | "running"
+  | "tokens"
+  | "copilot"
+  | "audit"
+  | "services"
+  | "settings";
 type Backend =
   | { kind: "loading" }
   | { kind: "ok"; health: Health }
@@ -46,6 +56,7 @@ const NAV: { id: View; label: string; Icon: typeof IconPipeline }[] = [
   { id: "copilot", label: "Copilot", Icon: IconCopilot },
   { id: "audit", label: "Audit", Icon: IconAudit },
   { id: "services", label: "Services", Icon: IconServices },
+  { id: "settings", label: "Settings", Icon: IconSettings },
 ];
 
 const STAGES = [
@@ -194,6 +205,7 @@ export default function App() {
           {view === "copilot" && <CopilotPanel reloadSignal={tick} />}
           {view === "audit" && <AuditView reloadSignal={tick} />}
           {view === "services" && <ServicesView backend={backend} reloadSignal={tick} />}
+          {view === "settings" && <SettingsView reloadSignal={tick} />}
         </main>
       </div>
     </div>

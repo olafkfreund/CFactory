@@ -42,9 +42,17 @@ def _client(adapter: AIFactoryAdapter) -> TestClient:
 def test_is_active_filters_terminal_statuses():
     assert _is_active("coding") is True
     assert _is_active("planning") is True
+    assert _is_active("in_progress") is True
     assert _is_active(None) is True  # just-started agent, no terminal mark yet
     for terminal in ("completed", "merged", "failed", "rejected", "cancelled"):
         assert _is_active(terminal) is False, terminal
+
+
+def test_is_active_excludes_review_and_queued_statuses():
+    # These have no running agent — surfacing them caused consoles that all
+    # showed "— stream ended —" (#33).
+    for parked in ("human_review", "ai_review", "backlog", "pending", "queued", "todo"):
+        assert _is_active(parked) is False, parked
 
 
 # --- unit: discovery ------------------------------------------------------

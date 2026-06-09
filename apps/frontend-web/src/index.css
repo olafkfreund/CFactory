@@ -463,6 +463,8 @@ body {
 .status-pill.ok .dot { background: var(--green); }
 .status-pill.fail { color: var(--red); border-color: rgba(248, 113, 113, 0.3); }
 .status-pill.fail .dot { background: var(--red); }
+.status-pill.warn { color: var(--code); border-color: rgba(250, 189, 47, 0.35); }
+.status-pill.warn .dot { background: var(--code); }
 
 /* ── Services ──────────────────────────────────────────── */
 .svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; }

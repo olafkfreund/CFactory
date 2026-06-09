@@ -63,6 +63,32 @@ def test_pfactory_hits_plan_sessions_path_and_reads_sessions_envelope():
     assert items[0].status == "human_review"
 
 
+def test_probe_online_on_200():
+    p = AIFactoryAdapter("http://x", transport=_transport({"tasks": []})).probe()
+    assert p.online is True and p.status == "online"
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_probe_unauthorized_on_401_403(code):
+    # A reachable upstream that rejects us must NOT read as online.
+    p = AIFactoryAdapter("http://x", transport=_transport({}, status=code)).probe()
+    assert p.online is False and p.status == "unauthorized"
+    assert "UPSTREAM_TOKEN" in (p.detail or "")
+
+
+def test_probe_error_on_500():
+    p = AIFactoryAdapter("http://x", transport=_transport({}, status=500)).probe()
+    assert p.online is False and p.status == "error"
+
+
+def test_probe_offline_on_connect_error():
+    def boom(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    p = AIFactoryAdapter("http://x", transport=httpx.MockTransport(boom)).probe()
+    assert p.online is False and p.status == "offline"
+
+
 def test_health_true_when_service_responds():
     # Any HTTP response — even a 404 — means the process is up.
     adapter = AIFactoryAdapter("http://x", transport=_transport({}, status=404))

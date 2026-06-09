@@ -14,6 +14,10 @@ export interface ServiceStatus {
   role: string;
   url: string;
   online: boolean;
+  // Richer classification of the upstream probe (added alongside `online`):
+  // "online" | "unauthorized" | "offline" | "error". Optional for back-compat.
+  status?: "online" | "unauthorized" | "offline" | "error";
+  detail?: string | null;
 }
 
 export interface TokenUsage {

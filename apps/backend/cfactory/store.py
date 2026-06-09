@@ -22,6 +22,22 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Substring hints for a terminal stage status (mirrors live_agents). A terminal
+# stage is preserved during reconciliation — completed/failed history must stay.
+_TERMINAL_HINTS = (
+    "done", "merged", "triaged", "emitted", "completed", "accept", "passed",
+    "approved", "shipped", "succeeded", "success", "ready", "closed",
+    "fail", "reject", "block", "error", "cancel", "discard", "abort",
+)
+
+
+def _is_terminal(status: str | None) -> bool:
+    if not status:
+        return False
+    low = status.lower()
+    return any(hint in low for hint in _TERMINAL_HINTS)
+
+
 def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
     """True if this event is already in the timeline (idempotency check).
 
@@ -136,6 +152,32 @@ class WorkItemStore:
             row.updated_at = _now()
             session.flush()
             return row.to_model()
+
+    def reconcile_snapshot(self, service: Service, live_task_ids: set[str]) -> int:
+        """Clear stale non-terminal stages for ``service`` after a successful poll.
+
+        When an upstream no longer reports a task that the store still holds as
+        *non-terminal* (running/queued/in-review), its agent is gone — keeping the
+        old "in_progress" makes the cockpit show ghosts. We blank that stage so the
+        work item reflects reality (and drops off if it becomes empty). Terminal
+        stages (done/failed) are preserved — completed history must persist, and
+        completion-event-sourced items aren't in the poll list. Returns the number
+        of stages cleared. Call ONLY after a successful fetch (never on error, or a
+        transient outage would wipe live state)."""
+        cleared = 0
+        with self._session.begin() as session:
+            rows = session.scalars(select(WorkItemRow)).all()
+            for row in rows:
+                data = getattr(row, service.value) or {}
+                status = data.get("status")
+                task_id = data.get("task_id")
+                if not status or _is_terminal(status):
+                    continue  # idle, or completed/failed — leave it
+                if task_id is not None and task_id not in live_task_ids:
+                    setattr(row, service.value, ServiceState().model_dump())
+                    row.updated_at = _now()
+                    cleared += 1
+        return cleared
 
     def get(self, correlation_key: str) -> WorkItem | None:
         with self._session() as session:

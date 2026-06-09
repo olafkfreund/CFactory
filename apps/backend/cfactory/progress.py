@@ -20,9 +20,10 @@ from typing import Any
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from .adapters import AdapterError, AdapterItem, BaseHTTPAdapter, build_adapters
+from .adapters import AdapterError, AdapterItem, BaseHTTPAdapter, build_adapters, hydrate
 from .config import Settings, get_settings
 from .models import Service
+from .store import WorkItemStore, get_store
 from .ws import ConnectionManager
 
 
@@ -92,17 +93,27 @@ def reset_progress_hub() -> None:
 
 
 def poll_progress_once(
-    hub: LiveProgressHub, adapters: list[BaseHTTPAdapter]
+    hub: LiveProgressHub,
+    adapters: list[BaseHTTPAdapter],
+    store: WorkItemStore | None = None,
 ) -> list[LiveProgress]:
     """Poll each adapter's list once, fold coarse progress into the hub.
-    Best-effort: a down service is skipped. Returns the progress that changed."""
+
+    When a ``store`` is given, also hydrate it from the same fetch and reconcile
+    away stale non-terminal stages the upstream no longer reports — so the board
+    self-heals (finished/removed tasks stop showing as running) without a manual
+    refresh. Best-effort: a down service is skipped and never reconciled."""
     changed: list[LiveProgress] = []
     for adapter in adapters:
         try:
-            for item in adapter.list_items():
+            items = adapter.list_items()
+            for item in items:
                 lp = progress_from_item(item)
                 hub.update(lp)
                 changed.append(lp)
+            if store is not None:
+                hydrate(store, items)
+                store.reconcile_snapshot(adapter.service, {i.task_id for i in items})
         except AdapterError:
             pass
         finally:
@@ -113,11 +124,20 @@ def poll_progress_once(
 async def _poll_loop(
     hub: LiveProgressHub, manager: ConnectionManager, settings: Settings, interval: float
 ) -> None:
+    store = get_store()
     while True:
         try:
-            changed = await run_in_threadpool(poll_progress_once, hub, build_adapters(settings))
+            changed = await run_in_threadpool(
+                poll_progress_once, hub, build_adapters(settings), store
+            )
             for lp in changed:
                 await manager.broadcast({"type": "progress", "item": lp.model_dump(mode="json")})
+            # Push the reconciled board so cleared/updated stages reach the cockpit
+            # live (stale "running" ghosts disappear without a manual refresh).
+            snapshot = await run_in_threadpool(store.list)
+            await manager.broadcast(
+                {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
+            )
         except Exception:  # noqa: BLE001 — best-effort, never crash the cockpit
             pass
         await asyncio.sleep(interval)

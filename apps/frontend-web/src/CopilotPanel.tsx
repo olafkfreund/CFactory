@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import Markdown from "./Markdown";
 import {
   askCopilot,
   executeAction,
@@ -200,7 +201,7 @@ export default function CopilotPanel({ reloadSignal }: { reloadSignal: number })
           {messages.map((m, i) => (
             <div className={`bubble bubble--${m.role}`} key={i}>
               <span className="bubble-role">{m.role}</span>
-              {m.text}
+              {m.role === "copilot" ? <Markdown text={m.text} /> : m.text}
             </div>
           ))}
           {asking && <div className="bubble bubble--copilot">…thinking</div>}

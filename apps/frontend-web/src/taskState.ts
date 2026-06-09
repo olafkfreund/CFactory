@@ -37,6 +37,24 @@ export function overallState(states: TaskState[]): TaskState {
   return "queued";
 }
 
+/** A stage is "active" (live work, not stale) when it's engaged but not yet
+ *  terminal — i.e. running, in review, or queued. done/failed/idle are stale. */
+export function isActiveState(s: TaskState): boolean {
+  return s === "running" || s === "review" || s === "queued";
+}
+
+/** Where a work item currently lives in the pipeline: the furthest stage that
+ *  is still active. Returns null when the item is finished or never started, so
+ *  stale/done items drop off the pipeline view instead of inflating its badges. */
+export function activeStage(
+  statuses: { pfactory?: string | null; aifactory?: string | null; tfactory?: string | null },
+): "pfactory" | "aifactory" | "tfactory" | null {
+  if (isActiveState(stageState(statuses.tfactory))) return "tfactory";
+  if (isActiveState(stageState(statuses.aifactory))) return "aifactory";
+  if (isActiveState(stageState(statuses.pfactory))) return "pfactory";
+  return null;
+}
+
 export const STATE_LABEL: Record<TaskState, string> = {
   running: "running",
   review: "in review",

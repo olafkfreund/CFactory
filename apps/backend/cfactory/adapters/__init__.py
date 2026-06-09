@@ -22,12 +22,14 @@ __all__ = [
 
 
 def build_adapters(settings: Settings | None = None) -> list[BaseHTTPAdapter]:
-    """One adapter per service, pointed at the configured endpoints."""
+    """One adapter per service, pointed at the configured endpoints and carrying
+    the shared upstream bearer token (when set) for authenticated calls."""
     settings = settings or get_settings()
+    token = settings.upstream_token
     return [
-        PFactoryAdapter(settings.pfactory_api_url),
-        AIFactoryAdapter(settings.aifactory_api_url),
-        TFactoryAdapter(settings.tfactory_api_url),
+        PFactoryAdapter(settings.pfactory_api_url, token=token),
+        AIFactoryAdapter(settings.aifactory_api_url, token=token),
+        TFactoryAdapter(settings.tfactory_api_url, token=token),
     ]
 
 

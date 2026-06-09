@@ -76,6 +76,14 @@ spec:
                   name: {{ .Values.database.existingSecret }}
                   key: {{ .Values.database.secretKey }}
             {{- end }}
+            {{- if .Values.upstreamToken.enabled }}
+            # Shared bearer token the adapters/WS send to the sibling factories.
+            - name: CFACTORY_UPSTREAM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.upstreamToken.existingSecret }}
+                  key: {{ .Values.upstreamToken.secretKey }}
+            {{- end }}
             {{- if .Values.apiKeys.enabled }}
             # Scoped API keys. Format: "<key>:read,write;<key2>:read".
             - name: CFACTORY_API_KEYS

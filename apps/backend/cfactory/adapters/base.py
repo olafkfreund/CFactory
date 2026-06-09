@@ -66,10 +66,17 @@ class BaseHTTPAdapter:
         self,
         base_url: str,
         *,
+        token: str | None = None,
         timeout: float = 5.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport)
+        # Each factory guards its API with `Authorization: Bearer <APP_API_TOKEN>`.
+        # Send it as a default header on every request when configured; unset means
+        # local dev against a factory running with auth disabled.
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        self._client = httpx.Client(
+            base_url=base_url, timeout=timeout, transport=transport, headers=headers
+        )
 
     def _get_json(self, path: str) -> Any:
         try:
@@ -81,11 +88,11 @@ class BaseHTTPAdapter:
 
     @staticmethod
     def _rows(payload: Any) -> list[dict[str, Any]]:
-        """Accept either a bare list or {items|tasks|plans|results: [...]}."""
+        """Accept either a bare list or {items|tasks|plans|sessions|results|data: [...]}."""
         if isinstance(payload, list):
             return [r for r in payload if isinstance(r, dict)]
         if isinstance(payload, dict):
-            for key in ("items", "tasks", "plans", "results", "data"):
+            for key in ("items", "tasks", "plans", "sessions", "results", "data"):
                 val = payload.get(key)
                 if isinstance(val, list):
                     return [r for r in val if isinstance(r, dict)]

@@ -122,6 +122,18 @@ apiKeys:
   existingSecret: cfactory-api-keys
   secretKey: api-keys
 
+# Shared bearer token for authenticated calls to the sibling factories
+# (CFACTORY_UPSTREAM_TOKEN). The three factories guard their REST + WS surface
+# with `Authorization: Bearer <APP_API_TOKEN>`; the cockpit must send the same
+# token or every upstream fetch returns 401 (empty cockpit). When disabled, no
+# token is sent — only correct for local dev where the factories run with
+# APP_DISABLE_AUTH=true. In-cluster, point existingSecret at the shared
+# factory-secrets Secret (key APP_API_TOKEN) used by the factories.
+upstreamToken:
+  enabled: false
+  existingSecret: factory-secrets
+  secretKey: APP_API_TOKEN
+
 # WorkItem correlation store. When enabled, CFACTORY_DATABASE_URL is injected
 # from a Secret (key="database-url"). When disabled, the app runs without a
 # correlation store (database_url=None).

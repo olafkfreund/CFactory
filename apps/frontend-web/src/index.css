@@ -593,6 +593,28 @@ body {
 .bubble--you { align-self: flex-end; background: rgba(139, 124, 246, 0.18); border: 1px solid rgba(139, 124, 246, 0.4); }
 .bubble--copilot { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--border); }
 .bubble-role { display: block; font-size: 0.66rem; text-transform: uppercase; color: var(--muted); margin-bottom: 0.15rem; }
+
+/* Rendered markdown (copilot answers). Block elements, so drop the bubble's
+   pre-wrap and let the renderer control spacing. */
+.bubble .md { white-space: normal; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0.45rem 0; }
+.md ul, .md ol { margin: 0.35rem 0; padding-left: 1.3rem; }
+.md li { margin: 0.12rem 0; }
+.md li::marker { color: var(--muted); }
+.md strong { color: var(--text); font-weight: 600; }
+.md em { font-style: italic; }
+.md code {
+  font-family: "JetBrains Mono", monospace; font-size: 0.82em;
+  background: rgba(139, 124, 246, 0.13); border: 1px solid var(--border);
+  border-radius: 5px; padding: 0.04rem 0.32rem;
+}
+.md .md-h { font-weight: 600; color: var(--text); margin: 0.6rem 0 0.3rem; line-height: 1.3; }
+.md .md-h1 { font-size: 1.02rem; }
+.md .md-h2 { font-size: 0.96rem; }
+.md .md-h3, .md .md-h4 { font-size: 0.9rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+
 .chat-input { display: flex; gap: 0.5rem; }
 .chat-input input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 0.5rem 0.7rem; font-size: 0.86rem; font-family: inherit; }
 .chat-input input:focus { outline: none; border-color: var(--violet); }

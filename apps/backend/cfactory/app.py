@@ -31,8 +31,15 @@ from .adapters import (
     build_adapters,
     hydrate,
 )
-from .config import get_settings, load_service_overrides, set_service_url
-from .copilot import Copilot, get_copilot, provider_status
+from .config import (
+    COPILOT_PROVIDERS,
+    get_settings,
+    load_copilot_overrides,
+    load_service_overrides,
+    set_copilot_settings,
+    set_service_url,
+)
+from .copilot import Copilot, get_copilot, provider_status, reset_copilot
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline, token_totals
@@ -57,6 +64,11 @@ class ProposeRequest(BaseModel):
 
 class ServiceEndpointUpdate(BaseModel):
     url: str
+
+
+class CopilotSettingsUpdate(BaseModel):
+    provider: str
+    model: str
 
 
 def store_dep() -> WorkItemStore:
@@ -118,6 +130,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     load_service_overrides(settings)  # apply any persisted endpoint edits
+    load_copilot_overrides(settings)  # apply any persisted copilot provider/model
     manager = get_manager()
     app = FastAPI(
         title="CFactory",
@@ -459,6 +472,33 @@ def create_app() -> FastAPI:
         (e.g. Ollama Cloud) this probes {base}/models so the cockpit can confirm
         connectivity and list the available cloud models."""
         return await run_in_threadpool(provider_status, settings)
+
+    def _settings_payload() -> dict[str, object]:
+        status = provider_status(settings)
+        return {"copilot": {**status, "providers": list(COPILOT_PROVIDERS)}}
+
+    @app.get("/api/settings")
+    async def get_settings_view() -> dict[str, object]:
+        """Editable cockpit settings. Currently the copilot provider + model, plus
+        the available providers and (for Ollama Cloud) live connectivity + model
+        list. The API key is never returned — only a ``has_key`` flag."""
+        return await run_in_threadpool(_settings_payload)
+
+    @app.put("/api/settings/copilot")
+    async def update_copilot_settings(
+        update: CopilotSettingsUpdate,
+        _scope: str | None = Depends(require_scope("write")),
+    ) -> dict[str, object]:
+        """Switch the copilot provider/model at runtime. Persisted to the workspace
+        (provider + model only — never the key) so it survives a restart, and
+        effective immediately (the copilot is rebuilt on the next question).
+        Requires the ``write`` scope when API keys are configured."""
+        try:
+            await run_in_threadpool(set_copilot_settings, update.provider, update.model)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        reset_copilot()
+        return await run_in_threadpool(_settings_payload)
 
     @app.websocket("/api/ws")
     async def cockpit_feed(websocket: WebSocket) -> None:

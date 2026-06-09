@@ -86,6 +86,45 @@ export async function fetchServices(): Promise<ServiceStatus[]> {
   return data.services ?? [];
 }
 
+export interface CopilotSettings {
+  provider: string;            // "claude" | "ollama"
+  model: string;
+  providers: string[];         // selectable providers
+  base_url?: string;
+  has_key?: boolean;
+  reachable?: boolean | null;  // null = not an OpenAI-compatible provider / no probe
+  models?: string[];           // available cloud models (when reachable)
+  error?: string;
+}
+
+export async function fetchSettings(): Promise<CopilotSettings> {
+  const resp = await fetch("/api/settings");
+  if (!resp.ok) throw new Error(`settings error: HTTP ${resp.status}`);
+  const data = (await resp.json()) as { copilot: CopilotSettings };
+  return data.copilot;
+}
+
+export async function updateCopilotSettings(
+  provider: string,
+  model: string,
+): Promise<CopilotSettings> {
+  const resp = await fetch("/api/settings/copilot", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, model }),
+  });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      detail = ((await resp.json()) as { detail?: string }).detail ?? detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail);
+  }
+  return ((await resp.json()) as { copilot: CopilotSettings }).copilot;
+}
+
 export async function updateService(name: string, url: string): Promise<ServiceStatus> {
   const resp = await fetch(`/api/services/${encodeURIComponent(name)}`, {
     method: "PUT",

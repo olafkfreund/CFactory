@@ -23,7 +23,14 @@ from .actions import PreparedAction, execute_action, propose
 from .audit import AuditStore, get_audit_store
 from .auth import require_scope
 from .enterprise import identity_dep
-from .adapters import AdapterError, AIFactoryAdapter, BaseHTTPAdapter, build_adapters, hydrate
+from .adapters import (
+    AdapterError,
+    AIFactoryAdapter,
+    BaseHTTPAdapter,
+    ServiceProbe,
+    build_adapters,
+    hydrate,
+)
 from .config import get_settings, load_service_overrides, set_service_url
 from .copilot import Copilot, get_copilot
 from .copilot.anomalies import detect_anomalies
@@ -199,13 +206,20 @@ def create_app() -> FastAPI:
         for adapter in adapters:
             name = adapter.service.value
             try:
-                online = await run_in_threadpool(adapter.health)
-            except Exception:
-                online = False
+                probe = await run_in_threadpool(adapter.probe)
+            except Exception as exc:  # noqa: BLE001 — never fatal
+                probe = ServiceProbe(online=False, status="error", detail=str(exc))
             finally:
                 adapter.close()
             out.append(
-                {"name": name, "role": roles.get(name, "—"), "url": urls.get(name, ""), "online": online}
+                {
+                    "name": name,
+                    "role": roles.get(name, "—"),
+                    "url": urls.get(name, ""),
+                    "online": probe.online,
+                    "status": probe.status,
+                    "detail": probe.detail,
+                }
             )
         return {"services": out}
 
@@ -223,19 +237,21 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         roles = {"pfactory": "Plan", "aifactory": "Code", "tfactory": "Test"}
-        online = False
+        probe = ServiceProbe(online=False, status="error", detail=None)
         for adapter in build_adapters():  # fresh — reads the just-updated setting
             if adapter.service.value == name:
                 try:
-                    online = await run_in_threadpool(adapter.health)
-                except Exception:
-                    online = False
+                    probe = await run_in_threadpool(adapter.probe)
+                except Exception as exc:  # noqa: BLE001 — never fatal
+                    probe = ServiceProbe(online=False, status="error", detail=str(exc))
             adapter.close()
         return {
             "name": name,
             "role": roles.get(name, "—"),
             "url": getattr(settings, f"{name}_api_url"),
-            "online": online,
+            "online": probe.online,
+            "status": probe.status,
+            "detail": probe.detail,
         }
 
     @app.get("/api/workitems")

@@ -29,6 +29,24 @@ class AdapterItem(BaseModel):
         return ServiceState(task_id=self.task_id, status=self.status, phase=self.phase)
 
 
+class ServiceProbe(BaseModel):
+    """Outcome of an authenticated probe of a service's real data endpoint.
+
+    ``online`` is True only when the data fetch actually succeeds (HTTP 200), so
+    a reachable-but-rejecting upstream is never shown as healthy. ``status``
+    classifies the failure for the Services view:
+
+    - ``online``       — data endpoint returned 200
+    - ``unauthorized`` — 401/403; CFactory's upstream token is missing/wrong
+    - ``offline``      — connect/timeout/transport error (process down/unreachable)
+    - ``error``        — other HTTP error (4xx/5xx) or an unparseable response
+    """
+
+    online: bool
+    status: str
+    detail: str | None = None
+
+
 def first(d: dict[str, Any], *keys: str) -> Any | None:
     """Return the first present, non-null value among nested-or-flat keys.
 
@@ -109,6 +127,30 @@ class BaseHTTPAdapter:
             except httpx.HTTPError:
                 continue
         return False
+
+    def probe(self, *, timeout: float = 4.0) -> ServiceProbe:
+        """Authenticated reachability+auth check of the real list endpoint.
+
+        Unlike ``health`` (which counts any HTTP response — even a 401 — as up),
+        this distinguishes a genuinely healthy upstream from one that is reachable
+        but rejecting CFactory's requests, so the Services view can't show a
+        failing data fetch as a green 'online'."""
+        try:
+            resp = self._client.get(self.list_path, timeout=timeout)
+        except httpx.HTTPError as exc:
+            return ServiceProbe(online=False, status="offline", detail=str(exc))
+        code = resp.status_code
+        if code in (401, 403):
+            return ServiceProbe(
+                online=False,
+                status="unauthorized",
+                detail=f"{code} {resp.reason_phrase} — check CFACTORY_UPSTREAM_TOKEN",
+            )
+        if code >= 400:
+            return ServiceProbe(
+                online=False, status="error", detail=f"{code} {resp.reason_phrase}"
+            )
+        return ServiceProbe(online=True, status="online")
 
     def list_items(self) -> list[AdapterItem]:
         rows = self._rows(self._get_json(self.list_path))

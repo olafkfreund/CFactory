@@ -15,6 +15,22 @@ const ROLE: Record<string, { role: string; cls: string; Icon: IconCmp }> = {
   tfactory: { role: "Test", cls: "test", Icon: IconFlask },
 };
 
+// Map the upstream probe status to a pill style + label. A reachable-but-
+// rejecting upstream (401/403) is amber "auth error", not a green "online".
+const PILL: Record<string, { cls: string; label: string }> = {
+  online: { cls: "ok", label: "online" },
+  unauthorized: { cls: "warn", label: "auth error" },
+  offline: { cls: "fail", label: "offline" },
+  error: { cls: "fail", label: "error" },
+};
+
+function pillFor(s: ServiceStatus | undefined): { cls: string; label: string; detail?: string | null } {
+  if (!s) return { cls: "fail", label: "offline" };
+  // Fall back to the legacy `online` boolean if an older backend omits `status`.
+  const key = s.status ?? (s.online ? "online" : "offline");
+  return { ...(PILL[key] ?? PILL.error), detail: s.detail };
+}
+
 export default function ServicesView({ backend, reloadSignal }: { backend: Backend; reloadSignal: number }) {
   const health = backend.kind === "ok" ? backend.health : null;
   const [statuses, setStatuses] = useState<Record<string, ServiceStatus> | null>(null);
@@ -93,7 +109,7 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
             const meta = ROLE[name] ?? { role: "—", cls: "plan", Icon: IconDocument };
             const Icon = meta.Icon;
             const pending = statuses === null;
-            const online = statuses?.[name]?.online ?? false;
+            const pill = pillFor(statuses?.[name]);
             const shownUrl = urlOverride[name] ?? url;
             const isEditing = editing === name;
             return (
@@ -103,8 +119,11 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
                     <span className="svc-ico"><Icon size={17} /></span>
                     <span className="svc-name">{name}</span>
                   </span>
-                  <span className={`status-pill ${pending ? "" : online ? "ok" : "fail"}`}>
-                    <span className="dot" /> {pending ? "…" : online ? "online" : "offline"}
+                  <span
+                    className={`status-pill ${pending ? "" : pill.cls}`}
+                    title={pending ? undefined : pill.detail ?? undefined}
+                  >
+                    <span className="dot" /> {pending ? "…" : pill.label}
                   </span>
                 </div>
                 <div className="svc-role"><span className="svc-role-pill">{meta.role}</span> endpoint configured</div>

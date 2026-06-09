@@ -5,7 +5,7 @@ from __future__ import annotations
 from ..config import Settings, get_settings
 from ..store import WorkItemStore
 from .aifactory import AIFactoryAdapter
-from .base import AdapterError, AdapterItem, BaseHTTPAdapter
+from .base import AdapterError, AdapterItem, BaseHTTPAdapter, ServiceProbe
 from .pfactory import PFactoryAdapter
 from .tfactory import TFactoryAdapter
 
@@ -15,6 +15,7 @@ __all__ = [
     "AdapterItem",
     "BaseHTTPAdapter",
     "PFactoryAdapter",
+    "ServiceProbe",
     "TFactoryAdapter",
     "build_adapters",
     "hydrate",

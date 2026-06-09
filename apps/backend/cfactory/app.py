@@ -192,7 +192,16 @@ def create_app() -> FastAPI:
         for adapter in adapters:
             try:
                 items = await run_in_threadpool(adapter.list_items)
-                result[adapter.service.value] = await run_in_threadpool(hydrate, store, items)
+                hydrated = await run_in_threadpool(hydrate, store, items)
+                # Reconcile: drop stale non-terminal stages the upstream no longer
+                # reports, so finished/removed tasks stop showing as "running".
+                live_ids = {i.task_id for i in items}
+                cleared = await run_in_threadpool(
+                    store.reconcile_snapshot, adapter.service, live_ids
+                )
+                result[adapter.service.value] = (
+                    {"hydrated": hydrated, "cleared": cleared} if cleared else hydrated
+                )
             except AdapterError as exc:
                 result[adapter.service.value] = {"error": str(exc)}
             finally:

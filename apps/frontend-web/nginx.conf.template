@@ -14,12 +14,21 @@ server {
     root  /usr/share/nginx/html;
     index index.html;
 
-    # Don't cache the entry document (so new deploys are picked up); hashed
-    # assets under /assets are immutable and safely long-cached.
+    # Hashed assets under /assets are immutable and safely long-cached.
     location /assets/ {
         try_files $uri =404;
         expires 1y;
         add_header Cache-Control "public, immutable";
+    }
+
+    # The entry document must NEVER be cached (browser or CDN) or new deploys
+    # won't be picked up — clients keep loading the old bundle hash and see stale
+    # UI no matter how often they refresh. Applies to the SPA fallback too, since
+    # try_files below internal-redirects here.
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        expires -1;
     }
 
     # SPA fallback — client-side routes resolve to index.html.

@@ -32,7 +32,7 @@ from .adapters import (
     hydrate,
 )
 from .config import get_settings, load_service_overrides, set_service_url
-from .copilot import Copilot, get_copilot
+from .copilot import Copilot, get_copilot, provider_status
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline, token_totals
@@ -452,6 +452,13 @@ def create_app() -> FastAPI:
     async def copilot_ask(req: AskRequest, copilot: Copilot = Depends(copilot_dep)) -> dict[str, object]:
         result = await run_in_threadpool(copilot.ask, req.question)
         return {"answer": result.answer, "work_items_considered": result.work_items_considered}
+
+    @app.get("/api/copilot/provider")
+    async def copilot_provider() -> dict[str, object]:
+        """Active copilot LLM provider (#59). For an OpenAI-compatible endpoint
+        (e.g. Ollama Cloud) this probes {base}/models so the cockpit can confirm
+        connectivity and list the available cloud models."""
+        return await run_in_threadpool(provider_status, settings)
 
     @app.websocket("/api/ws")
     async def cockpit_feed(websocket: WebSocket) -> None:

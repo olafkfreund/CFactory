@@ -84,6 +84,14 @@ spec:
                   name: {{ .Values.upstreamToken.existingSecret }}
                   key: {{ .Values.upstreamToken.secretKey }}
             {{- end }}
+            {{- if .Values.ollamaApiKey.enabled }}
+            # Ollama Cloud / OpenAI-compatible copilot key (#59).
+            - name: OLLAMA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ollamaApiKey.existingSecret }}
+                  key: {{ .Values.ollamaApiKey.secretKey }}
+            {{- end }}
             {{- if .Values.apiKeys.enabled }}
             # Scoped API keys. Format: "<key>:read,write;<key2>:read".
             - name: CFACTORY_API_KEYS

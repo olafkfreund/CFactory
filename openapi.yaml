@@ -245,6 +245,36 @@ paths:
                   answer: { type: string }
                   work_items_considered: { type: integer }
 
+  /api/copilot/provider:
+    get:
+      tags: [Copilot]
+      summary: Active copilot LLM provider + Ollama Cloud connectivity (#59)
+      description: >-
+        Reports the active copilot provider ("claude" or "ollama"/openai-compatible)
+        and its model. When an Ollama Cloud / OpenAI-compatible key is configured,
+        probes {base}/models so the cockpit can confirm reachability and list the
+        available cloud models before switching the copilot over.
+      responses:
+        "200":
+          description: Provider status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider: { type: string, example: claude }
+                  model: { type: string }
+                  base_url: { type: string }
+                  has_key: { type: boolean }
+                  reachable:
+                    type: boolean
+                    nullable: true
+                    description: null when no OpenAI-compatible endpoint is configured.
+                  models:
+                    type: array
+                    items: { type: string }
+                  error: { type: string }
+
   /api/actions/propose:
     post:
       tags: [Actions]

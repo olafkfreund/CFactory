@@ -87,6 +87,88 @@ def _default_runner(model: str) -> AgentRunner:
     return run
 
 
+_OPENAI_PROVIDERS = frozenset({"ollama", "openai", "openai_compatible"})
+
+
+def _openai_compatible_runner(base_url: str, api_key: str | None, model: str) -> AgentRunner:
+    """Runner for any OpenAI-compatible chat endpoint — e.g. Ollama Cloud (#59).
+
+    POSTs to ``{base_url}/chat/completions`` with ``Authorization: Bearer`` (the
+    key stays in this process, never reaching the browser). ``base_url`` includes
+    the ``/v1`` suffix. Synchronous httpx call — the copilot already runs in a
+    threadpool.
+    """
+
+    def run(question: str, context: str, system_prompt: str) -> str:
+        import httpx
+
+        url = base_url.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Board snapshot:\n{context}\n\nQuestion: {question}"},
+            ],
+            "stream": False,
+        }
+        resp = httpx.post(url, json=payload, headers=headers, timeout=60.0)
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not choices:
+            return "(no response)"
+        return (choices[0].get("message", {}).get("content") or "").strip() or "(no response)"
+
+    return run
+
+
+def make_runner(settings: Settings) -> AgentRunner:
+    """Pick the copilot runner from ``copilot_provider``: Ollama Cloud / any
+    OpenAI-compatible endpoint, else the default Claude Agent SDK runner."""
+    provider = (settings.copilot_provider or "claude").lower()
+    if provider in _OPENAI_PROVIDERS:
+        return _openai_compatible_runner(
+            settings.ollama_cloud_base_url, settings.ollama_api_key, settings.copilot_model
+        )
+    return _default_runner(settings.copilot_model)
+
+
+def provider_status(settings: Settings | None = None) -> dict[str, object]:
+    """Describe the active copilot provider and, for OpenAI-compatible endpoints,
+    probe ``{base}/models`` so the UI can confirm connectivity + list cloud models.
+    Best-effort: a failure is reported, never raised."""
+    settings = settings or get_settings()
+    provider = (settings.copilot_provider or "claude").lower()
+    out: dict[str, object] = {"provider": provider, "model": settings.copilot_model}
+    # Probe the OpenAI-compatible endpoint when it's the active provider OR a key
+    # is configured — so the cockpit can verify Ollama Cloud is reachable before
+    # switching the copilot over to it (ask #4 in #59).
+    if provider not in _OPENAI_PROVIDERS and not settings.ollama_api_key:
+        return {**out, "reachable": None}
+    out["base_url"] = settings.ollama_cloud_base_url
+    out["has_key"] = bool(settings.ollama_api_key)
+    try:
+        import httpx
+
+        url = settings.ollama_cloud_base_url.rstrip("/") + "/models"
+        headers = (
+            {"Authorization": f"Bearer {settings.ollama_api_key}"}
+            if settings.ollama_api_key
+            else {}
+        )
+        resp = httpx.get(url, headers=headers, timeout=10.0)
+        resp.raise_for_status()
+        data = resp.json()
+        rows = data.get("data", []) if isinstance(data, dict) else []
+        out["reachable"] = True
+        out["models"] = [r.get("id") for r in rows if isinstance(r, dict)][:50]
+    except Exception as exc:  # noqa: BLE001 — surface, don't crash
+        out["reachable"] = False
+        out["error"] = str(exc)
+    return out
+
+
 class Copilot:
     """Read-only Q&A copilot over the WorkItem board."""
 
@@ -99,7 +181,7 @@ class Copilot:
     ) -> None:
         self._store = store
         self._settings = settings or get_settings()
-        self._runner = runner or _default_runner(self._settings.copilot_model)
+        self._runner = runner or make_runner(self._settings)
 
     def ask(self, question: str) -> CopilotAnswer:
         from .anomalies import anomalies_summary_line

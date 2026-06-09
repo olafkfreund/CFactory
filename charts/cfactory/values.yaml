@@ -99,9 +99,16 @@ config:
   # Connect to each upstream's WebSocket on startup. Off by default so the pod
   # doesn't reconnect-loop against upstreams that aren't up yet.
   subscribeUpstreams: false
-  # Agentic copilot model id (the Claude Agent SDK reads ANTHROPIC_API_KEY
-  # from the environment — supply it via extraEnv / a Secret if needed).
+  # Agentic copilot model id. Meaning depends on copilotProvider below: for
+  # "claude" it's a Claude model (SDK reads ANTHROPIC_API_KEY); for "ollama" it's
+  # a cloud model id, e.g. "gpt-oss:120b".
   copilotModel: "claude-opus-4-8"
+  # Copilot LLM provider (#59): "claude" (default) or "ollama"/"openai_compatible"
+  # for any OpenAI-compatible chat endpoint (Ollama Cloud). When "ollama", set
+  # copilotModel to a cloud model and enable ollamaApiKey below.
+  copilotProvider: "claude"
+  # Base URL (with /v1 suffix) for the OpenAI-compatible copilot endpoint.
+  ollamaCloudBaseUrl: "https://ollama.com/v1"
   # Multi-tenant mode (CFACTORY_MULTI_TENANT). Off by default (single-tenant,
   # "default"). When true, the tenant is resolved per request from the
   # X-Tenant-Id header. Per-tenant data isolation of queries is still deferred;
@@ -133,6 +140,15 @@ upstreamToken:
   enabled: false
   existingSecret: factory-secrets
   secretKey: APP_API_TOKEN
+
+# Ollama Cloud / OpenAI-compatible copilot key (#59). When enabled, OLLAMA_API_KEY
+# is injected from a Secret so the copilot can authenticate to the cloud endpoint.
+# Only needed when config.copilotProvider is "ollama"/"openai_compatible". Defaults
+# to the shared factory-secrets Secret (key OLLAMA_API_KEY).
+ollamaApiKey:
+  enabled: false
+  existingSecret: factory-secrets
+  secretKey: OLLAMA_API_KEY
 
 # WorkItem correlation store. When enabled, CFACTORY_DATABASE_URL is injected
 # from a Secret (key="database-url"). When disabled, the app runs without a

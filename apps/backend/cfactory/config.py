@@ -10,11 +10,14 @@ import json
 import os
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="CFACTORY_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="CFACTORY_", env_file=".env", extra="ignore", populate_by_name=True
+    )
 
     # Server
     backend_port: int = 3111
@@ -57,9 +60,32 @@ class Settings(BaseSettings):
     live_progress: bool = False
     poll_interval_seconds: float = 4.0
 
-    # Agentic copilot (#13). Model id for the Claude Agent SDK; the SDK reads
-    # ANTHROPIC_API_KEY from the environment.
+    # Agentic copilot (#13). Model id; meaning depends on copilot_provider below.
     copilot_model: str = "claude-opus-4-8"
+
+    # Copilot LLM provider (#59). "claude" (default; Claude Agent SDK, reads
+    # ANTHROPIC_API_KEY) or "ollama"/"openai_compatible" (any OpenAI-compatible
+    # chat-completions endpoint — e.g. Ollama Cloud at https://ollama.com/v1).
+    # When using Ollama Cloud, set copilot_model to a cloud model id (e.g.
+    # "gpt-oss:120b") and supply ollama_api_key below.
+    copilot_provider: str = "claude"
+
+    # OpenAI-compatible endpoint for the copilot when copilot_provider != "claude".
+    # base_url includes the /v1 suffix; the runner POSTs {base}/chat/completions
+    # and the connectivity check GETs {base}/models. The key is sent as
+    # `Authorization: Bearer <key>` and never leaves the backend. Accepts the bare
+    # OLLAMA_API_KEY / OLLAMA_CLOUD_BASE_URL env (matching the shared secret) as
+    # well as the CFACTORY_-prefixed forms.
+    ollama_cloud_base_url: str = Field(
+        default="https://ollama.com/v1",
+        validation_alias=AliasChoices(
+            "CFACTORY_OLLAMA_CLOUD_BASE_URL", "OLLAMA_CLOUD_BASE_URL"
+        ),
+    )
+    ollama_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CFACTORY_OLLAMA_API_KEY", "OLLAMA_API_KEY"),
+    )
 
     # Scoped API keys (#20). Local-first: when empty/None, auth enforcement is
     # OPEN (single-user local mode). When set, requests must carry a known key

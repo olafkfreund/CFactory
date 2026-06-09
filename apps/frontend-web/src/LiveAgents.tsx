@@ -25,7 +25,15 @@ type Phase = { loading: boolean; rmuxEnabled: boolean; agents: LiveAgent[] };
 
 /** One agent's live, read-only terminal. Streams ANSI bytes from the backend
  *  proxy into an xterm instance; disposes both on unmount. */
-export function AgentTerminal({ agent, fontSize }: { agent: LiveAgent; fontSize: number }) {
+export function AgentTerminal({
+  agent,
+  fontSize,
+  onEnded,
+}: {
+  agent: LiveAgent;
+  fontSize: number;
+  onEnded?: () => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,12 +61,23 @@ export function AgentTerminal({ agent, fontSize }: { agent: LiveAgent; fontSize:
     };
     refit();
 
+    let gotData = false;
     const ws = openAgentConsole(agent.ws_path);
     ws.onmessage = (ev) => {
+      gotData = true;
       if (typeof ev.data === "string") term.write(ev.data);
       else term.write(new Uint8Array(ev.data as ArrayBuffer));
     };
-    ws.onclose = () => term.write("\r\n\x1b[2m— stream ended —\x1b[0m\r\n");
+    ws.onclose = () => {
+      // No bytes before close → there's no live pane for this task (it finished
+      // or never started). Say so plainly rather than the cryptic "stream ended".
+      term.write(
+        gotData
+          ? "\r\n\x1b[2m— agent finished —\x1b[0m\r\n"
+          : "\r\n\x1b[2m— no live session (agent not running) —\x1b[0m\r\n",
+      );
+      onEnded?.();
+    };
 
     window.addEventListener("resize", refit);
     return () => {
@@ -66,7 +85,7 @@ export function AgentTerminal({ agent, fontSize }: { agent: LiveAgent; fontSize:
       ws.close();
       term.dispose();
     };
-  }, [agent.ws_path, fontSize]);
+  }, [agent.ws_path, fontSize, onEnded]);
 
   return <div className="mc-term" ref={host} />;
 }
@@ -126,15 +145,21 @@ export default function LiveAgents({ reloadSignal }: { reloadSignal: number }) {
 
   useEffect(() => {
     let alive = true;
-    fetchLiveAgents()
-      .then((r) => {
-        if (alive) setPhase({ loading: false, rmuxEnabled: r.rmux_enabled, agents: r.agents });
-      })
-      .catch(() => {
-        if (alive) setPhase({ loading: false, rmuxEnabled: false, agents: [] });
-      });
+    const poll = () =>
+      fetchLiveAgents()
+        .then((r) => {
+          if (alive) setPhase({ loading: false, rmuxEnabled: r.rmux_enabled, agents: r.agents });
+        })
+        .catch(() => {
+          if (alive) setPhase((p) => ({ ...p, loading: false }));
+        });
+    poll();
+    // Auto-refresh so agents appear when tasks start and disappear when they
+    // finish — no manual reload needed.
+    const id = window.setInterval(poll, 5000);
     return () => {
       alive = false;
+      window.clearInterval(id);
     };
   }, [reloadSignal]);
 

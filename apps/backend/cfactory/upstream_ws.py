@@ -71,11 +71,24 @@ async def handle_message(
     return event
 
 
+def _auth_headers(settings: Settings) -> dict[str, str]:
+    """Bearer header for the upstream WS feeds, matching the factories' REST auth.
+    Empty when no token is configured (local dev with auth disabled)."""
+    if settings.upstream_token:
+        return {"Authorization": f"Bearer {settings.upstream_token}"}
+    return {}
+
+
 async def consume_once(
-    ws_url: str, service: Service, store: WorkItemStore, manager: ConnectionManager
+    ws_url: str,
+    service: Service,
+    store: WorkItemStore,
+    manager: ConnectionManager,
+    *,
+    headers: dict[str, str] | None = None,
 ) -> CompletionEvent | None:
     """Connect, handle a single message, disconnect (used by tests)."""
-    async with websockets.connect(ws_url) as ws:
+    async with websockets.connect(ws_url, additional_headers=headers or {}) as ws:
         return await handle_message(service, await ws.recv(), store, manager)
 
 
@@ -86,11 +99,12 @@ async def subscribe(
     manager: ConnectionManager,
     *,
     retry_delay: float = 3.0,
+    headers: dict[str, str] | None = None,
 ) -> None:
     """Long-lived subscription with reconnect/backoff."""
     while True:
         try:
-            async with websockets.connect(ws_url) as ws:
+            async with websockets.connect(ws_url, additional_headers=headers or {}) as ws:
                 log.info("subscribed to %s at %s", service.value, ws_url)
                 async for raw in ws:
                     await handle_message(service, raw, store, manager)
@@ -106,7 +120,10 @@ def start_subscribers(
 ) -> list[asyncio.Task[None]]:
     """Spawn one subscriber task per service. Caller cancels them on shutdown."""
     settings = settings or get_settings()
+    headers = _auth_headers(settings)
     tasks: list[asyncio.Task[None]] = []
     for name, url in settings.upstream_ws_urls().items():
-        tasks.append(asyncio.create_task(subscribe(Service(name), url, store, manager)))
+        tasks.append(
+            asyncio.create_task(subscribe(Service(name), url, store, manager, headers=headers))
+        )
     return tasks

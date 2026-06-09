@@ -10,7 +10,8 @@ from .base import AdapterItem, BaseHTTPAdapter, first
 
 class PFactoryAdapter(BaseHTTPAdapter):
     service = Service.PFACTORY
-    list_path = "/api/plans"
+    # PFactory exposes plan sessions at /api/plan/sessions (response {"sessions": [...]}).
+    list_path = "/api/plan/sessions"
 
     def _normalize(self, row: dict[str, Any]) -> AdapterItem | None:
         task_id = first(row, "session_id", "id")

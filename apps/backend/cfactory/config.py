@@ -30,10 +30,19 @@ class Settings(BaseSettings):
     pfactory_api_url: str = "http://localhost:3105"
     tfactory_api_url: str = "http://localhost:3103"
 
+    # Shared bearer token for authenticated calls to the sibling factories. All
+    # three (PFactory/AIFactory/TFactory) guard their REST + WS surface with the
+    # same scheme — `Authorization: Bearer <APP_API_TOKEN>` — so the cockpit sends
+    # this token on every adapter request, the live-progress poll, and each
+    # upstream WS subscription. Leave unset for local dev where the factories run
+    # with APP_DISABLE_AUTH=true. Stays server-side — never sent to the browser.
+    upstream_token: str | None = None
+
     # Service token for AIFactory's live agent console WebSocket (#34). When set,
     # the live-agents proxy sends it as `Authorization: Bearer <token>` to the
-    # upstream rmux WS. Leave unset for local dev where AIFactory runs with
-    # DISABLE_AUTH. The token stays server-side — it is never sent to the browser.
+    # upstream rmux WS. Falls back to `upstream_token` when unset. Leave both unset
+    # for local dev where AIFactory runs with DISABLE_AUTH. The token stays
+    # server-side — it is never sent to the browser.
     aifactory_token: str | None = None
 
     # WorkItem correlation store (set when Postgres is wired in #6).

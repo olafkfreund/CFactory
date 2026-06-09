@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { fetchAnomalies, fetchRollups, fetchTokens, type Anomaly, type Rollups, type TokenTotals, type WorkItem } from "./api";
 import { useCountUp } from "./motion";
+import { activeStage } from "./taskState";
 import LiveAgents from "./LiveAgents";
 
 const NODES = [
@@ -13,12 +14,6 @@ const CONNECTORS = [
   { from: 0, x1: 162, x2: 268, color: "var(--plan)" },
   { from: 1, x1: 372, x2: 478, color: "var(--code)" },
 ];
-
-function furthest(wi: WorkItem): "pfactory" | "aifactory" | "tfactory" {
-  if (wi.tfactory.status) return "tfactory";
-  if (wi.aifactory.status) return "aifactory";
-  return "pfactory";
-}
 
 function fmtDur(s: number | null | undefined): string {
   if (s == null) return "—";
@@ -96,9 +91,19 @@ export default function MissionControl({ items, reloadSignal }: { items: WorkIte
     fetchTokens().then(setTokens).catch(() => setTokens(null));
   }, [reloadSignal]);
 
+  // Badges show live work only: each item is counted at the furthest stage that
+  // is still active (running / in review / queued). Finished or idle items drop
+  // off so the pipeline reflects what's happening now, not lifetime totals.
   const counts = useMemo(() => {
     const c = { pfactory: 0, aifactory: 0, tfactory: 0 };
-    for (const wi of items) c[furthest(wi)]++;
+    for (const wi of items) {
+      const stage = activeStage({
+        pfactory: wi.pfactory.status,
+        aifactory: wi.aifactory.status,
+        tfactory: wi.tfactory.status,
+      });
+      if (stage) c[stage]++;
+    }
     return c;
   }, [items]);
 

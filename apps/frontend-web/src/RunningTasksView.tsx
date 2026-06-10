@@ -126,8 +126,15 @@ export default function RunningTasksView({
   return (
     <>
       <div className="page-head">
-        <h1>Running tasks</h1>
-        <p>Live work across every factory sibling. Finished tasks drop out of Active — click a card for detail, open the console while an agent is live.</p>
+        <h1>Active tasks</h1>
+        <p>
+          In-flight work across every factory sibling — {counts.running} running,{" "}
+          {counts.review} in review{counts.active - counts.running - counts.review - counts.failed > 0
+            ? `, ${counts.active - counts.running - counts.review - counts.failed} queued`
+            : ""}
+          . Most are awaiting review, not actively running. Finished tasks drop out — click a card for
+          detail, open the console while an agent is live.
+        </p>
       </div>
 
       <div className="rt-toolbar">

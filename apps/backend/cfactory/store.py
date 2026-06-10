@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Integer, String, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
 
@@ -105,28 +106,37 @@ class WorkItemStore:
         relay-replayed deliveries don't double-count. Returns
         ``(work_item, applied)``.
         """
-        with self._session.begin() as session:
-            row = self._get_row(session, event.correlation_key)
-            if row is not None and _already_recorded(row.timeline, event):
-                return row.to_model(), False
+        # Two writers (poll loop + event ingest) can both miss the row and race
+        # to INSERT the same key. On the resulting IntegrityError, retry once —
+        # the row now exists, so the second pass takes the update path.
+        for attempt in range(2):
+            try:
+                with self._session.begin() as session:
+                    row = self._get_row(session, event.correlation_key)
+                    if row is not None and _already_recorded(row.timeline, event):
+                        return row.to_model(), False
 
-            if row is None:
-                row = WorkItemRow(correlation_key=event.correlation_key, timeline=[])
-                session.add(row)
+                    if row is None:
+                        row = WorkItemRow(correlation_key=event.correlation_key, timeline=[])
+                        session.add(row)
 
-            slice_ = ServiceState(
-                task_id=event.task_id,
-                status=event.status,
-                phase=event.phase,
-                usage=event.usage,
-            )
-            setattr(row, event.service.value, slice_.model_dump())
+                    slice_ = ServiceState(
+                        task_id=event.task_id,
+                        status=event.status,
+                        phase=event.phase,
+                        usage=event.usage,
+                    )
+                    setattr(row, event.service.value, slice_.model_dump())
 
-            # Reassign (not .append) so SQLAlchemy detects the JSON column change.
-            row.timeline = [*(row.timeline or []), event.model_dump(mode="json")]
-            row.updated_at = _now()
-            session.flush()
-            return row.to_model(), True
+                    # Reassign (not .append) so SQLAlchemy detects the JSON column change.
+                    row.timeline = [*(row.timeline or []), event.model_dump(mode="json")]
+                    row.updated_at = _now()
+                    session.flush()
+                    return row.to_model(), True
+            except IntegrityError:
+                if attempt == 1:
+                    raise
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def upsert_snapshot(
         self,
@@ -141,17 +151,24 @@ class WorkItemStore:
         Used by the REST adapters (#7-#9), which reflect current upstream state
         rather than discrete events.
         """
-        with self._session.begin() as session:
-            row = self._get_row(session, correlation_key)
-            if row is None:
-                row = WorkItemRow(correlation_key=correlation_key, timeline=[])
-                session.add(row)
-            setattr(row, service.value, state.model_dump())
-            if title and not row.title:
-                row.title = title
-            row.updated_at = _now()
-            session.flush()
-            return row.to_model()
+        # Same INSERT race as upsert_from_event — retry once on collision.
+        for attempt in range(2):
+            try:
+                with self._session.begin() as session:
+                    row = self._get_row(session, correlation_key)
+                    if row is None:
+                        row = WorkItemRow(correlation_key=correlation_key, timeline=[])
+                        session.add(row)
+                    setattr(row, service.value, state.model_dump())
+                    if title and not row.title:
+                        row.title = title
+                    row.updated_at = _now()
+                    session.flush()
+                    return row.to_model()
+            except IntegrityError:
+                if attempt == 1:
+                    raise
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def reconcile_snapshot(self, service: Service, live_task_ids: set[str]) -> int:
         """Clear stale non-terminal stages for ``service`` after a successful poll.

@@ -51,7 +51,7 @@ type Backend =
 const NAV: { id: View; label: string; Icon: typeof IconPipeline }[] = [
   { id: "overview", label: "Mission Control", Icon: IconInsights },
   { id: "pipeline", label: "Pipeline", Icon: IconPipeline },
-  { id: "running", label: "Running tasks", Icon: IconRunning },
+  { id: "running", label: "Active tasks", Icon: IconRunning },
   { id: "tokens", label: "Tokens", Icon: IconTokens },
   { id: "copilot", label: "Copilot", Icon: IconCopilot },
   { id: "audit", label: "Audit", Icon: IconAudit },

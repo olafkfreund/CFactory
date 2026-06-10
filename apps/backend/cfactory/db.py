@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -33,6 +33,24 @@ def resolve_database_url(settings: Settings | None = None) -> str:
 
 def make_engine(url: str | None = None) -> Engine:
     url = url or resolve_database_url()
-    # check_same_thread=False lets FastAPI's threadpool share a SQLite connection.
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    return create_engine(url, connect_args=connect_args, future=True)
+    is_sqlite = url.startswith("sqlite")
+    # check_same_thread=False lets FastAPI's threadpool share a SQLite connection;
+    # timeout makes the driver wait for a lock instead of erroring immediately.
+    connect_args = {"check_same_thread": False, "timeout": 30} if is_sqlite else {}
+    engine = create_engine(url, connect_args=connect_args, future=True)
+
+    if is_sqlite:
+        # SQLite defaults to a whole-database rollback-journal lock, so a read
+        # (e.g. GET /api/workitems) that collides with the poll loop's write
+        # fails with "database is locked" → HTTP 500. WAL lets readers run
+        # concurrently with a single writer; busy_timeout makes any remaining
+        # contention wait rather than raise. Applied on every new connection.
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=30000")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.close()
+
+    return engine

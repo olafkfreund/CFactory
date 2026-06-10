@@ -510,12 +510,21 @@ def create_app() -> FastAPI:
         return await run_in_threadpool(_settings_payload)
 
     @app.websocket("/api/ws")
-    async def cockpit_feed(websocket: WebSocket) -> None:
+    async def cockpit_feed(
+        websocket: WebSocket, store: WorkItemStore = Depends(store_dep)
+    ) -> None:
         await manager.connect(websocket)
         try:
+            # Push the current state immediately so a fresh or *reconnecting*
+            # client is up to date at once, rather than waiting for the next
+            # poll-loop broadcast (which is what made reconnects look stale).
+            snapshot = await run_in_threadpool(store.list)
+            await websocket.send_json(
+                {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
+            )
             while True:
-                # We don't expect client messages; this keeps the socket open
-                # and raises WebSocketDisconnect when the client goes away.
+                # Client sends periodic "ping" keepalives; we only need to drain
+                # them. receive_text raises WebSocketDisconnect when it goes away.
                 await websocket.receive_text()
         except WebSocketDisconnect:
             pass

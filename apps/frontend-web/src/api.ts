@@ -188,20 +188,83 @@ export async function fetchProgress(): Promise<LiveProgress[]> {
   return ((await resp.json()) as { items: LiveProgress[] }).items;
 }
 
-// Open the live cockpit feed. Returns the socket so the caller can close it.
-export function openFeed(onMessage: (msg: FeedMessage) => void, onOpen?: () => void, onClose?: () => void): WebSocket {
+export interface FeedHandle {
+  close(): void;
+}
+
+// Open the live cockpit feed with auto-reconnect + keepalive. The raw socket
+// is intentionally hidden: callers can't accidentally hold a dead reference.
+// - Keepalive: a "ping" text frame every 25s keeps proxies (Cloudflare reaps
+//   idle WebSockets ~100s) and the backend's receive loop from dropping us.
+// - Reconnect: on any close we retry with capped exponential backoff, so a
+//   network blip or proxy timeout no longer leaves the cockpit frozen on stale
+//   data. onOpen/onClose fire on every (re)connect so the live pill tracks it.
+export function openFeed(
+  onMessage: (msg: FeedMessage) => void,
+  onOpen?: () => void,
+  onClose?: () => void,
+): FeedHandle {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${window.location.host}/api/ws`);
-  ws.onmessage = (ev) => {
-    try {
-      onMessage(JSON.parse(ev.data) as FeedMessage);
-    } catch {
-      /* ignore malformed frames */
-    }
+  const url = `${proto}://${window.location.host}/api/ws`;
+  let ws: WebSocket | null = null;
+  let closedByCaller = false;
+  let backoff = 1000;
+  let pingTimer: number | undefined;
+  let reconnectTimer: number | undefined;
+
+  const connect = () => {
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      backoff = 1000;
+      onOpen?.();
+      pingTimer = window.setInterval(() => {
+        if (ws?.readyState === WebSocket.OPEN) {
+          try {
+            ws.send("ping");
+          } catch {
+            /* will surface as a close */
+          }
+        }
+      }, 25_000);
+    };
+    ws.onmessage = (ev) => {
+      try {
+        onMessage(JSON.parse(ev.data) as FeedMessage);
+      } catch {
+        /* ignore malformed frames */
+      }
+    };
+    ws.onerror = () => {
+      try {
+        ws?.close();
+      } catch {
+        /* onclose will handle retry */
+      }
+    };
+    ws.onclose = () => {
+      window.clearInterval(pingTimer);
+      onClose?.();
+      if (closedByCaller) return;
+      const delay = backoff;
+      backoff = Math.min(backoff * 2, 15_000);
+      reconnectTimer = window.setTimeout(connect, delay);
+    };
   };
-  if (onOpen) ws.onopen = onOpen;
-  if (onClose) ws.onclose = onClose;
-  return ws;
+
+  connect();
+
+  return {
+    close() {
+      closedByCaller = true;
+      window.clearInterval(pingTimer);
+      window.clearTimeout(reconnectTimer);
+      try {
+        ws?.close();
+      } catch {
+        /* ignore */
+      }
+    },
+  };
 }
 
 // --- Live agents (#33/#34): AIFactory rmux consoles proxied by the backend ---

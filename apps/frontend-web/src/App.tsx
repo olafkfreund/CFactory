@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AuditView from "./AuditView";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
@@ -19,6 +19,9 @@ import {
   type ServiceState,
   type WorkItem,
 } from "./api";
+import { diffEvents } from "./taskEvents";
+import { ensureNotifyPermission, osNotify, EVENT_LABEL, type EventKind, type TaskEvent } from "./notify";
+import type { TaskState } from "./taskState";
 import {
   IconAudit,
   IconBrand,
@@ -43,6 +46,10 @@ type View =
   | "audit"
   | "services"
   | "settings";
+interface ToastEntry {
+  id: number;
+  ev: TaskEvent;
+}
 type Backend =
   | { kind: "loading" }
   | { kind: "ok"; health: Health }
@@ -95,10 +102,38 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [progress, setProgress] = useState<Record<string, LiveProgress>>({});
+  const [toasts, setToasts] = useState<ToastEntry[]>([]);
+
+  // Notification plumbing: remember each task's last overall state so we only
+  // alert on genuine transitions, and seed the baseline silently on first load.
+  const statesRef = useRef<Map<string, TaskState>>(new Map());
+  const seededRef = useRef(false);
+  const toastIdRef = useRef(0);
+
+  const ingest = useCallback((incoming: WorkItem[]) => {
+    const events = diffEvents(statesRef.current, incoming, seededRef.current);
+    if (!seededRef.current) {
+      seededRef.current = true;
+      return; // first hydrate is not "news"
+    }
+    if (events.length === 0) return;
+    for (const ev of events) osNotify(ev);
+    setToasts((prev) => {
+      const next = [...prev];
+      for (const ev of events) next.push({ id: ++toastIdRef.current, ev });
+      return next.slice(-5); // keep the toast stack short
+    });
+  }, []);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   const load = useCallback(async () => {
     try {
-      setItems(await fetchWorkItems());
+      const fresh = await fetchWorkItems();
+      setItems(fresh);
+      ingest(fresh);
       setError(null);
       setTick((t) => t + 1);
     } catch (err) {
@@ -107,9 +142,10 @@ export default function App() {
     fetchProgress()
       .then((ps) => setProgress(Object.fromEntries(ps.map((p) => [p.correlation_key, p]))))
       .catch(() => undefined);
-  }, []);
+  }, [ingest]);
 
   useEffect(() => {
+    ensureNotifyPermission();
     fetchHealth()
       .then((health) => setBackend({ kind: "ok", health }))
       .catch((e: unknown) =>
@@ -121,20 +157,24 @@ export default function App() {
   useEffect(() => {
     const ws = openFeed(
       (msg) => {
-        if (msg.type === "snapshot") setItems(msg.items);
-        else if (msg.type === "progress")
+        if (msg.type === "snapshot") {
+          setItems(msg.items);
+          ingest(msg.items);
+        } else if (msg.type === "progress")
           setProgress((prev) => ({ ...prev, [msg.item.correlation_key]: msg.item }));
-        else
+        else {
           setItems((prev) => [
             msg.item,
             ...prev.filter((w) => w.correlation_key !== msg.item.correlation_key),
           ]);
+          ingest([msg.item]);
+        }
       },
       () => setLive(true),
       () => setLive(false),
     );
     return () => ws.close();
-  }, []);
+  }, [ingest]);
 
   const onRefresh = useCallback(async () => {
     setBusy(true);
@@ -208,7 +248,54 @@ export default function App() {
           {view === "settings" && <SettingsView reloadSignal={tick} />}
         </main>
       </div>
+
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>
+  );
+}
+
+const TOAST_KIND_CLASS: Record<EventKind, string> = {
+  new: "toast--new",
+  done: "toast--done",
+  failed: "toast--failed",
+  review: "toast--review",
+};
+
+function Toasts({ toasts, onDismiss }: { toasts: ToastEntry[]; onDismiss: (id: number) => void }) {
+  return (
+    <div className="toast-stack" role="status" aria-live="polite">
+      <AnimatePresence initial={false}>
+        {toasts.map((t) => (
+          <Toast key={t.id} entry={t} onDismiss={onDismiss} />
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function Toast({ entry, onDismiss }: { entry: ToastEntry; onDismiss: (id: number) => void }) {
+  useEffect(() => {
+    const id = window.setTimeout(() => onDismiss(entry.id), 7000);
+    return () => window.clearTimeout(id);
+  }, [entry.id, onDismiss]);
+  return (
+    <motion.div
+      className={`toast ${TOAST_KIND_CLASS[entry.ev.kind]}`}
+      initial={{ opacity: 0, x: 24 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 24, transition: { duration: 0.2 } }}
+      onClick={() => onDismiss(entry.id)}
+      role="button"
+      tabIndex={0}
+    >
+      <span className="toast-dot" />
+      <div className="toast-body">
+        <div className="toast-title">
+          {EVENT_LABEL[entry.ev.kind]} <span className="toast-key">#{entry.ev.key}</span>
+        </div>
+        <div className="toast-detail">{entry.ev.title}</div>
+      </div>
+    </motion.div>
   );
 }
 

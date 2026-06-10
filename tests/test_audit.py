@@ -43,11 +43,11 @@ def client_with_audit(store, audit):
 
 def _execute_body(**overrides):
     body = {
-        "kind": "trigger_handoff",
+        "kind": "recover",
         "correlation_key": "42",
         "target_service": "aifactory",
         "method": "POST",
-        "endpoint": "/api/tasks/create-and-run",
+        "endpoint": "/api/tasks/ai-7/recover",
         "payload": {"correlation_key": "42", "issue_number": 42},
         "rationale": "hand off",
     }
@@ -67,7 +67,7 @@ def test_execute_records_audit_entry(client_with_audit):
 
     resp = api.post("/api/actions/execute", json=_execute_body())
     assert resp.status_code == 200
-    assert resp.json() == {"status_code": 200, "ok": True, "body": {"ok": True}}
+    _r = resp.json(); assert _r["status_code"] == 200 and _r["ok"] is True and _r["body"] == {"ok": True}
 
     # Recorded in the store directly.
     entries = audit.list()
@@ -75,10 +75,10 @@ def test_execute_records_audit_entry(client_with_audit):
     entry = entries[0]
     # Actor comes from the identity seam; OPEN mode (no keys) -> "local".
     assert entry.actor == "local"
-    assert entry.kind == "trigger_handoff"
+    assert entry.kind == "recover"
     assert entry.correlation_key == "42"
     assert entry.target_service == "aifactory"
-    assert entry.endpoint == "/api/tasks/create-and-run"
+    assert entry.endpoint == "/api/tasks/ai-7/recover"
     assert entry.status_code == 200
     assert entry.ok is True
 
@@ -89,10 +89,10 @@ def test_execute_records_audit_entry(client_with_audit):
     assert body["count"] == 1
     got = body["entries"][0]
     assert got["actor"] == "local"
-    assert got["kind"] == "trigger_handoff"
+    assert got["kind"] == "recover"
     assert got["correlation_key"] == "42"
     assert got["target_service"] == "aifactory"
-    assert got["endpoint"] == "/api/tasks/create-and-run"
+    assert got["endpoint"] == "/api/tasks/ai-7/recover"
     assert got["status_code"] == 200
     assert got["ok"] is True
     assert "ts" in got
@@ -120,10 +120,10 @@ from cfactory.audit import AuditEntry, compute_entry_hash  # noqa: E402
 def _record(store, **overrides):
     body = {
         "actor": "tester",
-        "kind": "trigger_handoff",
+        "kind": "recover",
         "correlation_key": "k",
         "target_service": "aifactory",
-        "endpoint": "/api/tasks/create-and-run",
+        "endpoint": "/api/tasks/ai-7/recover",
         "status_code": 200,
         "ok": True,
     }
@@ -219,10 +219,10 @@ def test_compute_entry_hash_is_deterministic():
     values = {
         "ts": "2026-06-05T00:00:00+00:00",
         "actor": "local",
-        "kind": "trigger_handoff",
+        "kind": "recover",
         "correlation_key": "42",
         "target_service": "aifactory",
-        "endpoint": "/api/tasks/create-and-run",
+        "endpoint": "/api/tasks/ai-7/recover",
         "status_code": 200,
         "ok": True,
     }

@@ -9,6 +9,7 @@ import {
   type WorkItem,
 } from "./api";
 import { AgentTerminal } from "./LiveAgents";
+import TaskActions from "./TaskActions";
 
 const STAGES = [
   { key: "pfactory", label: "Plan", svc: "PFactory" },
@@ -44,10 +45,12 @@ export default function TaskDetail({
   wi,
   lp,
   onClose,
+  onActed,
 }: {
   wi: WorkItem;
   lp?: LiveProgress;
   onClose: () => void;
+  onActed?: () => void;
 }) {
   const [proc, setProc] = useState<ProcessDetail | null>(null);
   const [agent, setAgent] = useState<LiveAgent | null>(null);
@@ -118,6 +121,9 @@ export default function TaskDetail({
               );
             })}
           </div>
+
+          {/* Actions — approve / reject / unstick / remove */}
+          <TaskActions wi={wi} onActed={onActed} />
 
           {/* Live process */}
           <section className="td-section">

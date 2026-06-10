@@ -25,11 +25,11 @@ from cfactory.enterprise import (
 )
 
 EXECUTE_BODY = {
-    "kind": "trigger_handoff",
+    "kind": "recover",
     "correlation_key": "42",
     "target_service": "aifactory",
     "method": "POST",
-    "endpoint": "/api/tasks/create-and-run",
+    "endpoint": "/api/tasks/ai-7/recover",
     "payload": {"correlation_key": "42", "issue_number": 42},
     "rationale": "hand off",
 }

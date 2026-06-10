@@ -761,3 +761,63 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --- Task actions (approve / reject / unstick / remove) in TaskDetail --- */
+.td-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.act-btn {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.act-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.act--approve { border-color: var(--green); color: var(--green); }
+.act--reject  { border-color: var(--amber, var(--yellow)); color: var(--amber, var(--yellow)); }
+.act--recover { border-color: var(--cyan); color: var(--cyan); }
+.act--delete  { border-color: var(--red); color: var(--red); }
+.act--cancel  { color: var(--muted); }
+.act-panel { overflow: hidden; margin-top: 10px; }
+.act-reason label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.act-reason textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.act-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.act-confirm {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+}
+.act-rationale { font-size: 13px; color: var(--text); margin: 0 0 8px; }
+.act-calls { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.act-calls-h { font-size: 11px; color: var(--muted); }
+.act-calls code {
+  font-size: 11px;
+  color: var(--cyan);
+  background: var(--panel);
+  padding: 3px 6px;
+  border-radius: 5px;
+}
+.act-error { color: var(--red); font-size: 12px; margin-top: 8px; }
+.act-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.act-result--ok { color: var(--green); }
+.act-result--fail { color: var(--red); }

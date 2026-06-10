@@ -1,11 +1,14 @@
 """Prepared actions: advise + confirm, no autonomous writes.
 
 The cockpit never writes to an upstream service on its own. Each ``propose_*``
-tool only BUILDS a :class:`PreparedAction` describing the write it would make;
+tool only BUILDS a :class:`PreparedAction` describing the write(s) it would make;
 nothing touches a service until a separate, explicit :func:`execute_action`
-call (the confirmation step).
+call (the confirmation step). This keeps the human in the loop:
+propose -> review -> confirm -> execute, and every execute is audited.
 
-This keeps the human in the loop: propose -> review -> confirm -> execute.
+Endpoints target the factories' shared task API (``/api/tasks/{id}/...``),
+verified against the live OpenAPI specs. Writes carry the upstream bearer token
+so they pass the factories' ``TokenAuthMiddleware``.
 """
 
 from __future__ import annotations
@@ -17,8 +20,8 @@ import httpx
 from pydantic import BaseModel, field_validator
 
 from .config import Settings, get_settings
-from .models import Service
-from .store import WorkItemStore
+from .models import Service, WorkItem
+from .store import WorkItemStore, _is_terminal
 
 # Only safe HTTP verbs for a confirmed write to an internal service.
 _ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
@@ -38,34 +41,35 @@ def is_safe_endpoint(endpoint: str) -> bool:
     parts = urlsplit(endpoint)
     return parts.scheme == "" and parts.netloc == ""
 
-# Best-effort endpoint contracts for each target service. Kept as module
-# constants so they're easy to audit and adjust as the upstream surfaces firm up.
-APPROVE_GATE_ENDPOINT = "/api/plans/{session}/approve"
-TRIGGER_HANDOFF_ENDPOINT = "/api/tasks/create-and-run"
-KICK_HANDBACK_ENDPOINT = "/api/tasks/{task_id}/apply-correction"
 
-ActionKind = Literal["approve_gate", "trigger_handoff", "kick_handback"]
+# Real upstream task endpoints (all three factories expose the same surface).
+APPROVE_PLAN_ENDPOINT = "/api/tasks/{task_id}/approve-plan"
+CREATE_PR_ENDPOINT = "/api/tasks/{task_id}/worktree/create-pr"
+MERGE_ENDPOINT = "/api/tasks/{task_id}/worktree/merge"
+APPLY_CORRECTION_ENDPOINT = "/api/tasks/{task_id}/apply-correction"
+RECOVER_ENDPOINT = "/api/tasks/{task_id}/recover"
+DELETE_TASK_ENDPOINT = "/api/tasks/{task_id}"
+
+ActionKind = Literal[
+    "approve_plan",     # approve a plan gate (planning phase)
+    "approve_review",   # accept code in human_review → open PR, then merge
+    "reject_review",    # send code back to the QA fixer with a reason
+    "recover",          # unstick a stalled/errored task
+    "delete_task",      # remove the task from the upstream factory
+]
 
 
-class PreparedAction(BaseModel):
-    """A fully-described, not-yet-executed write against an upstream service."""
+class ActionStep(BaseModel):
+    """One HTTP write in a (possibly multi-step) prepared action."""
 
-    kind: ActionKind
-    correlation_key: str
-    target_service: str  # pfactory | aifactory | tfactory
-    method: str  # e.g. "POST"
+    method: str
     endpoint: str  # root-relative path on the target service (validated)
-    payload: dict[str, Any]
-    rationale: str  # human-readable "why"
+    payload: dict[str, Any] = {}
 
     @field_validator("endpoint")
     @classmethod
     def _validate_endpoint(cls, v: str) -> str:
-        # SSRF guard: reject absolute / protocol-relative URLs so the request
-        # can only ever target the resolved per-service base_url.
-        if not is_safe_endpoint(v):
-            raise ValueError("endpoint must be a root-relative path (no scheme or host)")
-        return v
+        return _check_endpoint(v)
 
     @field_validator("method")
     @classmethod
@@ -76,92 +80,179 @@ class PreparedAction(BaseModel):
         return m
 
 
-def propose_approve_gate(
-    store: WorkItemStore, correlation_key: str
-) -> PreparedAction | None:
-    """Propose approving PFactory's human-review gate to unlock plan emission."""
+def _check_endpoint(v: str) -> str:
+    if not is_safe_endpoint(v):
+        raise ValueError("endpoint must be a root-relative path (no scheme or host)")
+    return v
+
+
+class PreparedAction(BaseModel):
+    """A fully-described, not-yet-executed set of writes against an upstream.
+
+    The primary step is ``method``/``endpoint``/``payload``; ``follow_ups`` are
+    run in order only if the primary succeeds (e.g. approve = create-pr → merge).
+    """
+
+    kind: ActionKind
+    correlation_key: str
+    target_service: str  # pfactory | aifactory | tfactory
+    method: str
+    endpoint: str
+    payload: dict[str, Any] = {}
+    follow_ups: list[ActionStep] = []
+    rationale: str  # human-readable "why", shown in the confirm dialog
+
+    @field_validator("endpoint")
+    @classmethod
+    def _validate_endpoint(cls, v: str) -> str:
+        return _check_endpoint(v)
+
+    @field_validator("method")
+    @classmethod
+    def _validate_method(cls, v: str) -> str:
+        m = v.upper()
+        if m not in _ALLOWED_METHODS:
+            raise ValueError(f"method must be one of {sorted(_ALLOWED_METHODS)}")
+        return m
+
+
+def _review_target(wi: WorkItem) -> tuple[str, str] | None:
+    """The (service, task_id) of the furthest non-terminal stage holding a task.
+
+    Review / recover / delete act on the stage that is actually in flight — for
+    a code task in human_review that's AIFactory; a test in review would be
+    TFactory. Terminal (done/failed) stages are skipped. Returns None when no
+    actionable stage exists.
+    """
+    for attr, svc in (
+        ("tfactory", Service.TFACTORY),
+        ("aifactory", Service.AIFACTORY),
+        ("pfactory", Service.PFACTORY),
+    ):
+        slice_ = getattr(wi, attr)
+        if slice_.task_id and not _is_terminal(slice_.status):
+            return svc.value, slice_.task_id
+    return None
+
+
+def propose_approve_plan(store: WorkItemStore, correlation_key: str, note: str | None = None):
     wi = store.get(correlation_key)
-    if wi is None:
+    if wi is None or not wi.pfactory.task_id:
         return None
-    session = wi.pfactory.task_id
     return PreparedAction(
-        kind="approve_gate",
+        kind="approve_plan",
         correlation_key=correlation_key,
         target_service=Service.PFACTORY.value,
         method="POST",
-        endpoint=APPROVE_GATE_ENDPOINT.format(session=session),
+        endpoint=APPROVE_PLAN_ENDPOINT.format(task_id=wi.pfactory.task_id),
         payload={"approver": "cockpit"},
+        rationale=f"Approve the plan gate for {correlation_key!r} so it can move downstream.",
+    )
+
+
+def propose_approve_review(store: WorkItemStore, correlation_key: str, note: str | None = None):
+    wi = store.get(correlation_key)
+    if wi is None:
+        return None
+    target = _review_target(wi)
+    if target is None:
+        return None
+    service, task_id = target
+    return PreparedAction(
+        kind="approve_review",
+        correlation_key=correlation_key,
+        target_service=service,
+        method="POST",
+        endpoint=CREATE_PR_ENDPOINT.format(task_id=task_id),
+        payload={},
+        follow_ups=[ActionStep(method="POST", endpoint=MERGE_ENDPOINT.format(task_id=task_id))],
         rationale=(
-            f"Approve the PFactory plan gate for {correlation_key!r} "
-            "to unlock emission of the plan downstream."
+            f"Approve {correlation_key!r}: open the pull request for the work, "
+            "then merge it. This writes to the repository."
         ),
     )
 
 
-def propose_trigger_handoff(
-    store: WorkItemStore, correlation_key: str
-) -> PreparedAction | None:
-    """Propose handing the approved plan off to AIFactory for execution."""
+def propose_reject_review(store: WorkItemStore, correlation_key: str, note: str | None = None):
     wi = store.get(correlation_key)
     if wi is None:
         return None
-    issue_number = int(correlation_key) if correlation_key.isdigit() else None
+    target = _review_target(wi)
+    if target is None:
+        return None
+    service, task_id = target
+    reason = (note or "").strip() or "Rejected from the cockpit."
     return PreparedAction(
-        kind="trigger_handoff",
+        kind="reject_review",
         correlation_key=correlation_key,
-        target_service=Service.AIFACTORY.value,
+        target_service=service,
         method="POST",
-        endpoint=TRIGGER_HANDOFF_ENDPOINT,
-        payload={
-            "correlation_key": correlation_key,
-            "issue_number": issue_number,
-        },
-        rationale=(
-            f"Hand the approved plan for {correlation_key!r} to AIFactory "
-            "to create and run the coding task."
-        ),
+        endpoint=APPLY_CORRECTION_ENDPOINT.format(task_id=task_id),
+        payload={"reason": reason, "source": "cockpit"},
+        rationale=f"Reject {correlation_key!r} and send it back to the fixer: {reason}",
     )
 
 
-def propose_kick_handback(
-    store: WorkItemStore, correlation_key: str
-) -> PreparedAction | None:
-    """Propose re-running AIFactory's QA fixer for a handed-back unit of work."""
+def propose_recover(store: WorkItemStore, correlation_key: str, note: str | None = None):
     wi = store.get(correlation_key)
     if wi is None:
         return None
-    task_id = wi.aifactory.task_id
+    target = _review_target(wi)
+    if target is None:
+        return None
+    service, task_id = target
     return PreparedAction(
-        kind="kick_handback",
+        kind="recover",
         correlation_key=correlation_key,
-        target_service=Service.AIFACTORY.value,
+        target_service=service,
         method="POST",
-        endpoint=KICK_HANDBACK_ENDPOINT.format(task_id=task_id),
-        payload={"confirm": True, "source": "cockpit"},
+        endpoint=RECOVER_ENDPOINT.format(task_id=task_id),
+        payload={"source": "cockpit"},
+        rationale=f"Recover (unstick) the stalled task for {correlation_key!r}.",
+    )
+
+
+def propose_delete_task(store: WorkItemStore, correlation_key: str, note: str | None = None):
+    wi = store.get(correlation_key)
+    if wi is None:
+        return None
+    target = _review_target(wi)
+    if target is None:
+        return None
+    service, task_id = target
+    return PreparedAction(
+        kind="delete_task",
+        correlation_key=correlation_key,
+        target_service=service,
+        method="DELETE",
+        endpoint=DELETE_TASK_ENDPOINT.format(task_id=task_id),
+        payload={},
         rationale=(
-            f"Re-run the AIFactory QA fixer (apply-correction) for {correlation_key!r} "
-            "to address the handback."
+            f"Delete the task for {correlation_key!r} from {service}. "
+            "This permanently removes it upstream."
         ),
     )
 
 
 # Registry so callers (and the API) can dispatch by kind.
 PROPOSERS = {
-    "approve_gate": propose_approve_gate,
-    "trigger_handoff": propose_trigger_handoff,
-    "kick_handback": propose_kick_handback,
+    "approve_plan": propose_approve_plan,
+    "approve_review": propose_approve_review,
+    "reject_review": propose_reject_review,
+    "recover": propose_recover,
+    "delete_task": propose_delete_task,
 }
 
 
 def propose(
-    store: WorkItemStore, kind: str, correlation_key: str
+    store: WorkItemStore, kind: str, correlation_key: str, note: str | None = None
 ) -> PreparedAction | None:
     """Dispatch to the matching ``propose_*`` tool.
 
-    Raises ``KeyError`` for an unknown kind; returns ``None`` if no work item.
+    Raises ``KeyError`` for an unknown kind; returns ``None`` if no actionable
+    work item / stage exists for the correlation key.
     """
-    proposer = PROPOSERS[kind]
-    return proposer(store, correlation_key)
+    return PROPOSERS[kind](store, correlation_key, note)
 
 
 def _base_url_for(settings: Settings, target_service: str) -> str:
@@ -172,22 +263,35 @@ def _base_url_for(settings: Settings, target_service: str) -> str:
     }[target_service]
 
 
+def _do(client: httpx.Client, method: str, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    resp = client.request(method, endpoint, json=payload)
+    try:
+        body: Any = resp.json()
+    except ValueError:
+        body = resp.text
+    return {
+        "method": method,
+        "endpoint": endpoint,
+        "status_code": resp.status_code,
+        "ok": resp.is_success,
+        "body": body,
+    }
+
+
 def execute_action(
     action: PreparedAction,
     *,
     settings: Settings | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """Perform a CONFIRMED action over HTTP. Best-effort: never raises.
+    """Perform a CONFIRMED action (primary step + any follow-ups) over HTTP.
 
-    Resolves the target base URL from ``settings`` by ``target_service`` and
-    issues ``action.method action.endpoint`` with ``action.payload`` as JSON.
-    A custom ``transport`` (e.g. ``httpx.MockTransport``) can be injected for
-    hermetic tests, mirroring :class:`BaseHTTPAdapter`.
-
-    Returns ``{"status_code", "ok", "body"}`` on a completed request, or
-    ``{"status_code": 0, "ok": False, "error": ...}`` if the request itself
-    failed (connection error, timeout, etc).
+    Best-effort: never raises. Resolves the target base URL from ``settings`` by
+    ``target_service`` and issues each step with the upstream bearer token so it
+    passes the factories' auth. Follow-ups run only while the prior step
+    succeeds. Returns ``{status_code, ok, body, steps}`` (top-level mirrors the
+    last step for backward compatibility), or a ``status_code: 0`` error shape
+    if the request itself failed.
     """
     settings = settings or get_settings()
     try:
@@ -199,26 +303,35 @@ def execute_action(
             "error": f"unknown target_service: {action.target_service!r}",
         }
 
-    # Defense in depth: reject any non-root-relative endpoint that reached us
-    # (e.g. a programmatic caller bypassing the model validator).
-    if not is_safe_endpoint(action.endpoint):
-        return {
-            "status_code": 0,
-            "ok": False,
-            "error": "unsafe endpoint (must be a root-relative path)",
-        }
+    steps = [(action.method, action.endpoint, action.payload)] + [
+        (s.method, s.endpoint, s.payload) for s in action.follow_ups
+    ]
+    # Defense in depth: re-check every endpoint reached us as a safe path.
+    for _m, ep, _p in steps:
+        if not is_safe_endpoint(ep):
+            return {"status_code": 0, "ok": False, "error": "unsafe endpoint (must be root-relative)"}
 
+    headers = {}
+    if settings.upstream_token:
+        headers["Authorization"] = f"Bearer {settings.upstream_token}"
+
+    results: list[dict[str, Any]] = []
     try:
-        with httpx.Client(base_url=base_url, timeout=5.0, transport=transport) as client:
-            resp = client.request(action.method, action.endpoint, json=action.payload)
-        try:
-            body: Any = resp.json()
-        except ValueError:
-            body = resp.text
-        return {
-            "status_code": resp.status_code,
-            "ok": resp.is_success,
-            "body": body,
-        }
+        with httpx.Client(
+            base_url=base_url, timeout=10.0, transport=transport, headers=headers
+        ) as client:
+            for method, endpoint, payload in steps:
+                res = _do(client, method, endpoint, payload)
+                results.append(res)
+                if not res["ok"]:
+                    break  # stop the chain on first failure (don't merge a PR that didn't open)
     except httpx.HTTPError as exc:
-        return {"status_code": 0, "ok": False, "error": str(exc)}
+        return {"status_code": 0, "ok": False, "error": str(exc), "steps": results}
+
+    last = results[-1]
+    return {
+        "status_code": last["status_code"],
+        "ok": all(r["ok"] for r in results),
+        "body": last["body"],
+        "steps": results,
+    }

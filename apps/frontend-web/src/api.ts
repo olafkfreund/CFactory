@@ -374,6 +374,12 @@ export async function fetchRollups(): Promise<Rollups> {
   return (await resp.json()) as Rollups;
 }
 
+export interface ActionStep {
+  method: string;
+  endpoint: string;
+  payload?: Record<string, unknown>;
+}
+
 export interface PreparedAction {
   kind: string;
   correlation_key: string;
@@ -381,6 +387,7 @@ export interface PreparedAction {
   method: string;
   endpoint: string;
   payload: Record<string, unknown>;
+  follow_ups?: ActionStep[];
   rationale: string;
 }
 
@@ -389,6 +396,7 @@ export interface ExecuteResult {
   ok: boolean;
   body?: unknown;
   error?: string;
+  steps?: { method: string; endpoint: string; status_code: number; ok: boolean }[];
 }
 
 export interface AuditEntry {
@@ -407,12 +415,14 @@ export interface AuditEntry {
 export async function proposeAction(
   kind: string,
   correlation_key: string,
+  note?: string,
 ): Promise<PreparedAction> {
   const resp = await fetch("/api/actions/propose", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind, correlation_key }),
+    body: JSON.stringify({ kind, correlation_key, note }),
   });
+  if (resp.status === 404) throw new Error("no actionable task for this item");
   if (!resp.ok) throw new Error(`propose failed: HTTP ${resp.status}`);
   return (await resp.json()) as PreparedAction;
 }

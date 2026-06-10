@@ -60,6 +60,7 @@ class AskRequest(BaseModel):
 class ProposeRequest(BaseModel):
     kind: str
     correlation_key: str
+    note: str | None = None  # free-text reason, e.g. for reject_review
 
 
 class ServiceEndpointUpdate(BaseModel):
@@ -393,7 +394,7 @@ def create_app() -> FastAPI:
         Advise-only: this never touches an upstream service. 400 for an unknown
         kind; 404 if there's no work item for the correlation key."""
         try:
-            action = await run_in_threadpool(propose, store, req.kind, req.correlation_key)
+            action = await run_in_threadpool(propose, store, req.kind, req.correlation_key, req.note)
         except KeyError:
             raise HTTPException(status_code=400, detail=f"unknown action kind: {req.kind!r}")
         if action is None:

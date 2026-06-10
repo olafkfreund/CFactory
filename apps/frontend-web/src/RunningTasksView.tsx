@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType, type SVGProps } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { fetchLiveAgents, type LiveAgent, type LiveProgress, type ServiceState, type WorkItem } from "./api";
+import { fetchLiveAgents, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ServiceState, type WorkItem } from "./api";
 import { IconDocument, IconRobot, IconFlask } from "./icons";
 import { stageState, overallState, STATE_LABEL, STATE_PILL, type TaskState } from "./taskState";
 import TaskDetail from "./TaskDetail";
@@ -237,6 +237,7 @@ export default function RunningTasksView({
             wi={selected}
             lp={progress[selected.correlation_key]}
             onClose={() => setSelectedKey(null)}
+            onActed={() => void apiRefresh()}
           />
         )}
       </AnimatePresence>

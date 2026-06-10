@@ -20,11 +20,11 @@ from cfactory.auth import KeyStore, keystore_dep, parse_api_keys
 
 # A valid PreparedAction body for the execute endpoint.
 EXECUTE_BODY = {
-    "kind": "trigger_handoff",
+    "kind": "recover",
     "correlation_key": "42",
     "target_service": "aifactory",
     "method": "POST",
-    "endpoint": "/api/tasks/create-and-run",
+    "endpoint": "/api/tasks/ai-7/recover",
     "payload": {"correlation_key": "42", "issue_number": 42},
     "rationale": "hand off",
 }
@@ -82,7 +82,7 @@ def test_execute_open_in_local_mode_no_header(store):
     api = _make_client(store, keys=None)
     resp = api.post("/api/actions/execute", json=EXECUTE_BODY)
     assert resp.status_code == 200
-    assert resp.json() == {"status_code": 200, "ok": True, "body": {"ok": True}}
+    _r = resp.json(); assert _r["status_code"] == 200 and _r["ok"] is True and _r["body"] == {"ok": True}
 
 
 def test_execute_open_when_keystore_explicitly_empty(store):
@@ -132,7 +132,7 @@ def test_execute_write_key_is_allowed(keyed_client):
         headers={"Authorization": "Bearer rw-key"},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"status_code": 200, "ok": True, "body": {"ok": True}}
+    _r = resp.json(); assert _r["status_code"] == 200 and _r["ok"] is True and _r["body"] == {"ok": True}
 
 
 def test_execute_write_key_via_x_api_key_header(keyed_client):

@@ -531,6 +531,12 @@ def create_app() -> FastAPI:
         finally:
             manager.disconnect(websocket)
 
+    # Read-only MCP server at POST /mcp — the single PARR-pipeline visibility
+    # surface for external agents (Claude Code, the /parr-run conductor).
+    from .mcp import router as mcp_router
+
+    app.include_router(mcp_router)
+
     return app
 
 

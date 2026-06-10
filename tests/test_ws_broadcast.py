@@ -20,8 +20,18 @@ def _event(key="99"):
     }
 
 
+def test_connect_sends_initial_snapshot(client):
+    # A fresh client must receive the current state immediately on connect, so
+    # a reconnecting cockpit is up to date without waiting for the next poll.
+    with client.websocket_connect("/api/ws") as ws:
+        msg = ws.receive_json()
+        assert msg["type"] == "snapshot"
+        assert isinstance(msg["items"], list)
+
+
 def test_event_broadcasts_to_connected_cockpit(client):
     with client.websocket_connect("/api/ws") as ws:
+        assert ws.receive_json()["type"] == "snapshot"  # drain initial snapshot
         assert client.post("/api/events", json=_event("99")).status_code == 200
         msg = ws.receive_json()
         assert msg["type"] == "workitem"
@@ -43,6 +53,7 @@ def test_refresh_broadcasts_snapshot(store):
     test_client = TestClient(app)
 
     with test_client.websocket_connect("/api/ws") as ws:
+        assert ws.receive_json()["type"] == "snapshot"  # drain initial snapshot
         test_client.post("/api/refresh")
         msg = ws.receive_json()
         assert msg["type"] == "snapshot"

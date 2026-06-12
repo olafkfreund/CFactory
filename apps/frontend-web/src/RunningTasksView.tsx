@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { fetchLiveAgents, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ServiceState, type WorkItem } from "./api";
 import { IconDocument, IconRobot, IconFlask } from "./icons";
 import { stageState, overallState, STATE_LABEL, STATE_PILL, type TaskState } from "./taskState";
+import { displayTitle, keySlug } from "./correlationKey";
 import TaskDetail from "./TaskDetail";
 import AgentConsoleModal from "./AgentConsoleModal";
 
@@ -35,10 +36,11 @@ function buildRow(wi: WorkItem, lp: LiveProgress | undefined): Row | null {
   stageStates.forEach((s, i) => { if (s !== "idle") activeIdx = i; });
   const failedIdx = stageStates.findIndex((s) => s === "failed");
 
+  // Honest numbers only: real live percent while running, 100 when done.
+  // A failed task gets a broken-bar treatment, never a synthetic "53%".
   let percent: number | null;
   if (overall === "done") percent = 100;
   else if (overall === "running" && lp && lp.percent != null) percent = Math.max(0, Math.min(100, lp.percent));
-  else if (overall === "failed") percent = Math.round(((failedIdx + 0.6) / 3) * 100);
   else percent = null;
 
   const cur = slots[activeIdx];
@@ -170,8 +172,8 @@ export default function RunningTasksView({
               >
                 <div className="rt-head">
                   <span className="rt-ident">
-                    <span className="rt-key">#{r.wi.correlation_key}</span>
-                    {r.wi.title && <span className="rt-title">{r.wi.title}</span>}
+                    <span className="rt-key" title={r.wi.correlation_key}>#{keySlug(r.wi.correlation_key)}</span>
+                    <span className="rt-title">{displayTitle(r.wi.title, r.wi.correlation_key)}</span>
                   </span>
                   <span className={`status-pill ${STATE_PILL[r.overall]}`}>
                     <span className="dot" /> {STATE_LABEL[r.overall]}
@@ -196,8 +198,12 @@ export default function RunningTasksView({
                   })}
                 </div>
 
-                <div className={`rt-bar rt-bar--${r.overall} ${r.percent === null ? "rt-bar--indet" : ""}`}>
-                  {r.percent === null ? (
+                <div
+                  className={`rt-bar rt-bar--${r.overall} ${r.percent === null && r.overall !== "failed" ? "rt-bar--indet" : ""}`}
+                >
+                  {r.overall === "failed" ? (
+                    <span className="rt-bar-broken" title={r.whatsLeft} />
+                  ) : r.percent === null ? (
                     <span className="rt-bar-indet" />
                   ) : (
                     <motion.span

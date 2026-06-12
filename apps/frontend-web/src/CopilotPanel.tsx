@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown";
+import { keySlug } from "./correlationKey";
 import {
   askCopilot,
   executeAction,
@@ -131,7 +132,7 @@ export default function CopilotPanel({ reloadSignal }: { reloadSignal: number })
               <div className={`card card--${a.severity}`} key={`${a.correlation_key}-${a.kind}-${i}`}>
                 <div className="card-head">
                   <span className="card-kind">{a.kind}</span>
-                  <span className="card-key">#{a.correlation_key}</span>
+                  <span className="card-key" title={a.correlation_key}>#{keySlug(a.correlation_key)}</span>
                 </div>
                 <div className="card-detail">{a.detail}</div>
                 {actionKind && !prepared && (
@@ -182,7 +183,7 @@ export default function CopilotPanel({ reloadSignal }: { reloadSignal: number })
           audit.map((e) => (
             <div className="audit-row" key={e.id}>
               <span className="card-kind">{e.kind}</span>
-              <span className="card-key">#{e.correlation_key}</span>
+              <span className="card-key" title={e.correlation_key}>#{keySlug(e.correlation_key)}</span>
               <span className={e.ok ? "audit-ok" : "audit-fail"}>
                 {e.ok ? "ok" : "fail"} {e.status_code}
               </span>

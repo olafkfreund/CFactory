@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AgentTerminal } from "./LiveAgents";
 import type { LiveAgent } from "./api";
+import { keySlug } from "./correlationKey";
 
 /** Full-screen-ish modal hosting one agent's read-only live rmux terminal.
  *  Reused by the Live agents panel and the Running tasks view. When the upstream
@@ -35,7 +36,7 @@ export default function AgentConsoleModal({
         >
           <div className="mc-term-modal-head">
             <span className={`mc-agent-dot ${ended ? "" : "mc-agent-dot--live"}`} />
-            <strong>#{agent.correlation_key}</strong>
+            <strong title={agent.correlation_key}>#{keySlug(agent.correlation_key)}</strong>
             {agent.title && <span className="mc-agent-sub">{agent.title}</span>}
             {agent.phase && <span className="mc-agent-sub">· {agent.phase}</span>}
             {ended && <span className="mc-agent-sub mc-agent-sub--ended">agent finished</span>}

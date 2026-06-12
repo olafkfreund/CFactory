@@ -7,7 +7,7 @@ import {
   type ExecuteResult,
   type WorkItem,
 } from "./api";
-import { overallState, stageState, STATE_LABEL } from "./taskState";
+import { activeStage, overallState, stageState, STATE_LABEL } from "./taskState";
 
 // The action set the cockpit can drive on an in-flight / stuck task. Each maps
 // to a backend propose_* tool, which builds the real upstream call(s); nothing
@@ -49,6 +49,13 @@ export default function TaskActions({
 
   const states = [wi.pfactory, wi.aifactory, wi.tfactory].map((s) => stageState(s.status));
   const overall = overallState(states);
+  // The stage an action would target (furthest active) — matches the backend's
+  // _review_target. PFactory plan sessions have no upstream delete.
+  const active = activeStage({
+    pfactory: wi.pfactory.status,
+    aifactory: wi.aifactory.status,
+    tfactory: wi.tfactory.status,
+  });
 
   /** Why a button is unavailable in the task's current state, or null when ok. */
   const gate = (kind: Kind): string | null => {
@@ -63,7 +70,9 @@ export default function TaskActions({
           ? null
           : `only for stuck or failed tasks — this one is ${STATE_LABEL[overall]}`;
       case "delete_task":
-        return null; // always available (confirm step guards it)
+        return active === "pfactory"
+          ? "PFactory plans can't be deleted — use Reject to send it back"
+          : null; // code/test: always available (confirm step guards it)
     }
   };
 

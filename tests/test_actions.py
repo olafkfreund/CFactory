@@ -120,6 +120,45 @@ def test_propose_delete_task_uses_delete_verb(store):
     assert action.endpoint == "/api/tasks/ai-7"
 
 
+# --------------------------------------------------------------------------
+# PFactory plan-stage routing (#bug: plan sessions use /api/plan/sessions/{id}/*,
+# not the AIFactory-style /api/tasks/{id} surface — and have no delete)
+# --------------------------------------------------------------------------
+
+def _seed_plan(store, key="013-probe2"):
+    _seed(store, service=Service.PFACTORY, correlation_key=key, task_id=key,
+          status="human_review", phase="plan")
+
+
+def test_propose_approve_review_plan_uses_session_approve(store):
+    _seed_plan(store)
+    action = propose_approve_review(store, "013-probe2")
+    assert action.target_service == "pfactory"
+    assert action.method == "POST"
+    assert action.endpoint == "/api/plan/sessions/013-probe2/approve"
+    assert action.payload["approver"] == "cockpit"
+    assert action.follow_ups == []  # no PR/merge for a plan
+
+
+def test_propose_reject_review_plan_uses_session_reject(store):
+    _seed_plan(store)
+    action = propose_reject_review(store, "013-probe2", note="needs scope cut")
+    assert action.endpoint == "/api/plan/sessions/013-probe2/reject"
+    assert action.payload == {"approver": "cockpit", "feedback": "needs scope cut"}
+
+
+def test_propose_recover_plan_uses_session_process(store):
+    _seed_plan(store)
+    action = propose_recover(store, "013-probe2")
+    assert action.endpoint == "/api/plan/sessions/013-probe2/process"
+
+
+def test_propose_delete_task_unsupported_for_plan(store):
+    _seed_plan(store)
+    # PFactory has no session delete — "remove" must not be proposable for a plan.
+    assert propose_delete_task(store, "013-probe2") is None
+
+
 def test_review_target_prefers_furthest_nonterminal_stage(store):
     # pfactory done (terminal) + aifactory in review → target aifactory.
     _seed(store, service=Service.PFACTORY, correlation_key="42", task_id="p1", status="done")

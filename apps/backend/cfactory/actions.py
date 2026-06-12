@@ -42,13 +42,24 @@ def is_safe_endpoint(endpoint: str) -> bool:
     return parts.scheme == "" and parts.netloc == ""
 
 
-# Real upstream task endpoints (all three factories expose the same surface).
+# Code/test task endpoints — AIFactory & TFactory expose this surface and accept
+# the task_id we hold for those stages.
 APPROVE_PLAN_ENDPOINT = "/api/tasks/{task_id}/approve-plan"
 CREATE_PR_ENDPOINT = "/api/tasks/{task_id}/worktree/create-pr"
 MERGE_ENDPOINT = "/api/tasks/{task_id}/worktree/merge"
 APPLY_CORRECTION_ENDPOINT = "/api/tasks/{task_id}/apply-correction"
 RECOVER_ENDPOINT = "/api/tasks/{task_id}/recover"
 DELETE_TASK_ENDPOINT = "/api/tasks/{task_id}"
+
+# PFactory plan-stage actions operate on plan *sessions* by bare session_id, NOT
+# the generic /api/tasks/{task_id} surface (PFactory only accepts that as the
+# compound 'project_id:spec_id', which the cockpit doesn't carry). PFactory has no
+# session-delete endpoint, so "remove" is unavailable for a plan-stage item.
+PF_SESSION_APPROVE = "/api/plan/sessions/{sid}/approve"
+PF_SESSION_REJECT = "/api/plan/sessions/{sid}/reject"
+PF_SESSION_PROCESS = "/api/plan/sessions/{sid}/process"
+
+_PFACTORY = Service.PFACTORY.value
 
 ActionKind = Literal[
     "approve_plan",     # approve a plan gate (planning phase)
@@ -158,6 +169,17 @@ def propose_approve_review(store: WorkItemStore, correlation_key: str, note: str
     if target is None:
         return None
     service, task_id = target
+    if service == _PFACTORY:
+        # Plan stage: approve the plan session so it can move downstream.
+        return PreparedAction(
+            kind="approve_review",
+            correlation_key=correlation_key,
+            target_service=service,
+            method="POST",
+            endpoint=PF_SESSION_APPROVE.format(sid=task_id),
+            payload={"approver": "cockpit", "feedback": (note or "").strip()},
+            rationale=f"Approve the plan {correlation_key!r} so it can move to code.",
+        )
     return PreparedAction(
         kind="approve_review",
         correlation_key=correlation_key,
@@ -182,6 +204,17 @@ def propose_reject_review(store: WorkItemStore, correlation_key: str, note: str 
         return None
     service, task_id = target
     reason = (note or "").strip() or "Rejected from the cockpit."
+    if service == _PFACTORY:
+        # Plan stage: reject the plan session (sends it back with feedback).
+        return PreparedAction(
+            kind="reject_review",
+            correlation_key=correlation_key,
+            target_service=service,
+            method="POST",
+            endpoint=PF_SESSION_REJECT.format(sid=task_id),
+            payload={"approver": "cockpit", "feedback": reason},
+            rationale=f"Reject the plan {correlation_key!r} and send it back: {reason}",
+        )
     return PreparedAction(
         kind="reject_review",
         correlation_key=correlation_key,
@@ -201,6 +234,17 @@ def propose_recover(store: WorkItemStore, correlation_key: str, note: str | None
     if target is None:
         return None
     service, task_id = target
+    if service == _PFACTORY:
+        # Plan stage: re-run the plan session's processing to unstick it.
+        return PreparedAction(
+            kind="recover",
+            correlation_key=correlation_key,
+            target_service=service,
+            method="POST",
+            endpoint=PF_SESSION_PROCESS.format(sid=task_id),
+            payload={},
+            rationale=f"Re-process the plan session {correlation_key!r} to unstick it.",
+        )
     return PreparedAction(
         kind="recover",
         correlation_key=correlation_key,
@@ -220,6 +264,11 @@ def propose_delete_task(store: WorkItemStore, correlation_key: str, note: str | 
     if target is None:
         return None
     service, task_id = target
+    if service == _PFACTORY:
+        # PFactory plan sessions have no delete endpoint — "remove" is not
+        # available for a plan-stage item (use Reject to send it back). The UI
+        # disables Remove for plan tasks; this is the backend safety net.
+        return None
     return PreparedAction(
         kind="delete_task",
         correlation_key=correlation_key,

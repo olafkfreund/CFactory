@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchTokens, type TokenTotals } from "./api";
 import { useCountUp } from "./motion";
+import { displayTitle, keySlug } from "./correlationKey";
 
 const SERVICES = [
   { key: "pfactory", label: "Plan", svc: "PFactory", cls: "plan" },
@@ -78,8 +79,8 @@ export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
         ) : (
           data.by_work_item.map((w) => (
             <div className="table-row" key={w.correlation_key} style={{ gridTemplateColumns: "1.2fr 2.4fr 1fr 0.8fr" }}>
-              <span className="t-key">#{w.correlation_key}</span>
-              <span className="t-target">{w.title || "—"}</span>
+              <span className="t-key" title={w.correlation_key}>#{keySlug(w.correlation_key)}</span>
+              <span className="t-target">{displayTitle(w.title, w.correlation_key)}</span>
               <span className="ta-r mono">{fmtTokens(w.total_tokens)}</span>
               <span className="ta-r mono">${w.cost_usd.toFixed(2)}</span>
             </div>

@@ -6,6 +6,7 @@
 import type { WorkItem } from "./api";
 import { overallState, stageState, type TaskState } from "./taskState";
 import type { EventKind, TaskEvent } from "./notify";
+import { displayTitle } from "./correlationKey";
 
 export function stateOf(wi: WorkItem): TaskState {
   return overallState([
@@ -39,7 +40,7 @@ export function diffEvents(
     prev.set(wi.correlation_key, cur);
     if (!seeded || cur === was) continue;
 
-    const label = wi.title || wi.correlation_key;
+    const label = displayTitle(wi.title, wi.correlation_key);
     if (was === undefined) {
       // Newly seen mid-session = a task entered the pipeline. Skip if it shows
       // up already finished/idle (backfill, not real news).

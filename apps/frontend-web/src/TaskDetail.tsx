@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   fetchLiveAgents,
@@ -10,12 +10,19 @@ import {
 } from "./api";
 import { AgentTerminal } from "./LiveAgents";
 import TaskActions from "./TaskActions";
+import { displayTitle, keySlug } from "./correlationKey";
+import { stageState } from "./taskState";
 
 const STAGES = [
   { key: "pfactory", label: "Plan", svc: "PFactory" },
   { key: "aifactory", label: "Code", svc: "AIFactory" },
   { key: "tfactory", label: "Test", svc: "TFactory" },
 ] as const;
+
+// Keep the modal honest *and* fresh: re-fetch process/live-agent state on this
+// cadence while it's open, so a modal left up on the always-on monitor never
+// shows stale truth.
+const POLL_MS = 4000;
 
 function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -26,16 +33,40 @@ function timeAgo(iso: string | null | undefined): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-function Bar({ pct, label }: { pct: number | null | undefined; label: string }) {
+function Bar({ pct, label, failed }: { pct: number | null | undefined; label: string; failed?: boolean }) {
   const v = typeof pct === "number" ? Math.max(0, Math.min(100, pct)) : null;
   return (
     <div className="td-bar">
       <div className="td-bar-label">
         <span>{label}</span>
-        <span>{v == null ? "—" : `${Math.round(v)}%`}</span>
+        <span>{v == null ? "—" : `${Math.round(v)}%${failed ? " · failed" : ""}`}</span>
       </div>
       <div className="td-bar-track">
-        <div className="td-bar-fill" style={{ width: `${v ?? 0}%` }} />
+        <div
+          className={`td-bar-fill ${failed ? "td-bar-fill--failed" : ""}`}
+          style={{ width: `${v ?? 0}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Segmented progress when subtasks failed: green = completed, red = failed,
+ *  track = remaining. Never a clean 100% when something broke. */
+function SegmentedBar({ done, failed, total }: { done: number; failed: number; total: number }) {
+  const dp = total > 0 ? (done / total) * 100 : 0;
+  const fp = total > 0 ? (failed / total) * 100 : 0;
+  return (
+    <div className="td-bar">
+      <div className="td-bar-label">
+        <span>Overall</span>
+        <span>
+          {done}/{total} done · {failed} failed
+        </span>
+      </div>
+      <div className="td-bar-track td-bar-track--seg">
+        <div className="td-seg td-seg--done" style={{ width: `${dp}%` }} />
+        <div className="td-seg td-seg--failed" style={{ width: `${fp}%` }} />
       </div>
     </div>
   );
@@ -54,18 +85,28 @@ export default function TaskDetail({
 }) {
   const [proc, setProc] = useState<ProcessDetail | null>(null);
   const [agent, setAgent] = useState<LiveAgent | null>(null);
+  const [copied, setCopied] = useState(false);
   const key = wi.correlation_key;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Set by TaskActions while the reject-reason textarea has text: an overlay
+  // click must not throw that away. Escape still closes.
+  const reasonDirtyRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
-    fetchProcess(key)
-      .then((p) => alive && setProc(p))
-      .catch(() => alive && setProc({ available: false, correlation_key: key }));
-    fetchLiveAgents()
-      .then((r) => alive && setAgent(r.agents.find((a) => a.correlation_key === key) ?? null))
-      .catch(() => alive && setAgent(null));
+    const load = () => {
+      fetchProcess(key)
+        .then((p) => alive && setProc(p))
+        .catch(() => alive && setProc({ available: false, correlation_key: key }));
+      fetchLiveAgents()
+        .then((r) => alive && setAgent(r.agents.find((a) => a.correlation_key === key) ?? null))
+        .catch(() => alive && setAgent(null));
+    };
+    load();
+    const id = window.setInterval(load, POLL_MS);
     return () => {
       alive = false;
+      window.clearInterval(id);
     };
   }, [key]);
 
@@ -75,11 +116,66 @@ export default function TaskDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Focus trap: focus the dialog on open, keep Tab cycling inside it, and
+  // hand focus back to wherever the user was when it closes.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const dlg = dialogRef.current;
+      if (!dlg) return;
+      const focusables = Array.from(
+        dlg.querySelectorAll<HTMLElement>(
+          'button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute("disabled"));
+      if (focusables.length === 0) {
+        e.preventDefault();
+        dlg.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === dlg)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", trap);
+    return () => {
+      document.removeEventListener("keydown", trap);
+      opener?.focus();
+    };
+  }, []);
+
+  const copyKey = useCallback(() => {
+    navigator.clipboard
+      ?.writeText(key)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1400);
+      })
+      .catch(() => undefined);
+  }, [key]);
+
   // Live progress (from the /api/ws feed, threaded by the board) overrides the
-  // snapshot fetched on open.
+  // snapshot fetched on open — but it's reconciled against the subtask list
+  // below so a run with failed subtasks can never show a clean 100%.
   const overall = lp?.percent ?? proc?.progress?.overall_percent ?? null;
   const phase = lp?.phase ?? proc?.progress?.phase ?? wi.aifactory.phase ?? null;
   const subtask = lp?.subtask ?? proc?.progress?.current_subtask ?? null;
+
+  const subStates = (proc?.subtasks ?? []).map((s) => stageState(s.status));
+  const subDone = subStates.filter((s) => s === "done").length;
+  const subFailed = subStates.filter((s) => s === "failed").length;
+  const stageFailed = STAGES.some((s) => stageState(wi[s.key].status) === "failed");
+
+  const procAvailable = proc != null && proc.available !== false;
 
   return (
     <motion.div
@@ -87,7 +183,9 @@ export default function TaskDetail({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      onClick={onClose}
+      onClick={() => {
+        if (!reasonDirtyRef.current) onClose();
+      }}
     >
       <motion.div
         className="mc-term-modal td-modal"
@@ -95,11 +193,23 @@ export default function TaskDetail({
         animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.96, opacity: 0 }}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="td-title"
+        tabIndex={-1}
+        ref={dialogRef}
       >
         <div className="mc-term-modal-head">
-          <span className="wi-key">#{key}</span>
-          <strong className="td-title">{wi.title || "Untitled work item"}</strong>
-          <button className="mc-term-close" onClick={onClose}>
+          <span className="wi-key td-head-key" title={key}>#{keySlug(key)}</span>
+          <button
+            className={`td-copy ${copied ? "td-copy--ok" : ""}`}
+            onClick={copyKey}
+            title={`Copy full correlation key: ${key}`}
+          >
+            {copied ? "✓ copied" : "copy"}
+          </button>
+          <strong className="td-title" id="td-title">{displayTitle(wi.title, key)}</strong>
+          <button className="mc-term-close" onClick={onClose} aria-label="Close task detail">
             ✕
           </button>
         </div>
@@ -123,57 +233,69 @@ export default function TaskDetail({
           </div>
 
           {/* Actions — approve / reject / unstick / remove */}
-          <TaskActions wi={wi} onActed={onActed} />
+          <TaskActions
+            wi={wi}
+            onActed={onActed}
+            onReasonDirty={(dirty) => {
+              reasonDirtyRef.current = dirty;
+            }}
+          />
 
-          {/* Live process */}
-          <section className="td-section">
-            <h3>Process</h3>
-            {proc && !proc.available ? (
-              <p className="mc-note">
-                Live process detail unavailable{proc.reason ? ` (${proc.reason})` : ""}.
-              </p>
-            ) : (
-              <>
-                <div className="td-proc-meta">
-                  <span>phase: <b>{phase || "—"}</b></span>
-                  {subtask && <span>· {subtask}</span>}
-                  {proc?.progress?.message && <span className="mc-note">{proc.progress.message}</span>}
-                </div>
-                <Bar pct={overall} label="Overall" />
-                <Bar pct={proc?.progress?.phase_percent} label="Phase" />
-                {proc?.subtasks && proc.subtasks.length > 0 && (
-                  <ul className="td-subtasks">
-                    {proc.subtasks.map((s, i) => (
-                      <li key={i} className={`td-sub td-sub--${(s.status || "").toLowerCase()}`}>
-                        <span className="td-sub-dot" />
-                        <span className="td-sub-title">{s.title || "subtask"}</span>
-                        <span className="td-sub-status">{s.status || ""}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            )}
-          </section>
+          {/* Live process — collapses to one muted line when unavailable */}
+          {!procAvailable ? (
+            <div className="td-empty">
+              <b>Process</b> live detail unavailable{proc?.reason ? ` (${proc.reason})` : ""}
+            </div>
+          ) : (
+            <section className="td-section">
+              <h3>Process</h3>
+              <div className="td-proc-meta">
+                <span>phase: <b>{phase || "—"}</b></span>
+                {subtask && <span>· {subtask}</span>}
+                {proc?.progress?.message && <span className="mc-note">{proc.progress.message}</span>}
+              </div>
+              {subFailed > 0 ? (
+                <SegmentedBar done={subDone} failed={subFailed} total={subStates.length} />
+              ) : (
+                <Bar pct={overall} label="Overall" failed={stageFailed} />
+              )}
+              {subFailed === 0 && <Bar pct={proc?.progress?.phase_percent} label="Phase" />}
+              {proc?.subtasks && proc.subtasks.length > 0 && (
+                <ul className="td-subtasks">
+                  {proc.subtasks.map((s, i) => (
+                    <li key={i} className={`td-sub td-sub--${(s.status || "").toLowerCase()}`}>
+                      <span className="td-sub-dot" />
+                      <span className="td-sub-title">{s.title || "subtask"}</span>
+                      <span className="td-sub-status">{s.status || ""}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
 
-          {/* Live terminal */}
-          <section className="td-section">
-            <h3>Live terminal</h3>
-            {agent ? (
+          {/* Live terminal — only a full section when there's a live agent */}
+          {agent ? (
+            <section className="td-section">
+              <h3>Live terminal</h3>
               <div className="td-term">
                 <AgentTerminal agent={agent} fontSize={11} />
               </div>
-            ) : (
-              <p className="mc-note">No active terminal — this task isn’t running (or rmux is off).</p>
-            )}
-          </section>
+            </section>
+          ) : (
+            <div className="td-empty">
+              <b>Live terminal</b> no active session — this task isn’t running (or rmux is off)
+            </div>
+          )}
 
           {/* Timeline */}
-          <section className="td-section">
-            <h3>Timeline</h3>
-            {wi.timeline.length === 0 ? (
-              <p className="mc-note">No events yet.</p>
-            ) : (
+          {wi.timeline.length === 0 ? (
+            <div className="td-empty">
+              <b>Timeline</b> no events yet
+            </div>
+          ) : (
+            <section className="td-section">
+              <h3>Timeline</h3>
               <ul className="td-timeline">
                 {[...wi.timeline].reverse().map((e, i) => (
                   <li key={i}>
@@ -184,8 +306,8 @@ export default function TaskDetail({
                   </li>
                 ))}
               </ul>
-            )}
-          </section>
+            </section>
+          )}
         </div>
       </motion.div>
     </motion.div>

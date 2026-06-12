@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchActivity, fetchAudit, type ActivityEntry, type AuditEntry } from "./api";
+import { keySlug } from "./correlationKey";
 
 function rel(iso: string): string {
   const t = new Date(iso).getTime();
@@ -46,7 +47,7 @@ export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
             <div className="table-row" key={`${a.correlation_key}-${a.service}-${a.updated_at}-${i}`}>
               <span className={`t-svc t-svc--${a.service}`}><span className="t-svc-dot" /> {a.service}</span>
               <span className="t-wi">
-                <span className="t-key">#{a.correlation_key}</span>
+                <span className="t-key" title={a.correlation_key}>#{keySlug(a.correlation_key)}</span>
                 {a.title && <span className="t-wi-title"> {a.title}</span>}
               </span>
               <span className="t-kind">{a.status}</span>
@@ -70,7 +71,7 @@ export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
             <div className="table-row" key={e.id}>
               <span className="t-action">
                 <span className="t-kind">{e.kind}</span>
-                <span className="t-key">#{e.correlation_key}</span>
+                <span className="t-key" title={e.correlation_key}>#{keySlug(e.correlation_key)}</span>
               </span>
               <span className="t-target mono">{e.target_service}{e.endpoint}</span>
               <span>

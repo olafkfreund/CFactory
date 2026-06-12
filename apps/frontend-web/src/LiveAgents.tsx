@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { fetchLiveAgents, openAgentConsole, type LiveAgent } from "./api";
+import { keySlug } from "./correlationKey";
 
 // xterm theme matched to the cockpit's Gruvbox palette (see index.css :root).
 const TERM_THEME = {
@@ -129,7 +130,7 @@ function AgentTile({ agent, onExpand }: { agent: LiveAgent; onExpand: () => void
     <button className="la-card" onClick={onExpand} title={`Open rmux console — #${agent.correlation_key}`}>
       <RobotHead live />
       <span className="la-bubble">
-        <span className="la-id">#{agent.correlation_key}</span>
+        <span className="la-id">#{keySlug(agent.correlation_key)}</span>
         {agent.phase && <span className="la-phase">{agent.phase}</span>}
       </span>
       <span className="la-console" aria-label="Open rmux console">
@@ -186,7 +187,7 @@ export default function LiveAgents({ reloadSignal }: { reloadSignal: number }) {
             >
               <div className="mc-term-modal-head">
                 <span className="mc-agent-dot mc-agent-dot--live" />
-                <strong>#{expanded.correlation_key}</strong>
+                <strong title={expanded.correlation_key}>#{keySlug(expanded.correlation_key)}</strong>
                 {expanded.title && <span className="mc-agent-sub">{expanded.title}</span>}
                 {expanded.phase && <span className="mc-agent-sub">· {expanded.phase}</span>}
                 <button className="mc-term-close" onClick={() => setExpanded(null)}>

@@ -821,3 +821,64 @@ body {
 }
 .act-result--ok { color: var(--green); }
 .act-result--fail { color: var(--red); }
+
+/* /settings/token — the standalone editor token page (#73). */
+.token-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+.token-card {
+  width: 100%;
+  max-width: 540px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2rem;
+}
+.token-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--cyan);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-bottom: 1rem;
+}
+.token-card h1 { font-size: 1.4rem; margin-bottom: 0.6rem; }
+.token-lede { color: var(--muted); font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.2rem; }
+.token-lede code,
+.token-open code { font-family: "JetBrains Mono", monospace; color: var(--cyan); font-size: 0.82em; }
+.token-box {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  margin-bottom: 1.2rem;
+}
+.token-value {
+  flex: 1;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.85rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  color: var(--text);
+  word-break: break-all;
+  user-select: all;
+}
+.token-copy { display: inline-flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+.token-open {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-bottom: 1.2rem;
+}
+.token-back { color: var(--cyan); font-size: 0.85rem; text-decoration: none; }
+.token-back:hover { text-decoration: underline; }

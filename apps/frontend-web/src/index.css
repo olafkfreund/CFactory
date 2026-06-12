@@ -851,11 +851,20 @@ body {
 .token-lede { color: var(--muted); font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.2rem; }
 .token-lede code,
 .token-open code { font-family: "JetBrains Mono", monospace; color: var(--cyan); font-size: 0.82em; }
+.token-field { margin-bottom: 1.1rem; }
+.token-field-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 0.35rem;
+}
 .token-box {
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
-  margin-bottom: 1.2rem;
 }
 .token-value {
   flex: 1;

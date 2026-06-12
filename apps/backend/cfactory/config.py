@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     # with the required scope. Format: "<key>:read,write;<key2>:read".
     api_keys: str | None = None
 
+    # Public base URL of the token-gated API surface for editor/external clients
+    # (#73 follow-up). When set (e.g. https://cfactory-api.freundcloud.org.uk —
+    # the cloudflared host that reaches the backend directly, bypassing the
+    # oauth2-proxy that fronts the browser cockpit), the /settings/token page shows
+    # it next to the token so the operator knows where to point the editor. Display
+    # only; leave unset for local/dev.
+    public_api_url: str | None = None
+
     # Multi-tenant mode (#23). Local-first: OFF by default, so tenant resolution
     # always yields the single "default" tenant (unchanged local behaviour). When
     # CFACTORY_MULTI_TENANT=true (hosted deploy), the tenant is resolved per

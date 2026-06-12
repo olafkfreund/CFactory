@@ -114,6 +114,11 @@ config:
   # X-Tenant-Id header. Per-tenant data isolation of queries is still deferred;
   # see guides/multi-tenant.md.
   multiTenant: false
+  # Public base URL of the token-gated API surface for editor/external clients
+  # (#73 follow-up), shown on the /settings/token page. Set to the cloudflared
+  # host that reaches the backend directly (e.g.
+  # https://cfactory-api.freundcloud.org.uk). Empty = not shown.
+  publicApiUrl: ""
   # Extra free-form CFACTORY_* (or other) env vars, e.g.
   #   - name: ANTHROPIC_API_KEY
   #     valueFrom: { secretKeyRef: { name: cfactory-llm, key: anthropic-key } }
@@ -200,6 +205,16 @@ frontend:
     seccompProfile:
       type: RuntimeDefault
   extraEnv: []
+  # Token-gated API (#73 follow-up). When enabled, the cockpit nginx injects
+  # `Authorization: Bearer <key>` on its /api + /connect proxies (via the
+  # CFACTORY_API_KEY env → envsubst), so the browser cockpit keeps working once
+  # the backend keystore is enforced (apiKeys.enabled). Point existingSecret at a
+  # Secret carrying the BARE key (no ":scopes" suffix) — typically the same Secret
+  # as apiKeys, under a different key. Enable this TOGETHER WITH apiKeys.enabled.
+  apiKey:
+    enabled: false
+    existingSecret: cfactory-api-keys
+    secretKey: api-key
 
 # Ingress: routes / → cockpit UI and /api + /health (+ /api/ws) → backend.
 # Enable and set host/className/annotations for your controller.

@@ -147,6 +147,25 @@ def _extract_key(authorization: str | None, x_api_key: str | None) -> str | None
     return None
 
 
+def authorize_headers(
+    keystore: KeyStore,
+    authorization: str | None,
+    x_api_key: str | None,
+    scope: str,
+) -> None:
+    """Authorize a raw header pair against ``keystore`` for ``scope``.
+
+    Shared by the HTTP key-enforcement middleware and the WebSocket handlers
+    (neither can use the ``require_scope`` FastAPI dependency). In OPEN mode
+    (no keys configured) this is a no-op. Raises ``HTTPException`` (401/403)
+    otherwise — callers translate that into an HTTP response or a WS close.
+    """
+    if not keystore.configured:
+        return
+    key = _extract_key(authorization, x_api_key)
+    keystore.authorize(key, scope)
+
+
 def require_scope(scope: str):
     """Build a FastAPI dependency that enforces ``scope`` against the keystore.
 

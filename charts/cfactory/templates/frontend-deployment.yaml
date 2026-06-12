@@ -56,6 +56,17 @@ spec:
             # nginx proxies /api + /health + /api/ws to the backend Service.
             - name: BACKEND_URL
               value: http://{{ include "cfactory.fullname" . }}:{{ .Values.service.port }}
+            {{- if .Values.frontend.apiKey.enabled }}
+            # Token-gated API: the bare CFactory key, injected by nginx as
+            # `Authorization: Bearer <key>` on /api + /connect so the browser
+            # cockpit authenticates once the backend keystore is enforced. Must be
+            # set together with apiKeys.enabled (the backend's CFACTORY_API_KEYS).
+            - name: CFACTORY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.frontend.apiKey.existingSecret }}
+                  key: {{ .Values.frontend.apiKey.secretKey }}
+            {{- end }}
             {{- with .Values.frontend.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

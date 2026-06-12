@@ -449,6 +449,9 @@ export interface ConnectToken {
   // OPEN mode (no CFACTORY_API_KEYS configured).
   token: string;
   configured: boolean;
+  // Public base URL of the token-gated API surface (the editor points here).
+  // Empty when not configured (CFACTORY_PUBLIC_API_URL unset).
+  connect_url: string;
 }
 
 // The API token shown on the /settings/token copy page (#73). Guarded behind the

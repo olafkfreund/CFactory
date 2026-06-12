@@ -69,6 +69,8 @@ agentic SDLC needs.
 
 [See the architecture →](/architecture/) &nbsp; · &nbsp; [See the roadmap →](/roadmap/) &nbsp; · &nbsp; [Meet the family →](/family/)
 
+**Connect your editor:** see [Connecting editors & external clients](guides/token-gated-api.md) — how to point VS Code (and other clients) at CFactory in any deployment.
+
 ---
 
 <p class="muted">CFactory is early and built in the open. Follow along on

@@ -1,142 +1,178 @@
-# CFactory: Connecting Editors & External Clients (all scenarios)
+# Connecting Editors & External Clients to CFactory
 
-The `factory-vscode` extension authenticates to CFactory with
-`Authorization: Bearer <token>` on every REST call and the `/api/ws` WebSocket.
-How it gets that token depends on how the deployment is secured. CFactory is
-built so the editor can connect **in every scenario**, not just under SSO:
+The `factory-vscode` extension (and any external client) talks to CFactory's API
+with `Authorization: Bearer <token>`. This guide covers **how a user connects**
+and **how an operator enables it** — in every deployment scenario, with or
+without SSO.
+
+---
+
+## Quickstart — connect VS Code (users)
+
+> For the hosted deployment at `cfactory.freundcloud.org.uk`.
+
+1. **Get your token.** Open **<https://cfactory.freundcloud.org.uk/settings/token>**
+   (log in if prompted) and copy the token with the **Copy** button. The page also
+   shows the **API URL** to use.
+2. **Configure the extension** (VS Code → Settings, or `settings.json`):
+   ```jsonc
+   "factory.cfactoryUrl": "https://cfactory-mcp.freundcloud.org.uk",
+   "factory.cfactoryToken": "<paste the token>"
+   ```
+   Or run **Factory: Set CFactory Token** and paste it.
+3. **Connect.** The status bar should go green and the pipeline view populates.
+
+> ⚠️ **Use the API URL from the token page, not the cockpit URL.** The cockpit
+> (`cfactory.freundcloud.org.uk`) is gated by browser SSO and will *reject* a
+> pasted token. The API URL (`cfactory-mcp.freundcloud.org.uk`) goes straight to
+> the backend, where your token is the gate.
+>
+> If you previously set `factory.keycloak.issuerUrl`, clear it — otherwise the
+> extension tries SSO login first. With it blank, it uses your pasted token.
+
+That's it. The token doesn't expire; it stays valid until an operator rotates it.
+
+---
+
+## How it works
+
+```
+Browser  ──▶ cloudflared ──▶ oauth2-proxy (SSO) ──▶ cockpit nginx ──▶ backend
+            cfactory.…                                (injects key)    (keystore)
+
+Editor   ──▶ cloudflared ─────────────────────────────────────────▶ backend
+            cfactory-mcp.…   (no SSO proxy; your bearer token is the gate)  (keystore)
+```
+
+- The **browser cockpit** is protected by SSO (oauth2-proxy). Inside, the cockpit
+  nginx injects the API key for you, so the UI keeps working.
+- The **editor** uses a **direct-to-backend host** (here `cfactory-mcp…`, which
+  also serves the read-only MCP endpoint) and presents the **token** itself;
+  CFactory's keystore validates it.
+- In **open mode** (no keys configured — the local/dev default) none of this is
+  enforced: the editor connects with no token at all.
+
+## Scenario coverage
 
 | Deployment | Front-door auth | How the editor connects |
 |---|---|---|
-| **Local / dev** | none (open) | No token needed — the extension sends no `Authorization`; the open API accepts it. Nothing to configure. |
-| **Self-hosted, no SSO** | CFactory API key | **This runbook (Path B).** Enable the keystore; the editor uses `/connect/vscode` (one-click) or `/settings/token` (manual). |
-| **Keycloak SSO** | oauth2-proxy | Either Path B, **or** the OIDC convenience layer (Path A) below for a smoother login. |
-| **Other proxy** (Authelia, basic-auth, mTLS) | proxy-specific | Path B API key on a direct host, or open + a network ACL. |
+| **Local / dev** | none (open) | No token needed — the extension sends no `Authorization`; the open API accepts it. |
+| **Self-hosted, no SSO** | CFactory API key | The Quickstart above — enable the keystore, paste the token from `/settings/token`. |
+| **SSO (Keycloak/oauth2-proxy)** | proxy | Either the API key (Quickstart), **or** the optional OIDC layer below. |
+| **Other proxy** (Authelia, basic-auth, mTLS) | proxy-specific | API key on a direct-to-backend host, or open + a network ACL. |
 
-The **CFactory API key (Path B)** is the universal mechanism — it depends on
-nothing but CFactory, so it works with or without Keycloak. Keycloak OIDC
-(Path A) is an optional convenience that only applies where Keycloak exists.
-Both are inert until enabled: in **OPEN mode** (no `CFACTORY_API_KEYS`) the API
-accepts every request, so local/dev needs no setup at all. The extension tries
-them in order (OIDC → token setting → stored bearer), so the two coexist.
+The **API key** is the universal path — it depends on nothing but CFactory.
+Keycloak OIDC is an optional convenience that only applies under Keycloak.
 
 ---
 
-## Path B — CFactory API key (universal)
+## Operator runbook — enabling the API key (Path B)
 
-The browser cockpit may sit behind a front-door (e.g. oauth2-proxy). That gate
-works for a human in a browser, but **not** for the editor, which can only
-present a bearer token. Path B turns on a **token-gated API surface** so the
-editor authenticates with a CFactory API key, while the browser cockpit keeps
-working unchanged.
+What makes the Quickstart work. The danger is enforcing the keystore *before* the
+cockpit nginx injects the key, which would 401 the UI — so do it in two stages.
 
-## How it fits together
+### 0. Pick the editor host
+The editor needs a hostname that reaches the backend **without** going through the
+SSO proxy. On this deployment we reuse the existing `cfactory-mcp.freundcloud.org.uk`
+cloudflared host (→ `cfactory:3111`); the keystore middleware leaves `/mcp` exempt,
+so the MCP server and the editor API coexist. Any direct-to-backend host works.
 
+### 1. Create the Secret
+One key, two forms — the scoped string for the backend, the bare key for nginx:
 ```
-Browser  ──▶ cloudflared ──▶ oauth2-proxy ──▶ cockpit nginx ──▶ backend
-            cfactory.…                          (injects the key)   (keystore)
+KEY="cfk_$(python3 -c 'import secrets;print(secrets.token_hex(24))')"
+kubectl -n factory create secret generic cfactory-api-keys \
+  --from-literal=api-keys="${KEY}:read,write" \
+  --from-literal=api-key="${KEY}"
+```
+(For a read-only editor token, use `:read` instead of `:read,write`.)
 
-Editor   ──▶ cloudflared ─────────────────────────────────────▶ backend
-            cfactory-api.…   (no oauth2-proxy; editor's own bearer)  (keystore)
+### 2. Stage 1 — inject, keystore still open
+Give the **frontend** the bare key so nginx injects it. Helm:
+`frontend.apiKey.enabled=true`. Raw manifest — add to the frontend container env:
+```yaml
+- { name: CFACTORY_API_KEY, valueFrom: { secretKeyRef: { name: cfactory-api-keys, key: api-key } } }
+```
+Roll out and confirm the cockpit is unaffected (injecting a key in open mode is a
+no-op).
+
+### 3. Stage 2 — enforce
+Give the **backend** the keystore + the public API URL. Helm: `apiKeys.enabled=true`
+and `config.publicApiUrl=https://cfactory-mcp.freundcloud.org.uk`. Raw manifest —
+add to the backend container env:
+```yaml
+- { name: CFACTORY_API_KEYS, valueFrom: { secretKeyRef: { name: cfactory-api-keys, key: api-keys } } }
+- { name: CFACTORY_PUBLIC_API_URL, value: "https://cfactory-mcp.freundcloud.org.uk" }
+```
+Roll out. The cockpit still works (nginx injects the key); `/settings/token` now
+shows the token + URL.
+
+### 4. Verify
+```
+# cockpit through nginx → 200    | editor host without key → 401, with key → 200
+curl -so /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" \
+  https://cfactory-mcp.freundcloud.org.uk/api/workitems   # 200
+curl -so /dev/null -w '%{http_code}\n' \
+  https://cfactory-mcp.freundcloud.org.uk/api/workitems   # 401
 ```
 
-- **Backend keystore enforcement** (`apps/backend/cfactory/auth.py` + the
-  `enforce_api_key` middleware in `app.py`): when `CFACTORY_API_KEYS` is set,
-  every `/api/*` and `/connect/*` request needs a `read`-scoped key; write
-  endpoints additionally need `write`. WebSocket handlers reject unauthenticated
-  sockets. Exempt: `/health` (probes), `/mcp` (own secret), `/api/events*` (the
-  idempotent inbound webhook). In **OPEN mode** (no keys) nothing is enforced —
-  the local/dev default.
-- **Cockpit nginx injection** (`nginx.conf.template`): the frontend injects
-  `Authorization: Bearer <key>` on its `/api` + `/connect` proxies via the
-  `CFACTORY_API_KEY` env. Browser users are already authenticated by oauth2-proxy
-  upstream, so the cockpit keeps working once the keystore is enforced.
-- **Editor host**: a cloudflared hostname (e.g. `cfactory-api.freundcloud.org.uk`)
-  routed straight to `cfactory:3111`, bypassing oauth2-proxy. The editor's own
-  bearer is the gate, enforced by the keystore — the same pattern as the existing
-  `cfactory-mcp` host.
+### What stays open
+The keystore middleware enforces `/api/*` and `/connect/*` only. Exempt: `/health`
+(k8s probes), `/mcp` (its own `CFACTORY_MCP_SECRET`), `/api/events*` (the idempotent
+inbound webhook from the sibling factories). Write endpoints additionally require a
+`write`-scoped key.
 
-## Enabling it (staged — no cockpit lockout)
-
-The danger is enforcing the keystore before nginx injects the key: the cockpit
-would 401. Stage the rollout so the injecting frontend is live **first**.
-
-1. **Create the Secret** (one key, two forms — the scoped string for the backend,
-   the bare key for nginx injection):
-   ```
-   kubectl -n factory create secret generic cfactory-api-keys \
-     --from-literal=api-keys='acw_xxxxxxxx:read,write' \
-     --from-literal=api-key='acw_xxxxxxxx'
-   ```
-2. **Stage 1 — inject, keystore still open.** Set `frontend.apiKey.enabled=true`
-   (nginx now injects the real key) while leaving `apiKeys.enabled=false`.
-   Injecting a key in open mode is a harmless no-op. Roll out, confirm the cockpit
-   is unaffected.
-3. **Stage 2 — enforce.** Set `apiKeys.enabled=true` and
-   `config.publicApiUrl=https://cfactory-api.freundcloud.org.uk`. The keystore is
-   now enforced; the cockpit still works (nginx is already injecting). Verify the
-   `/settings/token` page shows the token + API URL.
-4. **Stage 3 — editor host.** Add the cloudflared ingress hostname for the editor:
-   ```yaml
-   - hostname: cfactory-api.freundcloud.org.uk
-     service: http://cfactory.factory.svc.cluster.local:3111
-   ```
-   and the matching Cloudflare DNS/route.
-
-## Using it from the editor
-
-- **One-click:** in VS Code run *Factory: Connect via Browser* → the browser
-  (logged in via SSO) hands the token to the editor through `/connect/vscode`.
-- **Manual:** open `https://cfactory.freundcloud.org.uk/settings/token`, copy the
-  token, and point the extension's `cfactoryUrl` at the editor host
-  (`https://cfactory-api.freundcloud.org.uk`).
-
-## Rolling back
-
-Set `apiKeys.enabled=false` (and `frontend.apiKey.enabled=false`). The keystore
-returns to OPEN mode and the cockpit is unchanged. Remove the editor cloudflared
-hostname to withdraw the external surface.
+### Rolling back
+Set `apiKeys.enabled=false` (and `frontend.apiKey.enabled=false`), or remove the two
+env vars. The keystore returns to OPEN mode and the cockpit is unchanged. Rotating
+the key = update the Secret and restart both deployments.
 
 ---
 
-## Path A — Keycloak OIDC (convenience layer, SSO deployments only)
+## Operator runbook — optional Keycloak OIDC layer (Path A)
 
-When the cockpit is already fronted by oauth2-proxy + Keycloak, the editor can
-skip API keys entirely and log in with the **same SSO**: it obtains a Keycloak
-access token (`Factory: Login`) and sends it as the bearer. This needs **no
-CFactory changes** — only that oauth2-proxy accept a valid JWT bearer instead of
-forcing an interactive login.
-
-This is optional and Keycloak-specific. Path B above still covers every other
-deployment; ship Path A *in addition* if you want the smoother SSO flow.
+Where the cockpit is fronted by oauth2-proxy + Keycloak, a user can skip the API
+key and log in with the **same SSO**: the editor obtains a Keycloak access token
+(`Factory: Login`) and sends it as the bearer. Needs **no CFactory changes** — only
+that oauth2-proxy accept a JWT bearer.
 
 1. **oauth2-proxy** (`oauth2-proxy-cfactory`): add
-   ```
-   --skip-jwt-bearer-tokens=true
-   --oidc-extra-audience=<extension client id>   # if the editor uses a separate client
-   ```
-   so a request carrying a Keycloak-issued JWT (audience matching) bypasses the
-   login redirect and is passed straight upstream. The CFactory backend stays in
-   OPEN mode — oauth2-proxy is the gate.
-2. **Keycloak**: give the extension a **public client** (PKCE, no secret) with the
-   editor redirect URIs registered (`vscode://olafkfreund.factory-vscode/*` and the
-   `https://*.vscode.dev/*` external-URI forms for remote/web editors). Map its
-   audience to include the oauth2-proxy client so `--skip-jwt-bearer-tokens`
-   accepts the token.
+   `--skip-jwt-bearer-tokens=true` and `--oidc-extra-audience=<editor client id>`,
+   so a valid Keycloak JWT bypasses the interactive login.
+2. **Keycloak**: create a **public PKCE client** (e.g. `factory-vscode`) with the
+   loopback redirect URIs the extension uses (`http://localhost/*`,
+   `http://127.0.0.1/*`, `http://localhost:*/callback`) and an audience mapper
+   adding the oauth2-proxy client id to the token `aud`.
 3. **Editor settings**:
    ```jsonc
    "factory.cfactoryUrl": "https://cfactory.freundcloud.org.uk",
    "factory.keycloak.issuerUrl": "https://keycloak.freundcloud.org.uk/realms/factory",
-   "factory.keycloak.clientId": "<extension public client>"
+   "factory.keycloak.clientId": "factory-vscode"
    ```
-   then run **Factory: Login**. The extension auto-refreshes the token; no API key
-   or copy-paste involved.
+   then run **Factory: Login**. The token auto-refreshes; no key handling.
 
 ### A vs B
-
-- **A** reuses SSO identity (better audit, no key handling) but only works under
+- **A** reuses SSO identity (auto-refresh, no key to manage) but only works under
   Keycloak and grants whatever the cockpit grants (no read/write scope split).
-- **B** works anywhere and supports scoped read-only vs read-write keys, at the
-  cost of the keystore rollout + an editor host.
+- **B** works anywhere and supports scoped read-only vs read-write keys.
 
 They are not exclusive — the extension prefers OIDC and falls back to a stored
-token, so enabling both gives every user a working path.
+token, so both can be enabled at once.
+
+---
+
+## Reference
+
+**Endpoints**
+- `GET /settings/token` — the copy page (also `GET /api/settings/token` → `{token, configured, connect_url}`).
+- `GET /connect/vscode?redirect=<editor cb>&state=<nonce>` — one-click hand-off; 302s to `<redirect>?token=…&state=…`.
+
+**Settings** (`CFACTORY_*` env / Helm `config.*` + `apiKeys.*` + `frontend.apiKey.*`)
+- `CFACTORY_API_KEYS` — `"<key>:read,write;<key2>:read"`; empty = OPEN mode.
+- `CFACTORY_API_KEY` (frontend) — the bare key nginx injects.
+- `CFACTORY_PUBLIC_API_URL` — shown on `/settings/token` as the editor API URL.
+
+**Extension settings**
+- `factory.cfactoryUrl` — the API base URL (the direct-to-backend host).
+- `factory.cfactoryToken` — pasted token (or use **Factory: Set CFactory Token**).
+- `factory.keycloak.issuerUrl` / `factory.keycloak.clientId` — OIDC path only; leave blank to use a pasted token.

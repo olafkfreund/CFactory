@@ -71,6 +71,8 @@ agentic SDLC needs.
 
 **Connect your editor:** see [Connecting editors & external clients](guides/token-gated-api.md) — how to point VS Code (and other clients) at CFactory in any deployment.
 
+**Design system:** the [Factory Design System](guides/factory-design-system.md) — the shared brand & UI rules every Factory service follows so the suite looks like one product.
+
 ---
 
 <p class="muted">CFactory is early and built in the open. Follow along on

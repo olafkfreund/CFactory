@@ -29,7 +29,7 @@ import {
   IconAudit,
   IconBrand,
   IconClock,
-  IconCopilot,
+  IconRobot,
   IconInsights,
   IconLogout,
   IconPipeline,
@@ -45,7 +45,6 @@ type View =
   | "pipeline"
   | "running"
   | "tokens"
-  | "copilot"
   | "audit"
   | "services"
   | "settings";
@@ -63,7 +62,6 @@ const NAV: { id: View; label: string; Icon: typeof IconPipeline }[] = [
   { id: "pipeline", label: "Pipeline", Icon: IconPipeline },
   { id: "running", label: "Active tasks", Icon: IconRunning },
   { id: "tokens", label: "Tokens", Icon: IconTokens },
-  { id: "copilot", label: "Copilot", Icon: IconCopilot },
   { id: "audit", label: "Audit", Icon: IconAudit },
   { id: "services", label: "Services", Icon: IconServices },
   { id: "settings", label: "Settings", Icon: IconSettings },
@@ -111,6 +109,7 @@ export default function App() {
   const [tick, setTick] = useState(0);
   const [progress, setProgress] = useState<Record<string, LiveProgress>>({});
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const [stageFilter, setStageFilter] = useState<StripStage | null>(null);
   const [pins, setPins] = useState<TickerPin[]>([]);
   const [alarm, setAlarm] = useState<StripAlarm | null>(null);
@@ -315,7 +314,6 @@ export default function App() {
             )}
             {view === "running" && <RunningTasksView items={items} progress={progress} />}
             {view === "tokens" && <TokensView reloadSignal={tick} />}
-            {view === "copilot" && <CopilotPanel reloadSignal={tick} />}
             {view === "audit" && <AuditView reloadSignal={tick} />}
             {view === "services" && <ServicesView backend={backend} reloadSignal={tick} />}
             {view === "settings" && <SettingsView reloadSignal={tick} />}
@@ -323,6 +321,34 @@ export default function App() {
           <EventTicker items={items} pins={pins} onUnpin={unpin} open={tickerOpen} onToggle={toggleTicker} />
         </div>
       </div>
+
+      {/* Copilot — floating assistant (robot FAB → chat popup) */}
+      {copilotOpen && (
+        <div className="copilot-pop" role="dialog" aria-label="Copilot assistant">
+          <div className="copilot-pop__head">
+            <span className="copilot-pop__title"><IconRobot size={15} /> Copilot</span>
+            <button
+              className="copilot-pop__x"
+              onClick={() => setCopilotOpen(false)}
+              aria-label="Close Copilot"
+            >
+              ×
+            </button>
+          </div>
+          <div className="copilot-pop__body">
+            <CopilotPanel reloadSignal={tick} compact />
+          </div>
+        </div>
+      )}
+      <button
+        className={`copilot-fab ${copilotOpen ? "copilot-fab--open" : ""}`}
+        onClick={() => setCopilotOpen((o) => !o)}
+        title={copilotOpen ? "Close Copilot" : "Ask Copilot"}
+        aria-label="Toggle Copilot"
+        aria-expanded={copilotOpen}
+      >
+        <IconRobot size={24} />
+      </button>
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>

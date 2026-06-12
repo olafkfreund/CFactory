@@ -27,7 +27,13 @@ const ACTION_FOR_KIND: Record<string, string> = {
   stuck: "trigger_handoff",
 };
 
-export default function CopilotPanel({ reloadSignal }: { reloadSignal: number }) {
+export default function CopilotPanel({
+  reloadSignal,
+  compact = false,
+}: {
+  reloadSignal: number;
+  compact?: boolean;
+}) {
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
   const [rollups, setRollups] = useState<Rollups | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
@@ -111,7 +117,8 @@ export default function CopilotPanel({ reloadSignal }: { reloadSignal: number })
   }, [input, asking]);
 
   return (
-    <section className="copilot">
+    <section className={`copilot ${compact ? "copilot--compact" : ""}`}>
+      {!compact && (
       <div className="insights">
         <h2 className="panel-title">Insights</h2>
         {rollups && (
@@ -192,9 +199,10 @@ export default function CopilotPanel({ reloadSignal }: { reloadSignal: number })
           ))
         )}
       </div>
+      )}
 
       <div className="chat">
-        <h2 className="panel-title">Copilot</h2>
+        {!compact && <h2 className="panel-title">Copilot</h2>}
         <div className="chat-thread" ref={threadRef}>
           {messages.length === 0 && (
             <p className="chat-hint">Ask e.g. “where is #142 and why is it stuck?”</p>

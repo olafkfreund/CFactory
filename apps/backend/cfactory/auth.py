@@ -70,6 +70,23 @@ class KeyStore:
             return None
         return self._keys.get(key)
 
+    def preferred_key(self) -> str | None:
+        """Return a configured key suitable for handing to a client (#73).
+
+        Prefers a key that carries WRITE (so the editor can act, not just read),
+        then one with READ, then any configured key. Returns None in OPEN mode
+        (no keys configured) — there is no token to hand out, and the API accepts
+        every request anyway.
+        """
+        if not self._keys:
+            return None
+        for required in (WRITE, READ):
+            for key, scopes in self._keys.items():
+                if required in scopes:
+                    return key
+        # No scoped match — return the first configured key deterministically.
+        return next(iter(self._keys))
+
     def authorize(self, key: str | None, scope: str) -> None:
         """Raise an HTTPException unless ``key`` may exercise ``scope``.
 

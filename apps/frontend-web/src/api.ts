@@ -444,6 +444,21 @@ export async function fetchAudit(): Promise<AuditEntry[]> {
   return ((await resp.json()) as { count: number; entries: AuditEntry[] }).entries;
 }
 
+export interface ConnectToken {
+  // The CFactory API token to use from an editor / external client. Empty in
+  // OPEN mode (no CFACTORY_API_KEYS configured).
+  token: string;
+  configured: boolean;
+}
+
+// The API token shown on the /settings/token copy page (#73). Guarded behind the
+// same gate as the rest of the cockpit UI.
+export async function fetchConnectToken(): Promise<ConnectToken> {
+  const resp = await fetch("/api/settings/token");
+  if (!resp.ok) throw new Error(`token error: HTTP ${resp.status}`);
+  return (await resp.json()) as ConnectToken;
+}
+
 // Best-effort poll of all upstream services; returns the per-service summary.
 export async function refresh(): Promise<Record<string, unknown>> {
   const resp = await fetch("/api/refresh", { method: "POST" });

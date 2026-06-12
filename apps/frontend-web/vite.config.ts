@@ -13,6 +13,8 @@ export default defineConfig({
       "/health": BACKEND,
       // ws: true so the /api/ws cockpit feed proxies through too.
       "/api": { target: BACKEND, ws: true },
+      // Editor token hand-off (#73): /connect/vscode must reach the backend.
+      "/connect": BACKEND,
     },
   },
 });

@@ -17,3 +17,6 @@ data:
   CFACTORY_COPILOT_PROVIDER: {{ .Values.config.copilotProvider | quote }}
   CFACTORY_OLLAMA_CLOUD_BASE_URL: {{ .Values.config.ollamaCloudBaseUrl | quote }}
   CFACTORY_MULTI_TENANT: {{ .Values.config.multiTenant | quote }}
+  {{- with .Values.config.publicApiUrl }}
+  CFACTORY_PUBLIC_API_URL: {{ . | quote }}
+  {{- end }}

@@ -18,10 +18,13 @@ def _client(keys: dict[str, set[str]] | None) -> TestClient:
 def test_settings_token_open_mode():
     resp = _client(None).get("/api/settings/token")
     assert resp.status_code == 200
-    assert resp.json() == {"token": "", "configured": False}
+    body = resp.json()
+    assert body["token"] == "" and body["configured"] is False
+    assert "connect_url" in body
 
 
 def test_settings_token_returns_preferred_key():
     resp = _client({"ro": {"read"}, "rw": {"read", "write"}}).get("/api/settings/token")
     assert resp.status_code == 200
-    assert resp.json() == {"token": "rw", "configured": True}
+    body = resp.json()
+    assert body["token"] == "rw" and body["configured"] is True

@@ -56,18 +56,29 @@ export default function TokenPage() {
         )}
 
         {data && data.configured && (
-          <div className="token-box">
-            <code className="token-value">{data.token}</code>
-            <button className="btn token-copy" type="button" onClick={copy}>
-              {copied ? (
-                <>
-                  <IconCheck size={15} /> Copied
-                </>
-              ) : (
-                "Copy"
-              )}
-            </button>
-          </div>
+          <>
+            {data.connect_url && (
+              <div className="token-field">
+                <span className="token-field-label">API URL</span>
+                <code className="token-value">{data.connect_url}</code>
+              </div>
+            )}
+            <div className="token-field">
+              <span className="token-field-label">Token</span>
+              <div className="token-box">
+                <code className="token-value">{data.token}</code>
+                <button className="btn token-copy" type="button" onClick={copy}>
+                  {copied ? (
+                    <>
+                      <IconCheck size={15} /> Copied
+                    </>
+                  ) : (
+                    "Copy"
+                  )}
+                </button>
+              </div>
+            </div>
+          </>
         )}
 
         {!data && !err && <p className="token-lede">Loading…</p>}

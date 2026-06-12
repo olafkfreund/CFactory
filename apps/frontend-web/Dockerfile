@@ -19,6 +19,12 @@ FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 # Overridden by the Helm chart (http://<release>-cfactory:80).
 ENV BACKEND_URL=http://cfactory:80
 
+# Token-gated API: the bare CFactory key nginx injects as `Authorization: Bearer
+# <key>` on /api + /connect. Defaults to empty so envsubst always resolves the
+# placeholder (a harmless "Bearer " the open keystore ignores); the Helm chart
+# overrides it from a Secret when the keystore is enforced.
+ENV CFACTORY_API_KEY=""
+
 # The official entrypoint renders /etc/nginx/templates/*.template via envsubst
 # (only listed env vars are substituted, so nginx's own $vars are preserved).
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template

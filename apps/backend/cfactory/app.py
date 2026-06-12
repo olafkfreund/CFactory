@@ -10,9 +10,9 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from pydantic import BaseModel
@@ -22,7 +22,14 @@ import httpx
 from . import __version__
 from .actions import PreparedAction, execute_action, propose
 from .audit import AuditStore, get_audit_store
-from .auth import KeyStore, keystore_dep, require_scope
+from .auth import (
+    READ,
+    KeyStore,
+    authorize_headers,
+    get_keystore,
+    keystore_dep,
+    require_scope,
+)
 from .connect import build_redirect, validate_redirect
 from .enterprise import identity_dep
 from .adapters import (
@@ -150,6 +157,38 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── API key enforcement (#73 follow-up: token-gated API) ──────────────────
+    # When the keystore is configured (CFACTORY_API_KEYS set), every request to
+    # the data/action surface (/api/* and /connect/*) must carry a key with the
+    # READ scope; write endpoints additionally require WRITE via require_scope.
+    # In OPEN mode (no keys) this is a no-op, so local/dev and the current prod
+    # posture are unchanged. The browser cockpit reaches this through nginx, which
+    # injects the key; programmatic clients (the editor) send their own bearer.
+    #
+    # Exemptions: /health (k8s probes), the read-only MCP server (/mcp — its own
+    # CFACTORY_MCP_SECRET bearer), the idempotent inbound event webhook
+    # (/api/events*, machine-to-machine), and the API docs.
+    _EXEMPT_PREFIXES = ("/api/events",)
+
+    @app.middleware("http")
+    async def enforce_api_key(request: Request, call_next):
+        path = request.url.path
+        guarded = path.startswith("/api/") or path.startswith("/connect/")
+        if guarded and not path.startswith(_EXEMPT_PREFIXES):
+            keystore = get_keystore()
+            try:
+                authorize_headers(
+                    keystore,
+                    request.headers.get("authorization"),
+                    request.headers.get("x-api-key"),
+                    READ,
+                )
+            except HTTPException as exc:
+                return JSONResponse(
+                    {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
+                )
+        return await call_next(request)
 
     @app.get("/health")
     async def health() -> dict[str, object]:
@@ -339,6 +378,8 @@ def create_app() -> FastAPI:
         Read-only server-side proxy: resolves the correlation key to a spec_id,
         opens AIFactory's agent-console WS, and pumps ANSI bytes down. The
         AIFactory URL and token never leave this process."""
+        if await _reject_unauthorized_ws(websocket):
+            return
         ai = next((a for a in adapters if isinstance(a, AIFactoryAdapter)), None)
         try:
             if ai is None:
@@ -524,7 +565,11 @@ def create_app() -> FastAPI:
         copy and the API accepts every request anyway. Reachable behind the same
         gate as the rest of the cockpit UI."""
         token = keystore.preferred_key()
-        return {"token": token or "", "configured": token is not None}
+        return {
+            "token": token or "",
+            "configured": token is not None,
+            "connect_url": settings.public_api_url or "",
+        }
 
     @app.get("/connect/vscode")
     def connect_vscode(
@@ -556,10 +601,29 @@ def create_app() -> FastAPI:
         token = keystore.preferred_key() or ""
         return RedirectResponse(build_redirect(redirect, token, state), status_code=302)
 
+    async def _reject_unauthorized_ws(websocket: WebSocket) -> bool:
+        """Close the WS during the handshake (1008) if the keystore is configured
+        and the request carries no valid READ key. The cockpit reaches WS through
+        nginx (which injects the key); the editor sends its own. Returns True when
+        the socket was rejected so the caller can return early."""
+        try:
+            authorize_headers(
+                get_keystore(),
+                websocket.headers.get("authorization"),
+                websocket.headers.get("x-api-key"),
+                READ,
+            )
+            return False
+        except HTTPException:
+            await websocket.close(code=1008)
+            return True
+
     @app.websocket("/api/ws")
     async def cockpit_feed(
         websocket: WebSocket, store: WorkItemStore = Depends(store_dep)
     ) -> None:
+        if await _reject_unauthorized_ws(websocket):
+            return
         await manager.connect(websocket)
         try:
             # Push the current state immediately so a fresh or *reconnecting*

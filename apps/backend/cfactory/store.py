@@ -39,19 +39,63 @@ def _is_terminal(status: str | None) -> bool:
     return any(hint in low for hint in _TERMINAL_HINTS)
 
 
+def _is_worker_event(event: CompletionEvent) -> bool:
+    """True for a v1.3 live per-worker sub-event (``phase:"worker"`` + worker)."""
+    return event.phase == "worker" and event.worker is not None
+
+
+_ROLLUP_KEYS = ("input_tokens", "output_tokens", "total_tokens", "cost_usd")
+
+
+def rollup_by(workers: dict | None, dim: str) -> dict[str, dict]:
+    """Roll a ``worker_id -> worker`` map up by a dimension (``provider``/``model``).
+
+    Returns ``{dim_value: {tokens..., cost_usd, workers: <count>}}``. Workers
+    with a null/empty dimension value bucket under ``"unknown"``. Pure +
+    side-effect-free so the API can recompute it on read.
+    """
+    out: dict[str, dict] = {}
+    for w in (workers or {}).values():
+        wd = w if isinstance(w, dict) else w.model_dump()
+        key = wd.get(dim) or "unknown"
+        b = out.setdefault(
+            key, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                  "cost_usd": 0.0, "workers": 0}
+        )
+        for k in _ROLLUP_KEYS:
+            b[k] += wd.get(k, 0) or 0
+        b["workers"] += 1
+    return out
+
+
 def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
     """True if this event is already in the timeline (idempotency check).
 
-    Prefers the per-event envelope ``id`` (#468 — AIFactory #466 / TFactory
-    #282): exactly-once on the ``id`` makes the outbox relay's re-delivery a
-    no-op *and* lets a legitimate re-run after handback through (same service +
-    status but a new ``id`` — the old ``(service, status)`` key collided on
-    those). Falls back to the legacy ``(service, correlation_key, status)`` key
-    for events from producers that don't yet emit an ``id``.
+    Live per-worker sub-events (v1.3, ``phase:"worker"``) dedup on
+    ``(service, correlation_key, worker_id)`` — every worker shares the same
+    ``status`` ("worker_done"), so the legacy ``(service, status)`` key would
+    wrongly collide across distinct workers. A re-emit of the *same* worker_id
+    is a no-op for the timeline (the slice still upserts/replaces — no double
+    count). When the producer also stamps a per-event ``id`` we honour it first
+    (re-delivery → no-op).
+
+    For non-worker events: prefers the per-event envelope ``id`` (#468 —
+    AIFactory #466 / TFactory #282): exactly-once on the ``id`` makes the outbox
+    relay's re-delivery a no-op *and* lets a legitimate re-run after handback
+    through (same service + status but a new ``id`` — the old ``(service,
+    status)`` key collided on those). Falls back to the legacy
+    ``(service, correlation_key, status)`` key for producers without an ``id``.
     """
     entries = timeline or []
     if event.id:
         return any(e.get("id") == event.id for e in entries)
+    if _is_worker_event(event):
+        wid = event.worker.worker_id
+        return any(
+            e.get("service") == event.service.value
+            and (e.get("worker") or {}).get("worker_id") == wid
+            for e in entries
+        )
     return any(
         e.get("service") == event.service.value and e.get("status") == event.status
         for e in entries
@@ -120,13 +164,52 @@ class WorkItemStore:
                         row = WorkItemRow(correlation_key=event.correlation_key, timeline=[])
                         session.add(row)
 
-                    slice_ = ServiceState(
-                        task_id=event.task_id,
-                        status=event.status,
-                        phase=event.phase,
-                        usage=event.usage,
-                    )
-                    setattr(row, event.service.value, slice_.model_dump())
+                    prev = getattr(row, event.service.value) or {}
+                    if _is_worker_event(event):
+                        # Live per-worker sub-event: upsert into the slice's
+                        # ``workers`` map (idempotent by worker_id — re-emit
+                        # replaces, no double count) WITHOUT touching the
+                        # service-level usage / status / phase. Recompute the
+                        # provider/model rollups from the resulting map.
+                        workers = dict(prev.get("workers") or {})
+                        workers[event.worker.worker_id] = event.worker.model_dump()
+                        slice_dict = {
+                            **prev,
+                            "task_id": prev.get("task_id") or event.task_id,
+                            "workers": workers,
+                            "by_provider": rollup_by(workers, "provider"),
+                            "by_model": rollup_by(workers, "model"),
+                        }
+                    else:
+                        # Ordinary / terminal event: refresh the scalar slice as
+                        # before, but PRESERVE any per-worker map accumulated
+                        # from live sub-events. A terminal event that carries its
+                        # own usage.workers/by_provider/by_model seeds the slice
+                        # too (terminal rollup), recomputing rollups from the
+                        # merged worker map for consistency.
+                        slice_ = ServiceState(
+                            task_id=event.task_id,
+                            status=event.status,
+                            phase=event.phase,
+                            usage=event.usage,
+                        )
+                        slice_dict = slice_.model_dump()
+                        workers = dict(prev.get("workers") or {})
+                        if event.usage and event.usage.workers:
+                            for w in event.usage.workers:
+                                workers[w.worker_id] = w.model_dump()
+                        slice_dict["workers"] = workers
+                        # Prefer the terminal event's explicit breakdowns when
+                        # present; otherwise derive from the worker map.
+                        if event.usage and event.usage.by_provider:
+                            slice_dict["by_provider"] = event.usage.by_provider
+                        else:
+                            slice_dict["by_provider"] = rollup_by(workers, "provider")
+                        if event.usage and event.usage.by_model:
+                            slice_dict["by_model"] = event.usage.by_model
+                        else:
+                            slice_dict["by_model"] = rollup_by(workers, "model")
+                    setattr(row, event.service.value, slice_dict)
 
                     # Reassign (not .append) so SQLAlchemy detects the JSON column change.
                     row.timeline = [*(row.timeline or []), event.model_dump(mode="json")]

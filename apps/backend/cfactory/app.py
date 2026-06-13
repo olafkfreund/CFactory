@@ -52,7 +52,7 @@ from .config import (
 from .copilot import Copilot, get_copilot, provider_status, reset_copilot
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
-from .copilot.tools import summarize_timeline, token_totals
+from .copilot.tools import summarize_timeline, token_by_worker, token_totals
 from .live_agents import LiveAgentsResult, discover_live_agents
 from .live_agent_proxy import ConnectFn, proxy_agent_console
 from .task_process import build_process_detail
@@ -333,6 +333,17 @@ def create_app() -> FastAPI:
     @app.get("/api/tokens")
     def get_tokens(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
         return token_totals(store)
+
+    @app.get("/api/tokens/by_worker")
+    def get_tokens_by_worker(
+        store: WorkItemStore = Depends(store_dep),
+    ) -> dict[str, object]:
+        """Per-worker / per-provider / per-model breakdown (RFC-0001 v1.3).
+
+        Additive to ``/api/tokens`` (which keeps its by_service/by_work_item
+        shape): exposes the drill-down ingested from live ``phase:"worker"``
+        sub-events + terminal breakdowns. Empty when nothing is instrumented."""
+        return token_by_worker(store)
 
     @app.get("/api/progress")
     def get_progress(hub: LiveProgressHub = Depends(progress_hub_dep)) -> dict[str, object]:

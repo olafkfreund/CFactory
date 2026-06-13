@@ -42,6 +42,7 @@ from .adapters import (
 )
 from .config import (
     COPILOT_PROVIDERS,
+    check_audit_secret,
     get_settings,
     load_copilot_overrides,
     load_service_overrides,
@@ -123,6 +124,8 @@ def live_agent_connect_dep() -> ConnectFn:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    # Refuse to silently boot a hosted deploy on the forgeable dev audit secret (#81).
+    check_audit_secret(settings)
     tasks: list[asyncio.Task[None]] = []
     if settings.subscribe_upstreams:
         tasks = start_subscribers(get_store(), get_manager(), settings)

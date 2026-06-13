@@ -28,7 +28,14 @@ env:
   GITOPS_PATH: apps/cfactory/manifests
 
 jobs:
+  # Gate the deploy on a green test run (#81): re-run the CI suite (backend
+  # pytest + frontend typecheck/build) via the reusable test workflow, and only
+  # build+push+bump if it passes.
+  test:
+    uses: ./.github/workflows/test.yml
+
   build-push-bump:
+    needs: test
     runs-on: ubuntu-latest
     env:
       # secrets context is not allowed in step-level `if:`; expose it here so

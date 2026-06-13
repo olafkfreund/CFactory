@@ -7,11 +7,21 @@ via real environment variables or a .env file.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import warnings
 from pathlib import Path
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# The clearly-labelled dev default for the audit-chain HMAC secret. Anchoring the
+# tamper-evident audit chain on this in-repo value makes the chain forgeable by
+# anyone who can read the source, so a hosted/shared deploy MUST override it via
+# CFACTORY_AUDIT_HMAC_SECRET. See check_audit_secret() below (#81).
+DEV_AUDIT_HMAC_SECRET = "dev-insecure-audit-hmac-secret-change-me"
 
 
 class Settings(BaseSettings):
@@ -113,7 +123,7 @@ class Settings(BaseSettings):
     # entry's hash, so any after-the-fact mutation breaks the chain. The default
     # below is a CLEARLY-LABELLED dev secret: set CFACTORY_AUDIT_HMAC_SECRET to a
     # real secret in any hosted/shared deployment.
-    audit_hmac_secret: str = "dev-insecure-audit-hmac-secret-change-me"
+    audit_hmac_secret: str = DEV_AUDIT_HMAC_SECRET
 
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""
@@ -137,6 +147,35 @@ def get_settings() -> Settings:
     if _settings is None:
         _settings = Settings()
     return _settings
+
+
+def is_local_only(settings: Settings) -> bool:
+    """True when the cockpit is running in single-user local mode — i.e. neither
+    scoped API keys (#20) nor multi-tenant mode (#23) are configured. In that
+    posture the dev audit secret is acceptable; in any hosted/shared posture it
+    is not (#81)."""
+    return not (settings.api_keys or settings.multi_tenant)
+
+
+def check_audit_secret(settings: Settings | None = None) -> bool:
+    """Hard-warn at startup when the tamper-evident audit chain (#21) is still
+    anchored on the in-repo dev default while NOT in local-only mode (i.e. API
+    keys or multi-tenant are configured — a hosted/shared deploy). Leaving the
+    default in place there makes the audit chain forgeable by anyone who knows
+    the in-repo secret. Returns True when the dev default is in use in a
+    non-local posture (the unsafe case), False otherwise."""
+    settings = settings or get_settings()
+    if settings.audit_hmac_secret == DEV_AUDIT_HMAC_SECRET and not is_local_only(settings):
+        msg = (
+            "INSECURE AUDIT SECRET: CFACTORY_AUDIT_HMAC_SECRET is still the "
+            "in-repo dev default while API keys or multi-tenant mode are "
+            "configured (hosted/shared posture). The tamper-evident audit chain "
+            "is FORGEABLE — set CFACTORY_AUDIT_HMAC_SECRET to a real secret."
+        )
+        logger.error(msg)
+        warnings.warn(msg, RuntimeWarning, stacklevel=2)
+        return True
+    return False
 
 
 # ── Editable upstream endpoints ──────────────────────────────────────────────

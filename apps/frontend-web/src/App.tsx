@@ -29,6 +29,7 @@ import {
   IconAudit,
   IconBrand,
   IconClock,
+  IconExternal,
   IconRobot,
   IconInsights,
   IconLogout,
@@ -72,6 +73,15 @@ const STAGES = [
   { key: "aifactory", label: "Code", svc: "AIFactory", cls: "code" },
   { key: "tfactory", label: "Test", svc: "TFactory", cls: "test" },
 ] as const;
+
+// Link out to the OpenObserve / OTLP backend (RFC-0001 v1.3 P2). Build-time
+// configurable via VITE_OBSERVE_URL; defaults to the public instance. Set it to
+// an empty string at build time to hide the link entirely. A new-tab link (not
+// an iframe) keeps it simple and sidesteps cross-origin auth.
+const OBSERVE_URL =
+  import.meta.env.VITE_OBSERVE_URL === undefined
+    ? "https://observe.freundcloud.org.uk"
+    : import.meta.env.VITE_OBSERVE_URL;
 
 type StageKey = (typeof STAGES)[number]["key"];
 
@@ -271,6 +281,18 @@ export default function App() {
               <span>{label}</span>
             </button>
           ))}
+          {OBSERVE_URL && (
+            <a
+              className="nav-item nav-item--ext"
+              href={OBSERVE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open the OpenObserve / OTLP backend in a new tab"
+            >
+              <IconExternal size={18} />
+              <span>Observe</span>
+            </a>
+          )}
         </nav>
         <div className="side-foot">
           <button className="primary-btn" onClick={onRefresh} disabled={busy}>

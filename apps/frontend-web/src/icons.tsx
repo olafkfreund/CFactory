@@ -75,6 +75,9 @@ export const IconFlask = (p: IconProps) => (
 export const IconClock = (p: IconProps) => (
   <Svg {...p} size={13}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></Svg>
 );
+export const IconExternal = (p: IconProps) => (
+  <Svg {...p}><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M19 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" /></Svg>
+);
 export const IconCheck = (p: IconProps) => (
   <Svg {...p} size={13}><path d="M20 6L9 17l-5-5" /></Svg>
 );

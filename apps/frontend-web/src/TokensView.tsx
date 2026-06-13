@@ -119,6 +119,14 @@ export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
                   <span className="t-target">
                     {displayTitle(w.title, w.correlation_key)}
                     {hasDrill && <span className="tk-pending"> · {workers.length} worker{workers.length === 1 ? "" : "s"}</span>}
+                    {w.budget?.exceeded && (
+                      <span
+                        className="budget-badge"
+                        title={`Soft budget exceeded — spent $${w.budget.spent_usd.toFixed(2)} of $${w.budget.limit_usd.toFixed(2)} limit`}
+                      >
+                        over budget ${w.budget.spent_usd.toFixed(2)} / ${w.budget.limit_usd.toFixed(2)}
+                      </span>
+                    )}
                   </span>
                   <span className="ta-r mono">{fmtTokens(w.total_tokens)}</span>
                   <span className="ta-r mono">${w.cost_usd.toFixed(2)}</span>

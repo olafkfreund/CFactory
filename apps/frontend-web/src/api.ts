@@ -43,10 +43,24 @@ export interface ServiceTokens {
   instrumented: boolean;
 }
 
+// Soft budget (RFC-0001 v1.3 P2). Present on a work-item row ONLY when the
+// contract set a budget; absent (undefined) on the common case.
+export interface BudgetInfo {
+  limit_usd: number;
+  spent_usd: number;
+  exceeded: boolean;
+}
+
 export interface TokenTotals {
   total: { input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number };
   by_service: Record<string, ServiceTokens>;
-  by_work_item: { correlation_key: string; title: string | null; total_tokens: number; cost_usd: number }[];
+  by_work_item: {
+    correlation_key: string;
+    title: string | null;
+    total_tokens: number;
+    cost_usd: number;
+    budget?: BudgetInfo;
+  }[];
 }
 
 export async function fetchTokens(): Promise<TokenTotals> {

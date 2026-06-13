@@ -114,6 +114,7 @@ def token_totals(store: WorkItemStore) -> dict:
 
     for wi in store.list():
         wi_tot = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+        budget = None
         for svc in services:
             u = getattr(wi, svc).usage
             if u is None:
@@ -128,8 +129,17 @@ def token_totals(store: WorkItemStore) -> dict:
             b["cost_usd"] += u.cost_usd
             wi_tot["cost_usd"] += u.cost_usd
             total["cost_usd"] += u.cost_usd
+            # Soft budget (v1.3 P2): present only when the contract set one;
+            # carried on a service's terminal usage. Surface it on the row so
+            # the cockpit can render an "over budget" badge. None on the common
+            # (no-budget) case — old rows are unchanged.
+            if u.budget is not None:
+                budget = u.budget.model_dump()
         if wi_tot["total_tokens"] or wi_tot["cost_usd"]:
-            by_work_item.append({"correlation_key": wi.correlation_key, "title": wi.title, **wi_tot})
+            row = {"correlation_key": wi.correlation_key, "title": wi.title, **wi_tot}
+            if budget is not None:
+                row["budget"] = budget
+            by_work_item.append(row)
 
     by_work_item.sort(key=lambda w: w["total_tokens"], reverse=True)
     return {"total": total, "by_service": by_service, "by_work_item": by_work_item}

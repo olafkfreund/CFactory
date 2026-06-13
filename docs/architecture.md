@@ -93,10 +93,48 @@ rmux is disabled or no agents are running.
 
 ## Token & cost
 
-Every service attaches the RFC-0001 v1.1 `usage` block (input/output tokens,
+Every service attaches the RFC-0001 `usage` block (input/output tokens,
 cost, model) to its completion event. CFactory aggregates them into the
 **Tokens & cost** page — totals and a per-service, per-work-item breakdown — so
 real LLM spend across plan, code and test is visible in one place.
+
+### Per-worker drill-down
+
+A task is usually a fan-out of workers, each on its own slice and often on a
+different provider/model. The `WorkItem` carries a `WorkerUsage` list plus
+`by_provider` and `by_model` rollups, served at `GET /api/tokens/by_worker`, so
+the page can drill from a per-service total down to "which worker, on which model,
+cost what". Worker sub-events upsert into a `workers` map keyed by `worker_id`
+(**idempotent**); completion events with no worker data ingest exactly as before.
+A soft, informational **"over budget" badge** renders only when a work item's
+`usage.budget.exceeded` flag is set — surfaced, never enforced.
+
+### Live per-task cost stamp and sparkline
+
+While a task is running, each card shows a **live stamp** — accumulated cost,
+tokens, workers-done, elapsed — plus a hand-rolled SVG **sparkline of cumulative
+cost** that steps up as each worker finishes. It rides the existing WebSocket
+broadcast and poll (no new transport) and is fully additive: cards with no worker
+data render unchanged. Throttled `phase:"worker_progress"` heartbeats are ingested
+into a rolling per-worker series — **capped at 120 points/worker and pruned on a
+terminal event** so the store cannot bloat — exposed at
+`GET /api/tasks/{key}/worker-progress` and fed as a **dense** cumulative series
+into the sparkline for a smooth ~10s tick (falling back to the stepwise per-worker
+series when no heartbeats arrive).
+
+### Per-task detail vs. fleet metrics (a deliberate split)
+
+The per-running-task detail comes from CFactory's **own event store** (the worker
+events it already ingests), **not** from the metrics backend. The OpenTelemetry
+metrics the services emit are intentionally **low-cardinality** (no `task_id`),
+which is what keeps a metrics TSDB healthy but makes it unable to answer "show me
+this one task". So the responsibilities split cleanly: **OpenObserve** — a bundled
+sibling app the cockpit links to — serves fleet-wide aggregates over those
+low-cardinality metrics, while **CFactory** serves the per-task drill-down from its
+event store. CFactory deliberately does **not** implement an OTLP receiver or a
+time-series database of its own (that would reinvent Grafana/Tempo); the per-task
+series is a bounded, capped, pruned slice of the store that already backs the
+cockpit.
 
 ## What the cockpit shows
 
@@ -124,6 +162,13 @@ iteration). Continuous deployment is GitOps-driven: on every push to `main`, CI
 builds and pushes sha-tagged images to **GHCR**, then bumps the image tags in the
 `factory-gitops` repo so **ArgoCD** reconciles and redeploys the k3d cluster — no
 manual rollout step.
+
+The deploy is **gated on a green test run**: a `test` workflow runs the backend
+pytest suite (the **Backend pytest** check) plus a frontend TypeScript typecheck
+and production build on every PR and push, and the deploy workflow depends on it —
+nothing reaches the cluster unless the tests pass first. The backend also refuses
+to boot with the default audit-HMAC secret outside local mode, so the
+tamper-evident audit chain cannot be silently defeated in production.
 
 ## Tech stack
 

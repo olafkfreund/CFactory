@@ -1,6 +1,14 @@
 import { useEffect, useState, type ComponentType, type SVGProps } from "react";
 import { fetchServices, updateService, type Health, type ServiceStatus } from "./api";
-import { IconControlTower, IconDocument, IconRobot, IconFlask, IconEdit } from "./icons";
+import {
+  IconControlTower,
+  IconDocument,
+  IconRobot,
+  IconFlask,
+  IconEdit,
+  IconInsights,
+  IconExternal,
+} from "./icons";
 
 type Backend =
   | { kind: "loading" }
@@ -9,11 +17,27 @@ type Backend =
 
 type IconCmp = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 
-const ROLE: Record<string, { role: string; cls: string; Icon: IconCmp }> = {
+const ROLE: Record<string, { role: string; cls: string; Icon: IconCmp; label?: string }> = {
   pfactory: { role: "Plan", cls: "plan", Icon: IconDocument },
   aifactory: { role: "Code", cls: "code", Icon: IconRobot },
   tfactory: { role: "Test", cls: "test", Icon: IconFlask },
+  // OpenObserve telemetry backend — reachability-only (not a PARR factory, not an
+  // editable upstream). Its endpoint is set in the deployment manifest, not the UI.
+  observe: { role: "Observe", cls: "observe", Icon: IconInsights, label: "Observe (OpenObserve)" },
 };
+
+// Upstreams whose endpoint can be edited from this view (the PARR factories).
+// `observe` is configured via CFACTORY_OBSERVE_API_URL in the deployment manifest,
+// so it has no inline editor and no link to the runtime PUT endpoint.
+const EDITABLE = new Set(["pfactory", "aifactory", "tfactory"]);
+
+// Link out to the OpenObserve UI (the same VITE_OBSERVE_URL used by App.tsx, #87).
+// Build-time configurable; empty string hides the link. The observe Services row
+// links here so the operator can jump straight to the telemetry dashboard.
+const OBSERVE_URL =
+  import.meta.env.VITE_OBSERVE_URL === undefined
+    ? "https://observe.freundcloud.org.uk"
+    : import.meta.env.VITE_OBSERVE_URL;
 
 // Map the upstream probe status to a pill style + label. A reachable-but-
 // rejecting upstream (401/403) is amber "auth error", not a green "online".
@@ -111,13 +135,16 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
             const pending = statuses === null;
             const pill = pillFor(statuses?.[name]);
             const shownUrl = urlOverride[name] ?? url;
-            const isEditing = editing === name;
+            const editable = EDITABLE.has(name);
+            const isEditing = editing === name && editable;
+            // The observe row links out to the OpenObserve UI (when configured).
+            const linkUrl = name === "observe" ? OBSERVE_URL : "";
             return (
               <div className={`svc-card svc-card--${meta.cls}`} key={name}>
                 <div className="svc-top">
                   <span className="svc-ident">
                     <span className="svc-ico"><Icon size={17} /></span>
-                    <span className="svc-name">{name}</span>
+                    <span className="svc-name">{meta.label ?? name}</span>
                   </span>
                   <span
                     className={`status-pill ${pending ? "" : pill.cls}`}
@@ -152,9 +179,22 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
                 ) : (
                   <div className="svc-url-row">
                     <span className="svc-url mono">{shownUrl}</span>
-                    <button className="svc-edit-btn" title="Edit endpoint" aria-label={`Edit ${name} endpoint`} onClick={() => startEdit(name, shownUrl)}>
-                      <IconEdit size={14} />
-                    </button>
+                    {editable ? (
+                      <button className="svc-edit-btn" title="Edit endpoint" aria-label={`Edit ${name} endpoint`} onClick={() => startEdit(name, shownUrl)}>
+                        <IconEdit size={14} />
+                      </button>
+                    ) : linkUrl ? (
+                      <a
+                        className="svc-edit-btn"
+                        href={linkUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Open OpenObserve"
+                        aria-label="Open OpenObserve UI"
+                      >
+                        <IconExternal size={14} />
+                      </a>
+                    ) : null}
                   </div>
                 )}
               </div>

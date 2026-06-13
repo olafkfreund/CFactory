@@ -540,6 +540,7 @@ body {
 .svc-card--plan { border-top-color: var(--plan); }
 .svc-card--code { border-top-color: var(--code); }
 .svc-card--test { border-top-color: var(--test); }
+.svc-card--observe { border-top-color: var(--violet); }
 .svc-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.3rem; }
 .svc-name { font-weight: 700; }
 .svc-ident { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
@@ -548,6 +549,7 @@ body {
 .svc-card--plan .svc-ico { color: var(--plan); }
 .svc-card--code .svc-ico { color: var(--code); }
 .svc-card--test .svc-ico { color: var(--test); }
+.svc-card--observe .svc-ico { color: var(--violet); }
 .svc-role .svc-role-pill { margin-right: 0.4rem; }
 .svc-role { color: var(--muted); font-size: 0.82rem; margin-bottom: 0.7rem; }
 .svc-role-pill { font-size: 0.7rem; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0.1rem 0.45rem; }

@@ -3,13 +3,16 @@ import { motion } from "framer-motion";
 import {
   fetchLiveAgents,
   fetchProcess,
+  fetchTokensByWorker,
   type LiveAgent,
   type LiveProgress,
   type ProcessDetail,
+  type WorkerRow,
   type WorkItem,
 } from "./api";
 import { AgentTerminal } from "./LiveAgents";
 import TaskActions from "./TaskActions";
+import LiveTaskStamp from "./LiveTaskStamp";
 import { displayTitle, keySlug } from "./correlationKey";
 import { stageState } from "./taskState";
 
@@ -85,6 +88,9 @@ export default function TaskDetail({
 }) {
   const [proc, setProc] = useState<ProcessDetail | null>(null);
   const [agent, setAgent] = useState<LiveAgent | null>(null);
+  // Per-worker usage rows for this task (Tier 1 live cost stamp). Best-effort,
+  // additive: a failed fetch leaves it null and the stamp simply doesn't show.
+  const [workers, setWorkers] = useState<WorkerRow[] | null>(null);
   const [copied, setCopied] = useState(false);
   const key = wi.correlation_key;
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -101,6 +107,13 @@ export default function TaskDetail({
       fetchLiveAgents()
         .then((r) => alive && setAgent(r.agents.find((a) => a.correlation_key === key) ?? null))
         .catch(() => alive && setAgent(null));
+      fetchTokensByWorker()
+        .then((r) => {
+          if (!alive) return;
+          const row = r.by_work_item.find((w) => w.correlation_key === key);
+          setWorkers(row ? row.workers : null);
+        })
+        .catch(() => undefined); // additive; keep prior value, never blank
     };
     load();
     const id = window.setInterval(load, POLL_MS);
@@ -231,6 +244,9 @@ export default function TaskDetail({
               );
             })}
           </div>
+
+          {/* Tier 1 live cost/usage stamp — renders nothing without worker data */}
+          <LiveTaskStamp wi={wi} workers={workers ?? undefined} />
 
           {/* Actions — approve / reject / unstick / remove */}
           <TaskActions

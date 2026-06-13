@@ -491,6 +491,22 @@ body {
 .rt-card--clickable { cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
 .rt-card--clickable:hover { border-color: color-mix(in srgb, var(--cyan) 60%, var(--border)); }
 .rt-card--clickable:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+/* Tier 1: live per-worker cost/usage stamp + sparkline (additive). */
+.lts {
+  display: flex; align-items: center; gap: 0.55rem; margin-top: 0.55rem;
+  padding-top: 0.5rem; border-top: 1px dashed var(--border);
+  font-family: "JetBrains Mono", monospace; font-size: 0.7rem; color: var(--muted);
+  flex-wrap: wrap;
+}
+.lts-spark { display: block; flex: none; }
+.lts-spark-line { stroke: var(--code); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.lts-spark-dot { fill: var(--code); }
+.lts-metric { white-space: nowrap; }
+.lts-cost { color: var(--code); font-weight: 600; }
+.lts-tok { color: var(--cyan); }
+.lts-workers { color: var(--green); }
+.lts-elapsed { color: var(--faint); margin-left: auto; }
 .rt-console-btn {
   flex: none; background: color-mix(in srgb, var(--cyan) 14%, transparent); color: var(--cyan);
   border: 1px solid color-mix(in srgb, var(--cyan) 40%, transparent); border-radius: 6px; cursor: pointer;

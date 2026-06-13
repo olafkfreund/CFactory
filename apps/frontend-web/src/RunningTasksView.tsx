@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type ComponentType, type SVGProps } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { fetchLiveAgents, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ServiceState, type WorkItem } from "./api";
+import { fetchLiveAgents, fetchTokensByWorker, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ServiceState, type WorkerRow, type WorkItem } from "./api";
 import { IconDocument, IconRobot, IconFlask } from "./icons";
 import { stageState, overallState, STATE_LABEL, STATE_PILL, type TaskState } from "./taskState";
 import { displayTitle, keySlug } from "./correlationKey";
 import TaskDetail from "./TaskDetail";
 import AgentConsoleModal from "./AgentConsoleModal";
+import LiveTaskStamp from "./LiveTaskStamp";
 
 type IconCmp = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 type Filter = "active" | "running" | "review" | "failed" | "done";
@@ -71,6 +72,12 @@ export default function RunningTasksView({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [consoleAgent, setConsoleAgent] = useState<LiveAgent | null>(null);
   const [liveAgents, setLiveAgents] = useState<Map<string, LiveAgent>>(new Map());
+  // Per-worker usage rows keyed by correlation_key (Tier 1 live cost stamp).
+  // Polled on the same 5s cadence as live agents; the WS WorkItem broadcast
+  // carries no per-worker breakdown, so we fetch /api/tokens/by_worker here.
+  // Best-effort: a failed fetch leaves the previous map in place and never
+  // blanks a card — a task with no rows simply shows no stamp (as before).
+  const [workersByKey, setWorkersByKey] = useState<Map<string, WorkerRow[]>>(new Map());
 
   // Which work items currently have a live, streamable rmux agent — drives the
   // "open console" affordance. Polled so it tracks tasks starting/finishing.
@@ -82,6 +89,26 @@ export default function RunningTasksView({
           if (alive) setLiveAgents(new Map(r.agents.map((a) => [a.correlation_key, a])));
         })
         .catch(() => undefined);
+    poll();
+    const id = window.setInterval(poll, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  // Per-worker usage poll (Tier 1). Same cadence; additive + best-effort.
+  useEffect(() => {
+    let alive = true;
+    const poll = () =>
+      fetchTokensByWorker()
+        .then((r) => {
+          if (!alive) return;
+          const m = new Map<string, WorkerRow[]>();
+          for (const row of r.by_work_item) m.set(row.correlation_key, row.workers);
+          setWorkersByKey(m);
+        })
+        .catch(() => undefined); // keep last good map; never blank a card
     poll();
     const id = window.setInterval(poll, 5000);
     return () => {
@@ -158,6 +185,7 @@ export default function RunningTasksView({
           {shown.map((r, i) => {
             const liveAgent = liveAgents.get(r.wi.correlation_key);
             const canConsole = r.overall === "running" && liveAgent != null;
+            const workers = workersByKey.get(r.wi.correlation_key);
             return (
               <motion.div
                 key={r.wi.correlation_key}
@@ -231,6 +259,11 @@ export default function RunningTasksView({
                     </button>
                   )}
                 </div>
+
+                {/* Tier 1 live cost/usage stamp + sparkline. Renders nothing
+                    until this task has per-worker data, so cards without it are
+                    unchanged. */}
+                <LiveTaskStamp wi={r.wi} workers={workers} />
               </motion.div>
             );
           })}

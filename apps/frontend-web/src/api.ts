@@ -55,6 +55,41 @@ export async function fetchTokens(): Promise<TokenTotals> {
   return (await resp.json()) as TokenTotals;
 }
 
+// Per-worker / per-provider breakdown (RFC-0001 v1.3). Additive to /api/tokens.
+export interface RollupRow {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  workers: number;
+}
+
+export interface WorkerRow {
+  service: string;
+  worker_id: string;
+  subtask_id?: string | null;
+  agent_phase?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  duration_ms: number;
+}
+
+export interface TokensByWorker {
+  by_provider: Record<string, RollupRow>;
+  by_model: Record<string, RollupRow>;
+  by_work_item: { correlation_key: string; title: string | null; workers: WorkerRow[] }[];
+}
+
+export async function fetchTokensByWorker(): Promise<TokensByWorker> {
+  const resp = await fetch("/api/tokens/by_worker");
+  if (!resp.ok) throw new Error(`tokens by_worker error: HTTP ${resp.status}`);
+  return (await resp.json()) as TokensByWorker;
+}
+
 export interface TimelineEvent {
   service: string;
   status: string | null;

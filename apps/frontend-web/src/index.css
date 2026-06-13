@@ -146,6 +146,12 @@ body {
   letter-spacing: 0.015em; text-transform: uppercase;
 }
 .page-head p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+.page-subhead {
+  margin: 0 0 0.6rem;
+  font-family: var(--font-display); font-stretch: 110%;
+  font-size: 1.05rem; font-weight: 750; letter-spacing: 0.02em;
+  text-transform: uppercase; color: var(--muted);
+}
 
 .banner { margin-bottom: 1rem; padding: 0.65rem 0.9rem; border-radius: 9px; font-size: 0.85rem; }
 .banner--error {

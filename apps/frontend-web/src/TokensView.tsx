@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchTokens, type TokenTotals } from "./api";
+import { fetchTokens, fetchTokensByWorker, type TokenTotals, type TokensByWorker } from "./api";
 import { useCountUp } from "./motion";
 import { displayTitle, keySlug } from "./correlationKey";
 
@@ -17,11 +17,15 @@ function fmtTokens(n: number): string {
 
 export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
   const [data, setData] = useState<TokenTotals | null>(null);
+  const [byWorker, setByWorker] = useState<TokensByWorker | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTokens().then((d) => { setData(d); setErr(null); }).catch((e: unknown) =>
       setErr(e instanceof Error ? e.message : String(e)));
+    // Per-worker view is additive; a fetch failure must not blank the cost view.
+    fetchTokensByWorker().then(setByWorker).catch(() => setByWorker(null));
   }, [reloadSignal]);
 
   const totalTokens = useCountUp(data?.total.total_tokens ?? 0);
@@ -70,6 +74,27 @@ export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
         })}
       </div>
 
+      {byWorker && Object.keys(byWorker.by_provider).length > 0 && (
+        <>
+          <h2 className="page-subhead">By provider</h2>
+          <div className="table" style={{ marginBottom: "1.2rem" }}>
+            <div className="table-head" style={{ gridTemplateColumns: "1.6fr 0.7fr 1fr 0.8fr" }}>
+              <span>PROVIDER</span><span className="ta-r">WORKERS</span><span className="ta-r">TOKENS</span><span className="ta-r">COST</span>
+            </div>
+            {Object.entries(byWorker.by_provider)
+              .sort((a, b) => b[1].total_tokens - a[1].total_tokens)
+              .map(([provider, r]) => (
+                <div className="table-row" key={provider} style={{ gridTemplateColumns: "1.6fr 0.7fr 1fr 0.8fr" }}>
+                  <span className="t-target">{provider}</span>
+                  <span className="ta-r mono">{r.workers}</span>
+                  <span className="ta-r mono">{fmtTokens(r.total_tokens)}</span>
+                  <span className="ta-r mono">${r.cost_usd.toFixed(2)}</span>
+                </div>
+              ))}
+          </div>
+        </>
+      )}
+
       <div className="table">
         <div className="table-head" style={{ gridTemplateColumns: "1.2fr 2.4fr 1fr 0.8fr" }}>
           <span>WORK ITEM</span><span>TITLE</span><span className="ta-r">TOKENS</span><span className="ta-r">COST</span>
@@ -77,14 +102,42 @@ export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
         {!data || data.by_work_item.length === 0 ? (
           <div className="table-empty">No token usage recorded yet — services emit it as they finish instrumented runs.</div>
         ) : (
-          data.by_work_item.map((w) => (
-            <div className="table-row" key={w.correlation_key} style={{ gridTemplateColumns: "1.2fr 2.4fr 1fr 0.8fr" }}>
-              <span className="t-key" title={w.correlation_key}>#{keySlug(w.correlation_key)}</span>
-              <span className="t-target">{displayTitle(w.title, w.correlation_key)}</span>
-              <span className="ta-r mono">{fmtTokens(w.total_tokens)}</span>
-              <span className="ta-r mono">${w.cost_usd.toFixed(2)}</span>
-            </div>
-          ))
+          data.by_work_item.map((w) => {
+            const workers = byWorker?.by_work_item.find((x) => x.correlation_key === w.correlation_key)?.workers ?? [];
+            const hasDrill = workers.length > 0;
+            const open = openKey === w.correlation_key;
+            return (
+              <div key={w.correlation_key}>
+                <div
+                  className="table-row"
+                  style={{ gridTemplateColumns: "1.2fr 2.4fr 1fr 0.8fr", cursor: hasDrill ? "pointer" : "default" }}
+                  onClick={() => hasDrill && setOpenKey(open ? null : w.correlation_key)}
+                >
+                  <span className="t-key" title={w.correlation_key}>
+                    {hasDrill ? (open ? "▾ " : "▸ ") : ""}#{keySlug(w.correlation_key)}
+                  </span>
+                  <span className="t-target">
+                    {displayTitle(w.title, w.correlation_key)}
+                    {hasDrill && <span className="tk-pending"> · {workers.length} worker{workers.length === 1 ? "" : "s"}</span>}
+                  </span>
+                  <span className="ta-r mono">{fmtTokens(w.total_tokens)}</span>
+                  <span className="ta-r mono">${w.cost_usd.toFixed(2)}</span>
+                </div>
+                {open && workers.map((wk) => (
+                  <div
+                    className="table-row"
+                    key={wk.worker_id}
+                    style={{ gridTemplateColumns: "1.2fr 2.4fr 1fr 0.8fr", background: "rgba(255,255,255,0.02)" }}
+                  >
+                    <span className="t-key mono" style={{ paddingLeft: "1.4rem" }} title={wk.worker_id}>{wk.worker_id}</span>
+                    <span className="svc-role">{wk.provider ?? "—"} / {wk.model ?? "—"}{wk.agent_phase ? ` · ${wk.agent_phase}` : ""}</span>
+                    <span className="ta-r mono">{fmtTokens(wk.total_tokens)}</span>
+                    <span className="ta-r mono">${wk.cost_usd.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })
         )}
       </div>
 

@@ -135,6 +135,56 @@ def token_totals(store: WorkItemStore) -> dict:
     return {"total": total, "by_service": by_service, "by_work_item": by_work_item}
 
 
+def _merge_rollup(dst: dict, src: dict | None) -> None:
+    """Sum a per-provider/per-model rollup dict ``src`` into ``dst`` in place."""
+    for key, vals in (src or {}).items():
+        b = dst.setdefault(
+            key, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                  "cost_usd": 0.0, "workers": 0}
+        )
+        for k in ("input_tokens", "output_tokens", "total_tokens", "cost_usd", "workers"):
+            b[k] += vals.get(k, 0) or 0
+
+
+def token_by_worker(store: WorkItemStore) -> dict:
+    """Per-worker / per-provider / per-model breakdown (RFC-0001 v1.3).
+
+    Additive companion to ``token_totals``: surfaces the per-worker drill-down
+    and the provider/model rollups CFactory ingests from live ``phase:"worker"``
+    sub-events + terminal breakdowns. ``by_provider``/``by_model`` are aggregated
+    across every work item + service; ``by_work_item`` carries each item's
+    per-worker rows for the cockpit drill-down. Empty when nothing is
+    instrumented yet — old work items simply contribute no workers.
+    """
+    services = ("pfactory", "aifactory", "tfactory")
+    by_provider: dict[str, dict] = {}
+    by_model: dict[str, dict] = {}
+    items: list[dict] = []
+
+    for wi in store.list():
+        workers: list[dict] = []
+        for svc in services:
+            state = getattr(wi, svc)
+            for wid, w in (state.workers or {}).items():
+                wd = w if isinstance(w, dict) else w.model_dump()
+                workers.append({"service": svc, **wd})
+            _merge_rollup(by_provider, state.by_provider)
+            _merge_rollup(by_model, state.by_model)
+        if workers:
+            workers.sort(key=lambda x: x.get("total_tokens", 0), reverse=True)
+            items.append({
+                "correlation_key": wi.correlation_key,
+                "title": wi.title,
+                "workers": workers,
+            })
+
+    items.sort(
+        key=lambda it: sum(w.get("total_tokens", 0) for w in it["workers"]),
+        reverse=True,
+    )
+    return {"by_provider": by_provider, "by_model": by_model, "by_work_item": items}
+
+
 def rollups_summary_line(store: WorkItemStore) -> str:
     """One-line rollups summary for the copilot context."""
     r = rollups(store)

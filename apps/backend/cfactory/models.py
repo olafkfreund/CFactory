@@ -28,6 +28,20 @@ class Stage(str, Enum):
     TEST = "test"
 
 
+class BudgetInfo(BaseModel):
+    """Soft-budget envelope (RFC-0001 v1.3 P2 — *observe + warn, never abort*).
+
+    Carried on a terminal event's ``usage`` ONLY when the contract set a budget;
+    absent on the common (no-budget) case, where everything behaves exactly as
+    before. Purely informational: CFactory surfaces an "over budget" badge when
+    ``exceeded`` is true — no behaviour changes when it's absent or false.
+    """
+
+    limit_usd: float = 0.0
+    spent_usd: float = 0.0
+    exceeded: bool = False
+
+
 class TokenUsage(BaseModel):
     """LLM token/cost usage for one stage (RFC-0001 v1.1 additive `usage` block).
 
@@ -39,6 +53,9 @@ class TokenUsage(BaseModel):
     event for a parallel run. The scalar aggregate fields above are KEPT — old
     consumers ignore the new fields. ``workers`` is a list here (the wire shape);
     CFactory keys it by ``worker_id`` on the service slice (see ``ServiceState``).
+
+    ``budget`` is the optional soft-budget block (RFC-0001 v1.3 P2): present only
+    when the contract set a budget, absent (``None``) on the common case.
     """
 
     input_tokens: int = 0
@@ -50,6 +67,8 @@ class TokenUsage(BaseModel):
     workers: list[WorkerUsage] | None = None
     by_provider: dict[str, dict[str, Any]] | None = None
     by_model: dict[str, dict[str, Any]] | None = None
+    # v1.3 P2 soft budget (terminal event only; None when no budget was set).
+    budget: BudgetInfo | None = None
 
 
 class WorkerUsage(BaseModel):

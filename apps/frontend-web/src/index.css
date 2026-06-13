@@ -86,6 +86,12 @@ body {
 .nav-item:hover { background: var(--panel-2); color: var(--text); }
 .nav-item.active { background: color-mix(in srgb, var(--cyan) 14%, transparent); color: var(--text); box-shadow: inset 2px 0 0 var(--cyan); }
 .nav-item.active svg { color: var(--cyan); }
+/* External link (OpenObserve) sits among the nav buttons; it's an <a>, not a
+   <button>, so neutralise link styling and box-sizing to match. */
+.nav-item--ext { text-decoration: none; box-sizing: border-box; }
+.nav-item--ext svg { margin-left: auto; order: 2; opacity: 0.65; }
+.nav-item--ext span { order: 1; }
+.nav-item--ext:hover svg { opacity: 1; }
 
 .side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 0.5rem; }
 .primary-btn {
@@ -295,6 +301,16 @@ body {
 }
 .mc-term-close:hover { color: var(--text); }
 .tk-pending { color: var(--faint); font-style: italic; }
+/* Soft-budget "over budget" badge (RFC-0001 v1.3 P2). Purely visual — rendered
+   only when a work item's usage carries budget.exceeded === true. */
+.budget-badge {
+  display: inline-block; margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem; border-radius: 6px;
+  font: 600 0.62rem var(--font-mono); letter-spacing: 0.02em; white-space: nowrap;
+  color: var(--amber, #e0a106);
+  background: color-mix(in srgb, var(--amber, #e0a106) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber, #e0a106) 38%, transparent);
+}
 
 @media (max-width: 900px) { .mc-grid { grid-template-columns: 1fr; } }
 

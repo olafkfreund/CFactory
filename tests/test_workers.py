@@ -153,6 +153,59 @@ def test_by_worker_endpoint(client):
     assert tok["by_service"]["aifactory"]["instrumented"] is False
 
 
+def test_budget_exceeded_stored_and_surfaced(store):
+    # Terminal event carries a soft budget that was exceeded (v1.3 P2).
+    wi, applied = _ev(
+        store, correlation_key="1", service="aifactory", task_id="t",
+        status="done", phase="code",
+        usage={
+            "input_tokens": 100, "output_tokens": 50, "total_tokens": 150,
+            "cost_usd": 7.50,
+            "budget": {"limit_usd": 5.0, "spent_usd": 7.50, "exceeded": True},
+        },
+    )
+    assert applied is True
+    # stored on the slice's usage block
+    assert wi.aifactory.usage.budget is not None
+    assert wi.aifactory.usage.budget.exceeded is True
+    assert wi.aifactory.usage.budget.limit_usd == 5.0
+    assert wi.aifactory.usage.budget.spent_usd == 7.50
+    # surfaced on the tokens API row for the cockpit badge
+    t = token_totals(store)
+    row = next(r for r in t["by_work_item"] if r["correlation_key"] == "1")
+    assert row["budget"]["exceeded"] is True
+    assert row["budget"]["limit_usd"] == 5.0
+
+
+def test_event_without_budget_unchanged_no_budget_key(store):
+    # The common case: usage with NO budget block → behaves exactly as before,
+    # and the API row carries no `budget` key at all (back-compat).
+    _ev(store, correlation_key="2", service="aifactory", task_id="t",
+        status="done", phase="code",
+        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "cost_usd": 0.01})
+    wi = store.get("2")
+    assert wi.aifactory.usage.budget is None
+    t = token_totals(store)
+    row = next(r for r in t["by_work_item"] if r["correlation_key"] == "2")
+    assert "budget" not in row
+
+
+def test_budget_endpoint_round_trip(client):
+    client.post("/api/events", json={
+        "correlation_key": "8", "service": "aifactory", "task_id": "t",
+        "status": "done", "phase": "code", "updated_at": "2026-06-13T12:00:00Z",
+        "usage": {
+            "input_tokens": 80, "output_tokens": 20, "total_tokens": 100,
+            "cost_usd": 12.0,
+            "budget": {"limit_usd": 10.0, "spent_usd": 12.0, "exceeded": True},
+        },
+    })
+    body = client.get("/api/tokens").json()
+    row = next(r for r in body["by_work_item"] if r["correlation_key"] == "8")
+    assert row["budget"]["exceeded"] is True
+    assert row["budget"]["spent_usd"] == 12.0
+
+
 def test_old_event_endpoint_still_ingests(client):
     resp = client.post("/api/events", json={
         "correlation_key": "11", "service": "tfactory", "task_id": "t",

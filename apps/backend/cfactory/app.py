@@ -52,7 +52,12 @@ from .config import (
 from .copilot import Copilot, get_copilot, provider_status, reset_copilot
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
-from .copilot.tools import summarize_timeline, token_by_worker, token_totals
+from .copilot.tools import (
+    summarize_timeline,
+    token_by_worker,
+    token_totals,
+    worker_progress,
+)
 from .live_agents import LiveAgentsResult, discover_live_agents
 from .live_agent_proxy import ConnectFn, proxy_agent_console
 from .task_process import build_process_detail
@@ -344,6 +349,21 @@ def create_app() -> FastAPI:
         shape): exposes the drill-down ingested from live ``phase:"worker"``
         sub-events + terminal breakdowns. Empty when nothing is instrumented."""
         return token_by_worker(store)
+
+    @app.get("/api/tasks/{correlation_key}/worker-progress")
+    def get_worker_progress(
+        correlation_key: str,
+        store: WorkItemStore = Depends(store_dep),
+    ) -> dict[str, object]:
+        """Rolling per-worker progress series for a running task (Tier 1.5).
+
+        Additive to ``/api/tokens/by_worker``: exposes the ~10s heartbeat series
+        ingested from ``phase:"worker_progress"`` events as a single dense,
+        time-ordered cumulative series (plus the raw per-worker drill-down) so
+        the live stamp's sparkline ticks smoothly. ``series: []`` for an unknown
+        task or one with no progress yet — the frontend falls back to the
+        stepwise worker-completion series, so existing cards are unaffected."""
+        return worker_progress(store, correlation_key)
 
     @app.get("/api/progress")
     def get_progress(hub: LiveProgressHub = Depends(progress_hub_dep)) -> dict[str, object]:

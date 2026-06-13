@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType, type SVGProps } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { fetchLiveAgents, fetchTokensByWorker, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ServiceState, type WorkerRow, type WorkItem } from "./api";
+import { fetchLiveAgents, fetchTokensByWorker, fetchWorkerProgress, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ProgressSample, type ServiceState, type WorkerRow, type WorkItem } from "./api";
 import { IconDocument, IconRobot, IconFlask } from "./icons";
 import { stageState, overallState, STATE_LABEL, STATE_PILL, type TaskState } from "./taskState";
 import { displayTitle, keySlug } from "./correlationKey";
@@ -78,6 +78,11 @@ export default function RunningTasksView({
   // Best-effort: a failed fetch leaves the previous map in place and never
   // blanks a card — a task with no rows simply shows no stamp (as before).
   const [workersByKey, setWorkersByKey] = useState<Map<string, WorkerRow[]>>(new Map());
+  // Tier 1.5: dense per-~10s heartbeat series keyed by correlation_key, for the
+  // smooth ticking sparkline. Fetched per running task on the same cadence,
+  // best-effort: a failed fetch keeps the last-good series (never blanks a card),
+  // and a task with no series simply falls back to the stepwise stamp.
+  const [progressByKey, setProgressByKey] = useState<Map<string, ProgressSample[]>>(new Map());
 
   // Which work items currently have a live, streamable rmux agent — drives the
   // "open console" affordance. Polled so it tracks tasks starting/finishing.
@@ -125,6 +130,44 @@ export default function RunningTasksView({
         .sort((a, b) => ORDER[a.overall] - ORDER[b.overall]),
     [items, progress],
   );
+
+  // Keys of currently-running tasks — the only ones with a live heartbeat
+  // series worth polling. Joined into a stable string so the poll effect
+  // re-subscribes only when the running set actually changes.
+  const runningKeys = useMemo(
+    () => rows.filter((r) => r.overall === "running").map((r) => r.wi.correlation_key),
+    [rows],
+  );
+  const runningKeysSig = runningKeys.join(",");
+
+  // Per-running-task heartbeat poll (Tier 1.5). Same 5s cadence; additive +
+  // best-effort. Each task is fetched independently; a single failure leaves
+  // that task's last-good series untouched and never blanks others.
+  useEffect(() => {
+    if (runningKeys.length === 0) return;
+    let alive = true;
+    const poll = () => {
+      for (const key of runningKeys) {
+        fetchWorkerProgress(key)
+          .then((wp) => {
+            if (!alive || wp.series.length === 0) return; // keep last-good on empty
+            setProgressByKey((prev) => {
+              const next = new Map(prev);
+              next.set(key, wp.series);
+              return next;
+            });
+          })
+          .catch(() => undefined); // keep last good series; never blank a card
+      }
+    };
+    poll();
+    const id = window.setInterval(poll, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningKeysSig]);
 
   const counts = useMemo(() => {
     const c = { active: 0, running: 0, review: 0, failed: 0, done: 0 };
@@ -186,6 +229,7 @@ export default function RunningTasksView({
             const liveAgent = liveAgents.get(r.wi.correlation_key);
             const canConsole = r.overall === "running" && liveAgent != null;
             const workers = workersByKey.get(r.wi.correlation_key);
+            const wprogress = progressByKey.get(r.wi.correlation_key);
             return (
               <motion.div
                 key={r.wi.correlation_key}
@@ -263,7 +307,7 @@ export default function RunningTasksView({
                 {/* Tier 1 live cost/usage stamp + sparkline. Renders nothing
                     until this task has per-worker data, so cards without it are
                     unchanged. */}
-                <LiveTaskStamp wi={r.wi} workers={workers} />
+                <LiveTaskStamp wi={r.wi} workers={workers} progress={wprogress} />
               </motion.div>
             );
           })}

@@ -104,6 +104,32 @@ export async function fetchTokensByWorker(): Promise<TokensByWorker> {
   return (await resp.json()) as TokensByWorker;
 }
 
+// --- Tier 1.5: per-worker progress heartbeat series ----------------------
+
+// One sample in the dense cumulative-across-workers series (the sparkline feed).
+export interface ProgressSample {
+  ts: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+export interface WorkerProgress {
+  correlation_key: string;
+  // Dense, time-ordered cumulative series. Empty when the task has no heartbeat
+  // data yet — the stamp then falls back to its stepwise worker-completion series.
+  series: ProgressSample[];
+  // Raw per-worker drill-down (worker_id -> points). Unused by the stamp today.
+  workers: Record<string, ProgressSample[]>;
+}
+
+// Best-effort: the caller swallows failures and keeps the last-good render, so a
+// transient error never blanks a running card.
+export async function fetchWorkerProgress(correlationKey: string): Promise<WorkerProgress> {
+  const resp = await fetch(`/api/tasks/${encodeURIComponent(correlationKey)}/worker-progress`);
+  if (!resp.ok) throw new Error(`worker-progress error: HTTP ${resp.status}`);
+  return (await resp.json()) as WorkerProgress;
+}
+
 export interface TimelineEvent {
   service: string;
   status: string | null;

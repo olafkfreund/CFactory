@@ -195,6 +195,55 @@ def token_by_worker(store: WorkItemStore) -> dict:
     return {"by_provider": by_provider, "by_model": by_model, "by_work_item": items}
 
 
+def worker_progress(store: WorkItemStore, correlation_key: str) -> dict:
+    """Rolling per-worker progress series for one running task (Tier 1.5).
+
+    Exposes the ~10s heartbeat series ingested from ``phase:"worker_progress"``
+    events so the cockpit can draw a smooth ticking sparkline while a task runs.
+    Returns ``{correlation_key, series: [{ts, total_tokens, cost_usd}, ...],
+    workers: {worker_id: [points...]}}`` where ``series`` is a single DENSE,
+    time-ordered cumulative-across-workers series (the sparkline feed) and
+    ``workers`` is the raw per-worker drill-down. Empty (``series: []``) when the
+    task is unknown or has no progress yet — the frontend then falls back to the
+    stepwise worker-completion series, so this is purely additive."""
+    wi = store.get(correlation_key)
+    raw: dict[str, list[dict]] = {}
+    if wi is not None:
+        for svc in ("pfactory", "aifactory", "tfactory"):
+            state = getattr(wi, svc)
+            for wid, pts in (state.worker_progress or {}).items():
+                raw[wid] = [p if isinstance(p, dict) else p.model_dump() for p in pts]
+
+    # Build a single dense series: at each distinct timestamp, sum the
+    # latest-known total_tokens/cost_usd across all workers (cumulative across
+    # the parallel fleet). This is what the sparkline ticks on. We carry forward
+    # each worker's last sample so a quiet worker doesn't drop the running total.
+    stamps = sorted({p["ts"] for pts in raw.values() for p in pts})
+    series: list[dict] = []
+    if stamps:
+        # Pre-sort each worker's points by ts so the carry-forward walk is correct.
+        ordered = {wid: sorted(pts, key=lambda p: p["ts"]) for wid, pts in raw.items()}
+        cursors = dict.fromkeys(ordered, 0)
+        last = {wid: {"total_tokens": 0, "cost_usd": 0.0} for wid in ordered}
+        for ts in stamps:
+            for wid, pts in ordered.items():
+                i = cursors[wid]
+                while i < len(pts) and pts[i]["ts"] <= ts:
+                    last[wid] = {
+                        "total_tokens": pts[i].get("total_tokens", 0) or 0,
+                        "cost_usd": pts[i].get("cost_usd", 0.0) or 0.0,
+                    }
+                    i += 1
+                cursors[wid] = i
+            series.append({
+                "ts": ts,
+                "total_tokens": sum(v["total_tokens"] for v in last.values()),
+                "cost_usd": sum(v["cost_usd"] for v in last.values()),
+            })
+
+    return {"correlation_key": correlation_key, "series": series, "workers": raw}
+
+
 def rollups_summary_line(store: WorkItemStore) -> str:
     """One-line rollups summary for the copilot context."""
     r = rollups(store)

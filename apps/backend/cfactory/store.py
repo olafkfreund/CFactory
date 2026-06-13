@@ -44,6 +44,32 @@ def _is_worker_event(event: CompletionEvent) -> bool:
     return event.phase == "worker" and event.worker is not None
 
 
+def _is_worker_progress_event(event: CompletionEvent) -> bool:
+    """True for a Tier-1.5 heartbeat sample (``phase:"worker_progress"`` + worker).
+
+    A stream sample appended to the rolling ``worker_progress`` series — it never
+    mutates the scalar service slice (it is not terminal)."""
+    return event.phase == "worker_progress" and event.worker is not None
+
+
+# Cap the rolling per-worker progress series. A ~10s heartbeat over a long build
+# would otherwise grow unbounded; keeping the last ~120 points (~20 min at 10s)
+# bounds store growth while leaving plenty for a smooth sparkline. The series is
+# only needed WHILE running and is pruned entirely on a terminal event.
+_PROGRESS_SERIES_CAP = 120
+
+
+def _coerce_ts_ms(event: CompletionEvent) -> int:
+    """Best-effort epoch-ms for a heartbeat sample, from the event ``updated_at``.
+
+    Gives the series a monotone-ish x-axis for the sparkline even when individual
+    heartbeats don't carry their own timestamp. Never raises."""
+    try:
+        return int(event.updated_at.timestamp() * 1000)
+    except (AttributeError, ValueError, OSError):  # pragma: no cover - defensive
+        return 0
+
+
 _ROLLUP_KEYS = ("input_tokens", "output_tokens", "total_tokens", "cost_usd")
 
 
@@ -87,6 +113,12 @@ def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
     ``(service, correlation_key, status)`` key for producers without an ``id``.
     """
     entries = timeline or []
+    # Heartbeat samples (``phase:"worker_progress"``) are a high-frequency STREAM:
+    # every ~10s tick is a distinct, wanted sample. They are never deduped here
+    # (and are not appended to the timeline at all — see upsert_from_event), so
+    # the legacy ``(service, status="running")`` key can't collapse them.
+    if _is_worker_progress_event(event):
+        return False
     if event.id:
         return any(e.get("id") == event.id for e in entries)
     if _is_worker_event(event):
@@ -165,6 +197,33 @@ class WorkItemStore:
                         session.add(row)
 
                     prev = getattr(row, event.service.value) or {}
+                    if _is_worker_progress_event(event):
+                        # Tier 1.5 heartbeat: APPEND a ProgressPoint to the
+                        # rolling per-worker series, capped at the last
+                        # ``_PROGRESS_SERIES_CAP`` points. Do NOT touch the
+                        # service slice's status/phase/usage/workers — it's a
+                        # stream, not a terminal record. No timeline entry (the
+                        # stream is high-frequency; the series IS the record).
+                        w = event.worker
+                        series_map = dict(prev.get("worker_progress") or {})
+                        series = list(series_map.get(w.worker_id) or [])
+                        series.append({
+                            "ts": _coerce_ts_ms(event),
+                            "total_tokens": w.total_tokens,
+                            "cost_usd": w.cost_usd,
+                            "elapsed_ms": w.elapsed_ms,
+                        })
+                        if len(series) > _PROGRESS_SERIES_CAP:
+                            series = series[-_PROGRESS_SERIES_CAP:]
+                        series_map[w.worker_id] = series
+                        slice_dict = {**prev, "worker_progress": series_map}
+                        # task_id is handy for the running-task progress API but
+                        # never overwrites an existing one.
+                        slice_dict.setdefault("task_id", event.task_id)
+                        setattr(row, event.service.value, slice_dict)
+                        row.updated_at = _now()
+                        session.flush()
+                        return row.to_model(), True
                     if _is_worker_event(event):
                         # Live per-worker sub-event: upsert into the slice's
                         # ``workers`` map (idempotent by worker_id — re-emit
@@ -209,6 +268,15 @@ class WorkItemStore:
                             slice_dict["by_model"] = event.usage.by_model
                         else:
                             slice_dict["by_model"] = rollup_by(workers, "model")
+                        # Rolling progress series is only needed WHILE running.
+                        # On a TERMINAL event for the task, prune it (the slice
+                        # rebuild already dropped it — keep it dropped) so
+                        # finished tasks don't bloat the store. On a non-terminal
+                        # ordinary event, PRESERVE the accumulated series.
+                        if _is_terminal(event.status):
+                            slice_dict["worker_progress"] = {}
+                        else:
+                            slice_dict["worker_progress"] = prev.get("worker_progress") or {}
                     setattr(row, event.service.value, slice_dict)
 
                     # Reassign (not .append) so SQLAlchemy detects the JSON column change.

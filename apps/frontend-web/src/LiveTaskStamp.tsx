@@ -1,18 +1,23 @@
-// LiveTaskStamp — Tier 1 of the per-worker observability work
+// LiveTaskStamp — per-worker observability (Tier 1 + Tier 1.5)
 // (design: Factory/docs/plans/2026-06-13-per-worker-observability-design.md).
 //
 // A compact "stamp" for a running task card: accumulated cost_usd, total
-// tokens, # workers done, and elapsed — plus a tiny inline SVG sparkline of
-// CUMULATIVE COST across the workers in completion order (it grows one step per
-// finished worker). This is the "ticks on each worker completion" graph; a
-// future per-second time-series (from heartbeat events) is left as a seam below.
+// tokens, # workers done, and elapsed — plus a tiny inline SVG sparkline.
+//
+// The sparkline has two feeds (it picks the densest available):
+//   Tier 1.5 (preferred): a DENSE per-~10s heartbeat series of cumulative cost
+//     across the running fleet (from /api/tasks/{key}/worker-progress) — this
+//     "ticks" smoothly while the task runs.
+//   Tier 1 (fallback): cumulative cost STEPPED by worker completion (one step
+//     per finished worker), used when no heartbeat series exists yet.
 //
 // Everything here is ADDITIVE and GUARDED: given an empty/absent worker set the
 // component renders nothing, so a running card with no per-worker data yet looks
-// exactly as it did before this feature shipped.
+// exactly as it did before this feature shipped. The progress feed is
+// best-effort — a missing/failed fetch silently falls back to the stepwise feed.
 
 import { useMemo } from "react";
-import type { WorkerRow, WorkItem } from "./api";
+import type { ProgressSample, WorkerRow, WorkItem } from "./api";
 
 // --- Pure, unit-testable derivation --------------------------------------
 
@@ -73,6 +78,23 @@ export function deriveElapsedSeconds(wi: Pick<WorkItem, "timeline">, nowMs = Dat
   return Math.max(0, Math.round((end - firstMs) / 1000));
 }
 
+/**
+ * Choose the sparkline feed. Prefer the DENSE Tier-1.5 heartbeat series
+ * (cumulative cost over time across the fleet) for smooth ~10s ticking; fall
+ * back to the Tier-1 stepwise worker-completion series when no heartbeat data
+ * exists. The progress series is already cumulative + time-ordered server-side,
+ * so we just project its cost. A single-point series is fine (renders a dot).
+ */
+export function deriveSparklineSeries(
+  cumulativeCost: number[],
+  progress: readonly ProgressSample[] | undefined,
+): { series: number[]; dense: boolean } {
+  if (progress && progress.length > 0) {
+    return { series: progress.map((p) => p.cost_usd ?? 0), dense: true };
+  }
+  return { series: cumulativeCost, dense: false };
+}
+
 // --- Tiny formatters (mirror TokensView's house style) -------------------
 
 function fmtTokens(n: number): string {
@@ -98,10 +120,9 @@ function fmtElapsed(sec: number | null): string {
 
 // --- Sparkline (hand-rolled SVG, no chart lib) ---------------------------
 //
-// SEAM: this draws cumulative cost stepped by WORKER COMPLETION. A future
-// per-second time-series (driven by per-worker heartbeat events — design P2)
-// would feed a denser series in here; the polyline math below is series-shape
-// agnostic, so that upgrade is a data swap, not a rewrite.
+// SEAM (now used by Tier 1.5): the polyline math is series-shape agnostic, so
+// the caller swaps in EITHER the stepwise worker-completion series OR the dense
+// per-~10s heartbeat series (see deriveSparklineSeries) without touching this.
 
 function CostSparkline({ series, width = 64, height = 18 }: { series: number[]; width?: number; height?: number }) {
   // Need at least two points to draw a line; a single worker shows just a dot.
@@ -140,21 +161,34 @@ function CostSparkline({ series, width = 64, height = 18 }: { series: number[]; 
 export default function LiveTaskStamp({
   wi,
   workers,
+  progress,
 }: {
   wi: Pick<WorkItem, "timeline">;
   // The per-worker rows for THIS task (from /api/tokens/by_worker), or undefined
   // when the by_worker fetch hasn't landed / failed. Either way we no-op.
   workers: readonly WorkerRow[] | undefined;
+  // Tier 1.5 dense heartbeat series (from /api/tasks/{key}/worker-progress), or
+  // undefined when absent / not fetched / failed. When present + non-empty it
+  // drives a smooth ~10s ticking sparkline; otherwise we fall back to the
+  // stepwise worker-completion series. Best-effort: never required to render.
+  progress?: readonly ProgressSample[] | undefined;
 }) {
   const stats = useMemo(() => (workers && workers.length ? deriveStampStats(workers) : null), [workers]);
   const elapsed = useMemo(() => deriveElapsedSeconds(wi), [wi]);
+  const spark = useMemo(
+    () => deriveSparklineSeries(stats?.cumulativeCost ?? [], progress),
+    [stats, progress],
+  );
 
   // Guard: no worker data → render exactly as before (nothing).
   if (!stats) return null;
 
   return (
-    <div className="lts" title="Live per-worker cost & usage (Tier 1)">
-      <CostSparkline series={stats.cumulativeCost} />
+    <div
+      className="lts"
+      title={`Live per-worker cost & usage (${spark.dense ? "live ~10s ticks" : "per-worker steps"})`}
+    >
+      <CostSparkline series={spark.series} />
       <span className="lts-metric lts-cost" title={`$${stats.costUsd.toFixed(4)} so far`}>
         {fmtCost(stats.costUsd)}
       </span>

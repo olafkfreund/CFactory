@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     pfactory_api_url: str = "http://localhost:3105"
     tfactory_api_url: str = "http://localhost:3103"
 
+    # OpenObserve ("observe") — the OTLP/telemetry backend the fleet ships traces,
+    # metrics and logs to. NOT a PARR factory: it has no completion-event API and is
+    # never polled/hydrated into the WorkItem store. It appears ONLY in the Services
+    # reachability view so the cockpit can show whether observe is up. Probed at its
+    # real OpenObserve health path (GET /healthz → 200 "ok"). The default is the
+    # local dev port; the in-cluster prod value is
+    # http://observe.factory.svc.cluster.local:5080 — set CFACTORY_OBSERVE_API_URL in
+    # the deployment manifest (don't hardcode the cluster DNS as the default).
+    observe_api_url: str = "http://localhost:5080"
+
     # Shared bearer token for authenticated calls to the sibling factories. All
     # three (PFactory/AIFactory/TFactory) guard their REST + WS surface with the
     # same scheme — `Authorization: Bearer <APP_API_TOKEN>` — so the cockpit sends

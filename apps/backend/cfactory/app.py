@@ -118,6 +118,41 @@ def action_transport_dep() -> httpx.BaseTransport | None:
     return None
 
 
+# OpenObserve's real health endpoint: GET /healthz returns 200 "ok" when up.
+# Kept as a per-service map (not a single fixed path) so the probe is health-path
+# aware — the PARR factories use their own list/health paths via their adapters,
+# while observe uses OpenObserve's /healthz.
+OBSERVE_HEALTH_PATH = "/healthz"
+
+
+def observe_transport_dep() -> httpx.BaseTransport | None:
+    """Dependency seam for the observe reachability probe — overridden in tests
+    with a MockTransport. Defaults to None so production uses real transport."""
+    return None
+
+
+def _probe_observe(
+    base_url: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = 4.0,
+) -> ServiceProbe:
+    """Reachability probe for the OpenObserve telemetry backend, hitting its REAL
+    health path (GET /healthz → 200 "ok"). In-cluster (direct service URL), so no
+    SSO/auth is involved. Mirrors ServiceProbe's classification: 200 → online, a
+    connect/timeout/transport error → offline, any other HTTP status → error.
+    Best-effort — never raises."""
+    try:
+        with httpx.Client(base_url=base_url, timeout=timeout, transport=transport) as client:
+            resp = client.get(OBSERVE_HEALTH_PATH)
+    except httpx.HTTPError as exc:
+        return ServiceProbe(online=False, status="offline", detail=str(exc))
+    code = resp.status_code
+    if code == 200:
+        return ServiceProbe(online=True, status="online")
+    return ServiceProbe(online=False, status="error", detail=f"{code} {resp.reason_phrase}")
+
+
 def live_agent_connect_dep() -> ConnectFn:
     """Dependency seam for the upstream rmux WS client — overridden in tests with
     a fake upstream. Defaults to the real ``websockets.connect``."""
@@ -209,6 +244,9 @@ def create_app() -> FastAPI:
                 "aifactory": settings.aifactory_api_url,
                 "pfactory": settings.pfactory_api_url,
                 "tfactory": settings.tfactory_api_url,
+                # OpenObserve telemetry backend — reachability-only (not a PARR
+                # factory; never polled/hydrated). Listed here for Services-view parity.
+                "observe": settings.observe_api_url,
             },
         }
 
@@ -265,6 +303,7 @@ def create_app() -> FastAPI:
     @app.get("/api/services")
     async def services(
         adapters: list[BaseHTTPAdapter] = Depends(adapters_dep),
+        observe_transport: httpx.BaseTransport | None = Depends(observe_transport_dep),
     ) -> dict[str, object]:
         """Per-upstream reachability for the Services view. Best-effort: a probe
         failure is reported as offline, never fatal."""
@@ -293,6 +332,23 @@ def create_app() -> FastAPI:
                     "detail": probe.detail,
                 }
             )
+        # OpenObserve ("observe") — reachability-only. NOT a PARR factory: it has no
+        # list/completion API and never becomes an adapter, so it can't be probed via
+        # the adapter loop above. Probe its REAL OpenObserve health path (GET /healthz
+        # → 200 "ok") directly, in-cluster (no SSO). Best-effort: never fatal.
+        observe_probe = await run_in_threadpool(
+            lambda: _probe_observe(settings.observe_api_url, transport=observe_transport)
+        )
+        out.append(
+            {
+                "name": "observe",
+                "role": "Observe",
+                "url": settings.observe_api_url,
+                "online": observe_probe.online,
+                "status": observe_probe.status,
+                "detail": observe_probe.detail,
+            }
+        )
         return {"services": out}
 
     @app.put("/api/services/{name}")

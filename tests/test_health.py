@@ -10,6 +10,8 @@ def test_health_ok(client):
     assert body["status"] == "ok"
     assert body["service"] == "cfactory"
     assert "aifactory" in body["upstreams"]
+    # The OpenObserve telemetry backend is listed for Services-view parity (#45).
+    assert "observe" in body["upstreams"]
 
 
 def test_events_accepts_normalized_envelope(client):

@@ -11,7 +11,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from cfactory.adapters import AIFactoryAdapter, PFactoryAdapter, TFactoryAdapter
-from cfactory.app import adapters_dep, create_app
+from cfactory.app import adapters_dep, create_app, observe_transport_dep
 
 
 def _t(payload, status=200):
@@ -45,3 +45,68 @@ def test_services_classifies_online_unauthorized_and_offline():
 
     assert by_name["tfactory"]["online"] is False
     assert by_name["tfactory"]["status"] == "offline"
+
+
+def _observe_transport(status=200, body="ok"):
+    """Mock transport that asserts the probe targets OpenObserve's /healthz path."""
+
+    def handler(request):
+        assert request.url.path == "/healthz", request.url.path
+        return httpx.Response(status, text=body)
+
+    return httpx.MockTransport(handler)
+
+
+def _three_adapters_up():
+    return [
+        PFactoryAdapter("http://x", transport=_t({"sessions": []})),
+        AIFactoryAdapter("http://x", transport=_t({"tasks": []})),
+        TFactoryAdapter("http://x", transport=_t({"results": []})),
+    ]
+
+
+def test_services_includes_observe_entry_and_reports_up_on_200():
+    app = create_app()
+    app.dependency_overrides[adapters_dep] = _three_adapters_up
+    app.dependency_overrides[observe_transport_dep] = lambda: _observe_transport(200, "ok")
+    client = TestClient(app)
+
+    services = client.get("/api/services").json()["services"]
+    by_name = {s["name"]: s for s in services}
+
+    # Observe appears in the Services view…
+    assert "observe" in by_name
+    obs = by_name["observe"]
+    assert obs["role"] == "Observe"
+    # …and reports UP when its real health path (/healthz) returns 200.
+    assert obs["online"] is True
+    assert obs["status"] == "online"
+
+    # Back-compat: the existing three PARR factories are unaffected.
+    assert by_name["pfactory"]["online"] is True
+    assert by_name["aifactory"]["online"] is True
+    assert by_name["tfactory"]["online"] is True
+
+
+def test_services_observe_down_when_unreachable():
+    app = create_app()
+    app.dependency_overrides[adapters_dep] = _three_adapters_up
+    app.dependency_overrides[observe_transport_dep] = lambda: _offline()
+    client = TestClient(app)
+
+    by_name = {s["name"]: s for s in client.get("/api/services").json()["services"]}
+    assert by_name["observe"]["online"] is False
+    assert by_name["observe"]["status"] == "offline"
+    # The factories still report up — observe being down doesn't affect them.
+    assert by_name["pfactory"]["online"] is True
+
+
+def test_services_observe_error_on_non_200():
+    app = create_app()
+    app.dependency_overrides[adapters_dep] = _three_adapters_up
+    app.dependency_overrides[observe_transport_dep] = lambda: _observe_transport(503, "down")
+    client = TestClient(app)
+
+    by_name = {s["name"]: s for s in client.get("/api/services").json()["services"]}
+    assert by_name["observe"]["online"] is False
+    assert by_name["observe"]["status"] == "error"

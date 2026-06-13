@@ -71,6 +71,23 @@ class TokenUsage(BaseModel):
     budget: BudgetInfo | None = None
 
 
+class ProgressPoint(BaseModel):
+    """One per-worker heartbeat sample (RFC-0001 v1.3, ``phase:"worker_progress"``).
+
+    A throttled in-flight sample emitted ~every 10s WHILE a worker runs (Tier
+    1.5 — the ticking chain). Unlike the terminal ``phase:"worker"`` record, a
+    progress point is a STREAM sample: it is appended to a rolling per-worker
+    series and never mutates the service slice's status/phase/usage. ``ts`` is
+    the worker-reported ``updated_at`` (epoch ms preferred; CFactory stamps it
+    from the event's ``updated_at`` so the series is monotone for the sparkline).
+    """
+
+    ts: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+    elapsed_ms: int = 0
+
+
 class WorkerUsage(BaseModel):
     """Per-worker (per-subtask) usage record (RFC-0001 v1.3, ``phase:"worker"``).
 
@@ -91,6 +108,10 @@ class WorkerUsage(BaseModel):
     total_tokens: int = 0
     cost_usd: float = 0.0
     duration_ms: int = 0
+    # Heartbeat (``phase:"worker_progress"``) samples carry elapsed-so-far as
+    # ``elapsed_ms`` (the terminal ``phase:"worker"`` record uses ``duration_ms``).
+    # Optional so the terminal worker record round-trips unchanged.
+    elapsed_ms: int = 0
 
 
 class CompletionEvent(BaseModel):
@@ -115,10 +136,16 @@ class CompletionEvent(BaseModel):
     phase: str | None = None
     updated_at: datetime
     usage: TokenUsage | None = None
-    # v1.3 live per-worker sub-event (``phase:"worker"``). Carries one worker's
-    # record; ingested into the service slice's ``workers`` map keyed by
-    # ``worker_id``, leaving the service-level ``usage`` slice untouched. Absent
-    # on every legacy / non-worker event.
+    # v1.3 live per-worker sub-event. The SAME ``worker`` payload carries two
+    # event kinds, distinguished by ``phase``:
+    #  - ``phase:"worker"``        terminal per-worker record → upserts the
+    #                              slice's ``workers`` map (keyed by worker_id).
+    #  - ``phase:"worker_progress"`` Tier-1.5 heartbeat sample → appended to the
+    #                              rolling ``worker_progress`` series (the ~10s
+    #                              ticking stream). Reads total_tokens/cost_usd/
+    #                              elapsed_ms; never touches the scalar slice.
+    # Both leave the service-level ``usage``/status/phase untouched. Absent on
+    # every legacy / non-worker event.
     worker: WorkerUsage | None = None
 
 
@@ -131,6 +158,13 @@ class ServiceState(BaseModel):
     rollups (recomputed from ``workers`` for the API, or stored straight from a
     terminal event's ``usage`` breakdown). All default empty so legacy slices
     round-trip unchanged.
+
+    Tier 1.5 adds ``worker_progress``: a rolling per-worker SERIES keyed by
+    ``worker_id -> list[ProgressPoint]`` fed by live ``phase:"worker_progress"``
+    heartbeats (the ~10s ticking stream). It is capped per worker to bound store
+    growth, never mutates the scalar slice, and is PRUNED on a terminal event for
+    the task (only needed while running). Defaults empty so legacy slices and the
+    terminal-only ``workers`` view round-trip unchanged.
     """
 
     task_id: str | None = None
@@ -138,6 +172,7 @@ class ServiceState(BaseModel):
     phase: str | None = None
     usage: TokenUsage | None = None
     workers: dict[str, WorkerUsage] = Field(default_factory=dict)
+    worker_progress: dict[str, list[ProgressPoint]] = Field(default_factory=dict)
     by_provider: dict[str, dict[str, Any]] = Field(default_factory=dict)
     by_model: dict[str, dict[str, Any]] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)

@@ -4,9 +4,11 @@ import {
   fetchLiveAgents,
   fetchProcess,
   fetchTokensByWorker,
+  fetchWorkerProgress,
   type LiveAgent,
   type LiveProgress,
   type ProcessDetail,
+  type ProgressSample,
   type WorkerRow,
   type WorkItem,
 } from "./api";
@@ -91,6 +93,10 @@ export default function TaskDetail({
   // Per-worker usage rows for this task (Tier 1 live cost stamp). Best-effort,
   // additive: a failed fetch leaves it null and the stamp simply doesn't show.
   const [workers, setWorkers] = useState<WorkerRow[] | null>(null);
+  // Tier 1.5: dense per-~10s heartbeat series for the smooth ticking sparkline.
+  // Best-effort + additive: kept null until a non-empty series lands; on empty
+  // or error the stamp falls back to the stepwise worker-completion series.
+  const [progress, setProgress] = useState<ProgressSample[] | null>(null);
   const [copied, setCopied] = useState(false);
   const key = wi.correlation_key;
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -114,6 +120,12 @@ export default function TaskDetail({
           setWorkers(row ? row.workers : null);
         })
         .catch(() => undefined); // additive; keep prior value, never blank
+      fetchWorkerProgress(key)
+        .then((wp) => {
+          if (!alive || wp.series.length === 0) return; // keep last-good on empty
+          setProgress(wp.series);
+        })
+        .catch(() => undefined); // additive; keep prior series, never blank
     };
     load();
     const id = window.setInterval(load, POLL_MS);
@@ -245,8 +257,9 @@ export default function TaskDetail({
             })}
           </div>
 
-          {/* Tier 1 live cost/usage stamp — renders nothing without worker data */}
-          <LiveTaskStamp wi={wi} workers={workers ?? undefined} />
+          {/* Live cost/usage stamp — renders nothing without worker data. With a
+              Tier-1.5 heartbeat series it ticks smoothly; else stepwise. */}
+          <LiveTaskStamp wi={wi} workers={workers ?? undefined} progress={progress ?? undefined} />
 
           {/* Actions — approve / reject / unstick / remove */}
           <TaskActions

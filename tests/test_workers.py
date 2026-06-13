@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from cfactory.copilot.tools import token_by_worker, token_totals
+from cfactory.copilot.tools import token_by_worker, token_totals, worker_progress
 from cfactory.models import CompletionEvent
+from cfactory.store import _PROGRESS_SERIES_CAP
 
 
 def _ev(store, **kw):
@@ -204,6 +205,131 @@ def test_budget_endpoint_round_trip(client):
     row = next(r for r in body["by_work_item"] if r["correlation_key"] == "8")
     assert row["budget"]["exceeded"] is True
     assert row["budget"]["spent_usd"] == 12.0
+
+
+# --- Tier 1.5: per-worker progress heartbeat series -----------------------
+
+def _progress(store, *, ts, wid="w1", total_tokens=100, cost_usd=0.10, elapsed_ms=1000,
+              correlation_key="1", status="running"):
+    """Ingest a ``phase:"worker_progress"`` heartbeat at an explicit timestamp."""
+    return store.upsert_from_event(CompletionEvent(
+        correlation_key=correlation_key, service="aifactory", task_id="t",
+        status=status, phase="worker_progress",
+        updated_at=datetime.fromtimestamp(ts, tz=timezone.utc),
+        worker={
+            "worker_id": wid, "subtask_id": f"st-{wid}", "agent_phase": "implement",
+            "provider": "claude", "model": "opus",
+            "total_tokens": total_tokens, "cost_usd": cost_usd, "elapsed_ms": elapsed_ms,
+        },
+    ))
+
+
+def test_progress_events_append_series(store):
+    for i, (tok, cost) in enumerate([(100, 0.10), (200, 0.20), (300, 0.30)], start=1):
+        wi, applied = _progress(store, ts=1_000_000 + i * 10, total_tokens=tok, cost_usd=cost)
+        assert applied is True
+    series = wi.aifactory.worker_progress["w1"]
+    assert len(series) == 3
+    assert [p.total_tokens for p in series] == [100, 200, 300]
+    assert [p.cost_usd for p in series] == [0.10, 0.20, 0.30]
+    # a heartbeat must NOT touch the scalar service slice (it's a stream)
+    assert wi.aifactory.status is None
+    assert wi.aifactory.phase is None
+    assert wi.aifactory.usage is None
+    assert wi.aifactory.workers == {}
+    # heartbeats are not written to the timeline (high-frequency stream)
+    assert all(e.phase != "worker_progress" for e in wi.timeline)
+
+
+def test_progress_series_capped(store):
+    over = _PROGRESS_SERIES_CAP + 25
+    for i in range(over):
+        wi, _ = _progress(store, ts=1_000_000 + i, total_tokens=i)
+    series = wi.aifactory.worker_progress["w1"]
+    assert len(series) == _PROGRESS_SERIES_CAP  # capped
+    # the OLDEST points were dropped (keep last N), so the tail is the newest
+    assert series[-1].total_tokens == over - 1
+    assert series[0].total_tokens == over - _PROGRESS_SERIES_CAP
+
+
+def test_terminal_event_prunes_progress_series(store):
+    _progress(store, ts=1_000_001, total_tokens=100)
+    _progress(store, ts=1_000_002, total_tokens=200)
+    assert len(store.get("1").aifactory.worker_progress["w1"]) == 2
+    # terminal event for the task → series pruned (only needed while running)
+    _ev(store, correlation_key="1", service="aifactory", task_id="t",
+        status="done", phase="code",
+        usage={"input_tokens": 100, "output_tokens": 100, "total_tokens": 200, "cost_usd": 0.20})
+    wi = store.get("1")
+    assert wi.aifactory.worker_progress == {}   # pruned
+    assert wi.aifactory.status == "done"        # terminal slice intact
+    assert wi.aifactory.usage.total_tokens == 200
+
+
+def test_non_terminal_event_preserves_progress_series(store):
+    _progress(store, ts=1_000_001, total_tokens=100)
+    # a non-terminal ordinary event (e.g. running/code) must NOT wipe the series
+    _ev(store, correlation_key="1", service="aifactory", task_id="t",
+        status="running", phase="code")
+    wi = store.get("1")
+    assert "w1" in wi.aifactory.worker_progress
+    assert wi.aifactory.status == "running"
+
+
+def test_old_event_without_progress_unaffected(store):
+    # legacy event with no worker_progress → empty series, ingests fine
+    wi, applied = _ev(store, correlation_key="9", service="pfactory", task_id="p",
+                      status="emitted", phase="plan",
+                      usage={"input_tokens": 10, "output_tokens": 5,
+                             "total_tokens": 15, "cost_usd": 0.01})
+    assert applied is True
+    assert wi.pfactory.worker_progress == {}
+
+
+def test_worker_progress_dense_series_across_workers(store):
+    # two workers heartbeat at interleaved timestamps → dense cumulative series
+    _progress(store, ts=1_000_010, wid="w1", total_tokens=100, cost_usd=0.10)
+    _progress(store, ts=1_000_020, wid="w2", total_tokens=50, cost_usd=0.05)
+    _progress(store, ts=1_000_030, wid="w1", total_tokens=300, cost_usd=0.30)
+    out = worker_progress(store, "1")
+    # ts is coerced to epoch-MS from the event's updated_at (seconds * 1000).
+    assert [p["ts"] for p in out["series"]] == [1_000_010_000, 1_000_020_000, 1_000_030_000]
+    # cumulative-across-workers, carry-forward each worker's last sample
+    assert out["series"][0]["total_tokens"] == 100          # w1 only
+    assert out["series"][1]["total_tokens"] == 150          # w1=100 carried + w2=50
+    assert out["series"][2]["total_tokens"] == 350          # w1=300 + w2=50
+    assert abs(out["series"][2]["cost_usd"] - 0.35) < 1e-9
+    assert set(out["workers"]) == {"w1", "w2"}
+
+
+def test_worker_progress_unknown_task_empty(store):
+    out = worker_progress(store, "does-not-exist")
+    assert out["series"] == []
+    assert out["workers"] == {}
+
+
+def test_worker_progress_endpoint(client):
+    for i, tok in enumerate([100, 200, 300], start=1):
+        client.post("/api/events", json={
+            "correlation_key": "42", "service": "aifactory", "task_id": "t",
+            "status": "running", "phase": "worker_progress",
+            "updated_at": f"2026-06-13T12:00:0{i}Z",
+            "worker": {
+                "worker_id": "wA", "subtask_id": "s1", "agent_phase": "implement",
+                "provider": "claude", "model": "opus",
+                "total_tokens": tok, "cost_usd": tok / 1000.0, "elapsed_ms": i * 1000,
+            },
+        })
+    body = client.get("/api/tasks/42/worker-progress").json()
+    assert len(body["series"]) == 3
+    assert [p["total_tokens"] for p in body["series"]] == [100, 200, 300]
+    assert "wA" in body["workers"]
+    # existing endpoints unaffected: a worker_progress event leaves the scalar
+    # service usage untouched (back-compat).
+    tok_body = client.get("/api/tokens").json()
+    assert tok_body["by_service"]["aifactory"]["instrumented"] is False
+    bw = client.get("/api/tokens/by_worker").json()
+    assert bw["by_work_item"] == []  # progress heartbeats are not terminal workers
 
 
 def test_old_event_endpoint_still_ingests(client):

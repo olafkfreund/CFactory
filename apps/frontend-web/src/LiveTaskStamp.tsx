@@ -162,6 +162,7 @@ export default function LiveTaskStamp({
   wi,
   workers,
   progress,
+  fallback,
 }: {
   wi: Pick<WorkItem, "timeline">;
   // The per-worker rows for THIS task (from /api/tokens/by_worker), or undefined
@@ -172,6 +173,12 @@ export default function LiveTaskStamp({
   // drives a smooth ~10s ticking sparkline; otherwise we fall back to the
   // stepwise worker-completion series. Best-effort: never required to render.
   progress?: readonly ProgressSample[] | undefined;
+  // Scalar-aggregate cost/tokens for THIS task (from /api/tokens by_work_item).
+  // The per-worker split can be null (an unsolved attribution gap), so the stamp
+  // would otherwise read $0; this is the authoritative task total and is shown
+  // when the per-worker sum is absent or zero. The sparkline + worker count only
+  // render when real per-worker data exists.
+  fallback?: { costUsd: number; totalTokens: number } | undefined;
 }) {
   const stats = useMemo(() => (workers && workers.length ? deriveStampStats(workers) : null), [workers]);
   const elapsed = useMemo(() => deriveElapsedSeconds(wi), [wi]);
@@ -180,24 +187,36 @@ export default function LiveTaskStamp({
     [stats, progress],
   );
 
-  // Guard: no worker data → render exactly as before (nothing).
-  if (!stats) return null;
+  // Effective headline numbers: prefer the real per-worker sum, fall back to the
+  // authoritative scalar aggregate when per-worker is absent or zero.
+  const costUsd = stats?.costUsd || fallback?.costUsd || 0;
+  const totalTokens = stats?.totalTokens || fallback?.totalTokens || 0;
+  const hasSpark = spark.series.length > 0;
+
+  // Guard: nothing to show (no workers AND no aggregate) → render as before.
+  if (costUsd <= 0 && totalTokens <= 0) return null;
 
   return (
     <div
       className="lts"
-      title={`Live per-worker cost & usage (${spark.dense ? "live ~10s ticks" : "per-worker steps"})`}
+      title={
+        stats
+          ? `Live per-worker cost & usage (${spark.dense ? "live ~10s ticks" : "per-worker steps"})`
+          : "Task cost & tokens (aggregate)"
+      }
     >
-      <CostSparkline series={spark.series} />
-      <span className="lts-metric lts-cost" title={`$${stats.costUsd.toFixed(4)} so far`}>
-        {fmtCost(stats.costUsd)}
+      {hasSpark && <CostSparkline series={spark.series} />}
+      <span className="lts-metric lts-cost" title={`$${costUsd.toFixed(4)} so far`}>
+        {fmtCost(costUsd)}
       </span>
-      <span className="lts-metric lts-tok" title={`${stats.totalTokens.toLocaleString()} tokens`}>
-        {fmtTokens(stats.totalTokens)} tok
+      <span className="lts-metric lts-tok" title={`${totalTokens.toLocaleString()} tokens`}>
+        {fmtTokens(totalTokens)} tok
       </span>
-      <span className="lts-metric lts-workers" title={`${stats.workersDone} worker(s) done`}>
-        {stats.workersDone}w
-      </span>
+      {stats && (
+        <span className="lts-metric lts-workers" title={`${stats.workersDone} worker(s) done`}>
+          {stats.workersDone}w
+        </span>
+      )}
       <span className="lts-metric lts-elapsed" title="Elapsed since first event">
         {fmtElapsed(elapsed)}
       </span>

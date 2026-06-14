@@ -105,9 +105,107 @@ export default function MissionControl({ items, reloadSignal }: { items: WorkIte
           )}
         </div>
 
+        <CostByTask tokens={tokens} />
+
         <LiveAgents reloadSignal={reloadSignal} />
       </div>
     </>
+  );
+}
+
+function fmtTokens(n: number): string {
+  if (!n) return "0";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 100_000 ? 0 : 1)}k`;
+  return `${n}`;
+}
+
+function fmtCost(c: number): string {
+  return c >= 1 ? `$${c.toFixed(2)}` : `$${c.toFixed(3)}`;
+}
+
+const STAGE_META: Record<string, { label: string; color: string }> = {
+  pfactory: { label: "plan", color: "var(--violet)" },
+  aifactory: { label: "code", color: "var(--code)" },
+  tfactory: { label: "test", color: "var(--green)" },
+};
+
+// Per-task cost & tokens — sourced from CFactory's own event store (/api/tokens),
+// NOT OpenObserve (which holds only fleet aggregates, no task_id). Ranked by
+// spend with a relative cost meter + soft-budget badge.
+function CostByTask({ tokens }: { tokens: TokenTotals | null }) {
+  const rows = (tokens?.by_work_item ?? [])
+    .filter((t) => t.cost_usd > 0 || t.total_tokens > 0)
+    .sort((a, b) => b.cost_usd - a.cost_usd);
+  const top = rows.slice(0, 6);
+  const maxCost = top.reduce((m, t) => Math.max(m, t.cost_usd), 0);
+
+  return (
+    <div className="mc-panel cost-panel">
+      <div className="panel-title-row">
+        <h2 className="panel-title">Cost &amp; tokens by task</h2>
+        {tokens && tokens.total.cost_usd > 0 && (
+          <span className="cost-grand">{fmtCost(tokens.total.cost_usd)}</span>
+        )}
+      </div>
+
+      {top.length === 0 ? (
+        <div className="cost-empty">No task usage yet — runs populate this live.</div>
+      ) : (
+        <div className="cost-list">
+          <AnimatePresence initial={false}>
+            {top.map((t) => {
+              const pct = maxCost > 0 ? Math.max(4, (t.cost_usd / maxCost) * 100) : 0;
+              const over = t.budget?.exceeded;
+              return (
+                <motion.div
+                  key={t.correlation_key}
+                  className={`cost-row${over ? " cost-row--over" : ""}`}
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.25 }}
+                >
+                  <div className="cost-row-top">
+                    <span className="cost-key">#{keySlug(t.correlation_key)}</span>
+                    <span className="cost-title" title={t.title ?? t.correlation_key}>
+                      {t.title ?? "untitled"}
+                    </span>
+                    {over && <span className="cost-budge">over budget</span>}
+                    <span className="cost-amt">{fmtCost(t.cost_usd)}</span>
+                  </div>
+                  <div className="cost-meter">
+                    <motion.span
+                      className="cost-fill"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${pct}%` }}
+                      transition={{ duration: 0.5, ease: "easeOut" }}
+                    />
+                  </div>
+                  <div className="cost-sub">{fmtTokens(t.total_tokens)} tokens</div>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {tokens && tokens.total.cost_usd > 0 && (
+        <div className="cost-stages">
+          {Object.entries(STAGE_META).map(([svc, m]) => {
+            const s = tokens.by_service?.[svc];
+            const c = s?.cost_usd ?? 0;
+            return (
+              <div key={svc} className="cost-stage" title={`${m.label}: ${fmtCost(c)}`}>
+                <span className="cost-stage-dot" style={{ background: m.color }} />
+                <span className="cost-stage-l">{m.label}</span>
+                <span className="cost-stage-v" style={{ color: m.color }}>{fmtCost(c)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

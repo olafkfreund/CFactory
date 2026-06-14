@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType, type SVGProps } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { fetchLiveAgents, fetchTokensByWorker, fetchWorkerProgress, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ProgressSample, type ServiceState, type WorkerRow, type WorkItem } from "./api";
+import { fetchLiveAgents, fetchTokens, fetchTokensByWorker, fetchWorkerProgress, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ProgressSample, type ServiceState, type WorkerRow, type WorkItem } from "./api";
 import { IconDocument, IconRobot, IconFlask } from "./icons";
 import { stageState, overallState, STATE_LABEL, STATE_PILL, type TaskState } from "./taskState";
 import { displayTitle, keySlug } from "./correlationKey";
@@ -83,6 +83,10 @@ export default function RunningTasksView({
   // best-effort: a failed fetch keeps the last-good series (never blanks a card),
   // and a task with no series simply falls back to the stepwise stamp.
   const [progressByKey, setProgressByKey] = useState<Map<string, ProgressSample[]>>(new Map());
+  // Scalar-aggregate cost/tokens per task (from /api/tokens). The per-worker
+  // split can be null (attribution gap), so this is the authoritative total the
+  // stamp shows as a fallback. Best-effort, same cadence.
+  const [costByKey, setCostByKey] = useState<Map<string, { costUsd: number; totalTokens: number }>>(new Map());
 
   // Which work items currently have a live, streamable rmux agent — drives the
   // "open console" affordance. Polled so it tracks tasks starting/finishing.
@@ -114,6 +118,28 @@ export default function RunningTasksView({
           setWorkersByKey(m);
         })
         .catch(() => undefined); // keep last good map; never blank a card
+    poll();
+    const id = window.setInterval(poll, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  // Scalar-aggregate cost/tokens poll. Same cadence; additive + best-effort.
+  useEffect(() => {
+    let alive = true;
+    const poll = () =>
+      fetchTokens()
+        .then((r) => {
+          if (!alive) return;
+          const m = new Map<string, { costUsd: number; totalTokens: number }>();
+          for (const row of r.by_work_item) {
+            m.set(row.correlation_key, { costUsd: row.cost_usd, totalTokens: row.total_tokens });
+          }
+          setCostByKey(m);
+        })
+        .catch(() => undefined);
     poll();
     const id = window.setInterval(poll, 5000);
     return () => {
@@ -307,7 +333,7 @@ export default function RunningTasksView({
                 {/* Tier 1 live cost/usage stamp + sparkline. Renders nothing
                     until this task has per-worker data, so cards without it are
                     unchanged. */}
-                <LiveTaskStamp wi={r.wi} workers={workers} progress={wprogress} />
+                <LiveTaskStamp wi={r.wi} workers={workers} progress={wprogress} fallback={costByKey.get(r.wi.correlation_key)} />
               </motion.div>
             );
           })}

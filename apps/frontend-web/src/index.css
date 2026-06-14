@@ -769,13 +769,36 @@ body {
 .tf-leg--stalled .tf-leg-dot { background: var(--amber); }
 
 .tf-canvas {
+  position: relative;
   margin-top: 0.6rem; border: 1px solid var(--border); border-radius: 10px;
   background:
     radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--border) 60%, transparent) 1px, transparent 0)
     0 0 / 18px 18px,
     var(--panel-2);
-  overflow: auto; max-height: 360px;
+  overflow: auto; max-height: 420px;
 }
+/* Zoom + nav controls — pinned top-right, float above the scrolling canvas. */
+.tf-zoom {
+  position: sticky; top: 0; float: right; z-index: 3;
+  display: inline-flex; align-items: center; gap: 0.2rem; margin: 0.35rem 0.35rem 0 0;
+  padding: 0.12rem; border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border: 1px solid var(--border); backdrop-filter: blur(4px);
+}
+.tf-zoom-btn {
+  min-width: 22px; height: 22px; padding: 0 0.4rem;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel); color: var(--muted);
+  font: 600 0.72rem var(--font-mono); cursor: pointer; line-height: 1;
+}
+.tf-zoom-btn:hover { color: var(--text); border-color: var(--cyan); }
+.tf-zoom-pct {
+  min-width: 34px; text-align: center; color: var(--faint);
+  font: 600 0.66rem var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.tf-zoom-fit { color: var(--cyan); }
+.tf-zoom-focus { color: var(--code); }
+.tf-zoom-sizer { position: relative; }
 .tf-stage-tint { position: relative; }
 .tf-edges { position: absolute; inset: 0; pointer-events: none; display: block; }
 .tf-nodes { position: relative; }

@@ -29,3 +29,17 @@ export function useCountUp(value: number, ms = 700): number {
 
   return n;
 }
+
+/** A monotonically-updating `Date.now()` that re-renders on an interval, but
+ *  only while `active` — so per-node live timers tick once a second when work
+ *  is in flight and go quiet (no timers, no churn) the moment it settles. */
+export function useNow(active: boolean, everyMs = 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), everyMs);
+    return () => window.clearInterval(id);
+  }, [active, everyMs]);
+  return now;
+}

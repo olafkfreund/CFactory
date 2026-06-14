@@ -5,13 +5,27 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import Service
-from .base import AdapterItem, BaseHTTPAdapter, first
+from .base import AdapterError, AdapterItem, BaseHTTPAdapter, first
 
 
 class PFactoryAdapter(BaseHTTPAdapter):
     service = Service.PFACTORY
     # PFactory exposes plan sessions at /api/plan/sessions (response {"sessions": [...]}).
     list_path = "/api/plan/sessions"
+
+    def get_session_detail(self, session_id: str) -> dict[str, Any] | None:
+        """Rich detail for one plan session: ``GET /api/plan/sessions/{id}``.
+
+        Returns the raw session object — which carries the decomposed ``epic``
+        (with ``children`` + their ``depends_on`` edges) used to draw the
+        plan-stage execution diagram (#94) — or ``None`` when unavailable.
+        Best-effort so the cockpit's detail drawer degrades rather than errors.
+        """
+        try:
+            data = self._get_json(f"/api/plan/sessions/{session_id}")
+        except AdapterError:
+            return None
+        return data if isinstance(data, dict) else None
 
     def _normalize(self, row: dict[str, Any]) -> AdapterItem | None:
         task_id = first(row, "session_id", "id")

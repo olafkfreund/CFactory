@@ -91,12 +91,53 @@ attaches or forwards keystrokes, and the AIFactory URL and token never leave the
 backend — the browser only ever talks to CFactory. It degrades cleanly when
 rmux is disabled or no agents are running.
 
+## Live execution diagram
+
+The task-detail drawer renders the work item as a **live dependency-graph (DAG)**
+— an animated picture of the stage that is furthest along. The backend resolves a
+single **stage preference of test → code → plan** and emits a shared `graph` field
+(stage + nodes + dependency edges) on `GET /api/workitems/{key}/process`, so a
+testing item shows its lane pipeline, a coding item its subtask DAG, and a
+planning item its plan DAG:
+
+- **code** — AIFactory subtasks become nodes, `depends_on` becomes the edges, and
+  each subtask's `started_at` / `completed_at` drives its per-node timer.
+- **plan** — a PFactory session's decomposed `epic.children` become nodes (one per
+  child, child `kind` as the accent); a plan is a static artifact, so children
+  render as the dependency-ordered shape of the work with no live timing.
+- **test** — TFactory's lane-tagged subtasks aggregate into one node per lane,
+  ordered along the `unit → browser → api → integration → mutation` spine, each
+  lane's status rolled up worst-first from its subtasks.
+
+The frontend lays the nodes out as wave-columns (a node's column is one past its
+deepest dependency) and animates them live: a node is **done (green + a robot
+stamp)**, **active (cyan pulse)**, **failed (red shake)** or **stalled (amber
+pulse)**, classified client-side from the raw producer status. The edge the work
+is currently flowing along — source done, target not yet done — animates with
+marching dashes, and every node carries a live mm:ss timer. It is hand-rolled SVG
+plus framer-motion (no graph library) in the gruvbox stage palette.
+
+The whole feature is **additive**: the `graph` field is best-effort, and the
+diagram renders nothing when a producer supplies no nodes — older builds and
+work items with no decomposition look exactly as they did before.
+
 ## Token & cost
 
 Every service attaches the RFC-0001 `usage` block (input/output tokens,
 cost, model) to its completion event. CFactory aggregates them into the
 **Tokens & cost** page — totals and a per-service, per-work-item breakdown — so
 real LLM spend across plan, code and test is visible in one place.
+
+### Cost & tokens by task
+
+The same per-work-item spend also surfaces in **Mission Control**: a "Cost &
+tokens by task" panel ranks the top work items by spend with a relative cost
+meter, a per-stage split, and a soft "over budget" badge when the work item's
+budget flag is set. It is fed from CFactory's **own `/api/tokens` event store**
+(the same source as the Tokens & cost page) — **not** the metrics backend, which
+carries only low-cardinality fleet aggregates with no `task_id`. Running task
+cards additionally carry a live cost / token **stamp** (see below) so spend is
+visible on the work item without leaving the board.
 
 ### Per-worker drill-down
 
@@ -141,10 +182,11 @@ cockpit.
 The UI is organised as seven views over the same correlated state:
 
 - **Mission Control** — the whole factory at a glance: PARR pipeline counts,
-  anomalies, and a live agent roster.
+  anomalies, a live agent roster, and a "Cost & tokens by task" panel ranking
+  work items by spend.
 - **Pipeline** — every work item as a card, threaded across plan → code → test by
-  its issue number; click for a detail drawer with live process output and the
-  agent's **rmux** terminal.
+  its issue number; click for a detail drawer with the **live execution diagram**
+  (the animated stage DAG), live process output and the agent's **rmux** terminal.
 - **Running tasks** — live progress across every sibling, filterable by
   `All / Running / Failed / Done`, with per-task phase and progress.
 - **Tokens & cost** — real LLM spend, totalled per service and per work item.

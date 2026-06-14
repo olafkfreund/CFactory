@@ -16,7 +16,7 @@ import {
 import { AgentTerminal } from "./LiveAgents";
 import TaskActions from "./TaskActions";
 import LiveTaskStamp from "./LiveTaskStamp";
-import TaskFlow from "./TaskFlow";
+import { StageFlow } from "./TaskFlow";
 import { displayTitle, keySlug } from "./correlationKey";
 import { stageState } from "./taskState";
 
@@ -276,9 +276,9 @@ export default function TaskDetail({
               Tier-1.5 heartbeat series it ticks smoothly; else stepwise. */}
           <LiveTaskStamp wi={wi} workers={workers ?? undefined} progress={progress ?? undefined} metered={metered} />
 
-          {/* Live execution diagram — the animated DAG of this stage's work.
-              Renders nothing until a producer supplies graph nodes (#94). */}
-          <TaskFlow graph={proc?.graph} />
+          {/* Live execution diagram — animated DAG with a plan/code/test stage
+              switcher; defaults to the furthest stage (#94). */}
+          <StageFlow graphs={proc?.graphs} fallback={proc?.graph} />
 
           {/* Actions — approve / reject / unstick / remove */}
           <TaskActions

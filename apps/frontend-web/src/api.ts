@@ -468,7 +468,10 @@ export interface ProcessDetail {
   subtasks?: ProcessSubtask[];
   // The live execution DAG for this stage (#94). Best-effort + additive: absent
   // on older builds / producers, in which case the diagram simply doesn't render.
+  // `graph` is the furthest stage (default view); `graphs` carries every available
+  // stage so the modal can switch between plan / code / test.
   graph?: ProcessGraph | null;
+  graphs?: Partial<Record<"plan" | "code" | "test", ProcessGraph>>;
   branch?: string | null;
   updated_at?: string | null;
 }

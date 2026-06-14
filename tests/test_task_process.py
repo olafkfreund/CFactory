@@ -244,6 +244,25 @@ def test_test_stage_wins_over_code(store):
     assert out["graph"]["stage"] == "test"
 
 
+def test_build_process_emits_all_stage_graphs(store):
+    """A work item with both a plan session and a code task exposes BOTH graphs in
+    `graphs` (so the modal can switch stages), with `graph` = the furthest (code)."""
+    # Plan session + code task under the same correlation_key.
+    store.upsert_from_event(CompletionEvent(
+        correlation_key="20", service=Service.PFACTORY, task_id="sess-1",
+        status="human_review", phase="plan", updated_at=datetime.now(timezone.utc)))
+    store.upsert_from_event(CompletionEvent(
+        correlation_key="20", service=Service.AIFACTORY, task_id="proj:spec-1",
+        status="in_progress", phase="coding", updated_at=datetime.now(timezone.utc)))
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    ai = AIFactoryAdapter("http://ai", transport=_detail_transport())
+    out = build_process_detail(store, [pf, ai], "20")
+    assert set(out["graphs"].keys()) == {"code", "plan"}
+    assert out["graphs"]["plan"]["stage"] == "plan"
+    assert out["graphs"]["code"]["stage"] == "code"
+    assert out["graph"]["stage"] == "code"  # furthest stage is the default view
+
+
 def test_build_process_no_work_item(store):
     out = build_process_detail(store, [], "nope")
     assert out["available"] is False

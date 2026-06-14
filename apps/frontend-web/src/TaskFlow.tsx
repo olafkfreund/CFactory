@@ -155,6 +155,53 @@ function Legend({ counts }: { counts: Record<FlowStatus, number> }) {
   );
 }
 
+// Stage switcher (#94 follow-up): a task carries a graph per stage (plan / code /
+// test). The modal shows the furthest stage by default but lets you flip to any
+// available stage — so the plan DAG stays viewable after coding begins.
+const SWITCH_ORDER: Array<"plan" | "code" | "test"> = ["plan", "code", "test"];
+
+export function StageFlow({
+  graphs,
+  fallback,
+}: {
+  graphs?: Partial<Record<"plan" | "code" | "test", ProcessGraph>>;
+  fallback?: ProcessGraph | null;
+}) {
+  const available = SWITCH_ORDER.filter((s) => graphs?.[s]);
+  const furthest = available.length ? available[available.length - 1] : null;
+  const [sel, setSel] = useState<"plan" | "code" | "test" | null>(null);
+
+  // Default to the furthest stage; keep the selection valid as data streams in.
+  useEffect(() => {
+    setSel((cur) => (cur && graphs?.[cur] ? cur : furthest));
+  }, [furthest, graphs]);
+
+  // No multi-stage map → render the single furthest graph (back-compat).
+  if (!available.length) return fallback ? <TaskFlow graph={fallback} /> : null;
+
+  const cur = sel && graphs?.[sel] ? sel : furthest!;
+  return (
+    <div className="tf-stack">
+      {available.length > 1 && (
+        <div className="tf-switch" role="tablist" aria-label="Stage">
+          {available.map((s) => (
+            <button
+              key={s}
+              role="tab"
+              aria-selected={cur === s}
+              className={`tf-switch-tab tf-switch-tab--${s}${cur === s ? " on" : ""}`}
+              onClick={() => setSel(s)}
+            >
+              {STAGE_LABEL[s]}
+            </button>
+          ))}
+        </div>
+      )}
+      <TaskFlow graph={graphs![cur]} />
+    </div>
+  );
+}
+
 export default function TaskFlow({ graph }: { graph: ProcessGraph | null | undefined }) {
   const reduced = useReducedMotion() ?? false;
 

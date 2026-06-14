@@ -18,7 +18,183 @@ from typing import Any
 
 from .adapters.aifactory import AIFactoryAdapter
 from .adapters.base import BaseHTTPAdapter
+from .adapters.pfactory import PFactoryAdapter
+from .adapters.tfactory import TFactoryAdapter
 from .store import WorkItemStore
+
+# TFactory's v0.2 lane spine, in execution order. Drives the test-stage diagram's
+# column ordering + the lane→lane "next" edges. Unknown lanes append after these.
+_LANE_SPINE = ["unit", "browser", "api", "integration", "mutation"]
+
+
+def _build_code_graph(raw_subs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Turn AIFactory subtasks into the cockpit's live-diagram graph (#94).
+
+    Each subtask becomes a node; its ``depends_on`` becomes the edges. Timing
+    (``started_at``/``completed_at``) drives the per-node clocks, ``service`` is
+    the accent ``kind``. Returns ``None`` when there are no usable nodes so the
+    diagram simply doesn't render (additive — older AIFactory builds that don't
+    emit subtask ids/deps yield an edgeless-but-still-useful node list).
+    """
+    nodes: list[dict[str, Any]] = []
+    for i, s in enumerate(raw_subs):
+        if not isinstance(s, dict):
+            continue
+        node_id = str(s.get("id") or i)
+        label = s.get("title") or s.get("description") or f"subtask {i + 1}"
+        deps = s.get("depends_on")
+        deps = [str(x) for x in deps] if isinstance(deps, list) else []
+        nodes.append(
+            {
+                "id": node_id,
+                "label": str(label)[:80],
+                "kind": s.get("service"),
+                "status": s.get("status"),
+                "started_at": s.get("started_at"),
+                "completed_at": s.get("completed_at"),
+                "deps": deps,
+            }
+        )
+    if not nodes:
+        return None
+    return {"stage": "code", "nodes": nodes}
+
+
+def _build_plan_graph(session: dict[str, Any]) -> dict[str, Any] | None:
+    """Turn a PFactory plan session's decomposed ``epic.children`` into the
+    plan-stage diagram graph (#94): one node per child, ``depends_on`` → edges,
+    ``kind`` (feature/testing/cicd/infra/docs) as the accent. The plan is a
+    static artifact, so children carry no live status/timing — they render as the
+    agreed, dependency-ordered shape of the work. ``None`` when there's no epic.
+    """
+    epic = session.get("epic") if isinstance(session.get("epic"), dict) else None
+    children = epic.get("children") if epic and isinstance(epic.get("children"), list) else []
+    nodes: list[dict[str, Any]] = []
+    for i, c in enumerate(children):
+        if not isinstance(c, dict):
+            continue
+        key = str(c.get("key") or i)
+        deps = c.get("depends_on")
+        deps = [str(x) for x in deps] if isinstance(deps, list) else []
+        nodes.append(
+            {
+                "id": key,
+                "label": str(c.get("title") or key)[:80],
+                "kind": c.get("kind"),
+                # Static plan: no per-child run status yet. Left null → the
+                # diagram shows them as the planned (waiting) units of work.
+                "status": None,
+                "deps": deps,
+            }
+        )
+    if not nodes:
+        return None
+    return {"stage": "plan", "nodes": nodes}
+
+
+def _normalize_plan(correlation_key: str, session: dict[str, Any]) -> dict[str, Any] | None:
+    """Plan-stage process detail from a PFactory session — used as a fallback so
+    a work item still in (or just past) planning shows its plan DAG. ``None`` when
+    the session has no decomposed epic to draw."""
+    graph = _build_plan_graph(session)
+    if graph is None:
+        return None
+    return {
+        "available": True,
+        "correlation_key": correlation_key,
+        "service": "pfactory",
+        "task_id": str(session.get("session_id") or session.get("id") or ""),
+        "title": session.get("title"),
+        "status": session.get("board_state") or session.get("status"),
+        "phase": "plan",
+        "graph": graph,
+        "updated_at": session.get("updated_at") or session.get("updatedAt"),
+    }
+
+
+def _lane_status(statuses: list[str]) -> str | None:
+    """Aggregate a lane's subtask statuses into one node status, worst-first so a
+    single failure/stall/active subtask colours the whole lane (#94). A lane is
+    only ``done`` when every subtask completed; empty/unknown → pending (None)."""
+    s = {str(x or "").lower() for x in statuses}
+    if any("fail" in x or "error" in x for x in s):
+        return "failed"
+    if any("stuck" in x or "stall" in x or "block" in x for x in s):
+        return "stalled"
+    if any("progress" in x or "running" in x for x in s):
+        return "active"
+    if statuses and all("complet" in str(x or "").lower() or "passed" in str(x or "").lower() for x in statuses):
+        return "completed"
+    return None
+
+
+def _build_test_graph(raw_subs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Aggregate TFactory's lane-tagged subtasks into the test-stage diagram: one
+    node per lane (unit→browser→api→integration→mutation), spine-ordered with
+    lane→lane edges, each lane's status rolled up from its subtasks and its timing
+    spanning earliest start → latest finish (#94). ``None`` with no lanes."""
+    lanes: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for s in raw_subs:
+        if not isinstance(s, dict):
+            continue
+        lane = str(s.get("lane") or "unit").lower()
+        if lane not in lanes:
+            lanes[lane] = []
+            order.append(lane)
+        lanes[lane].append(s)
+
+    if not lanes:
+        return None
+
+    # Spine lanes first (in canonical order), then any unknown lanes as seen.
+    ordered = [ln for ln in _LANE_SPINE if ln in lanes] + [ln for ln in order if ln not in _LANE_SPINE]
+
+    nodes: list[dict[str, Any]] = []
+    prev: str | None = None
+    for lane in ordered:
+        members = lanes[lane]
+        status = _lane_status([m.get("status") for m in members])
+        starts = [m.get("started_at") for m in members if m.get("started_at")]
+        completes = [m.get("completed_at") for m in members if m.get("completed_at")]
+        done_count = sum(1 for m in members if "complet" in str(m.get("status") or "").lower())
+        nodes.append(
+            {
+                "id": lane,
+                "label": f"{lane.capitalize()} ({done_count}/{len(members)})",
+                "kind": lane,
+                "status": status,
+                "started_at": min(starts) if starts else None,
+                # Only call a lane finished (latest completion) when all its
+                # subtasks are done — else the timer should keep running.
+                "completed_at": max(completes) if completes and status == "completed" else None,
+                "deps": [prev] if prev else [],
+            }
+        )
+        prev = lane
+
+    return {"stage": "test", "nodes": nodes}
+
+
+def _normalize_test(correlation_key: str, d: dict[str, Any]) -> dict[str, Any] | None:
+    """Test-stage process detail from a TFactory task — the lane pipeline diagram.
+    ``None`` when there are no lane subtasks to aggregate."""
+    raw_subs = d.get("subtasks") if isinstance(d.get("subtasks"), list) else []
+    graph = _build_test_graph(raw_subs)
+    if graph is None:
+        return None
+    return {
+        "available": True,
+        "correlation_key": correlation_key,
+        "service": "tfactory",
+        "task_id": str(d.get("id") or d.get("spec_id") or d.get("specId") or ""),
+        "title": d.get("title"),
+        "status": d.get("status"),
+        "phase": d.get("phase") or "test",
+        "graph": graph,
+        "branch": d.get("branchName"),
+        "updated_at": d.get("updatedAt") or d.get("updated_at"),
+    }
 
 
 def _normalize(correlation_key: str, d: dict[str, Any]) -> dict[str, Any]:
@@ -46,6 +222,7 @@ def _normalize(correlation_key: str, d: dict[str, Any]) -> dict[str, Any]:
             "message": ep.get("message"),
         },
         "subtasks": subtasks,
+        "graph": _build_code_graph(raw_subs),
         "branch": d.get("branchName"),
         "updated_at": d.get("updatedAt"),
     }
@@ -66,6 +243,18 @@ def build_process_detail(
     if wi is None:
         return {"available": False, "correlation_key": correlation_key, "reason": "no_work_item"}
 
+    # Stage preference: test → code → plan. The furthest-along stage with real
+    # detail wins, so a testing item shows its live lane pipeline, a coding item
+    # the code DAG, and a planning item the plan DAG (#94).
+    tf = wi.tfactory
+    tf_adapter = next((a for a in adapters if isinstance(a, TFactoryAdapter)), None)
+    if tf_adapter is not None and tf.task_id:
+        tdetail = tf_adapter.get_test_detail(tf.task_id)
+        if tdetail is not None:
+            test = _normalize_test(correlation_key, tdetail)
+            if test is not None:
+                return test
+
     ai = wi.aifactory
     adapter = next((a for a in adapters if isinstance(a, AIFactoryAdapter)), None)
 
@@ -73,17 +262,29 @@ def build_process_detail(
     if adapter is not None and ai.task_id:
         detail = adapter.get_task_detail(ai.task_id)
 
-    if detail is None:
-        # No rich detail (no task id, service down, or old build) — hand back the
-        # slice state we already have so the drawer can still show status/phase.
-        return {
-            "available": False,
-            "correlation_key": correlation_key,
-            "service": "aifactory",
-            "task_id": ai.task_id,
-            "status": ai.status,
-            "phase": ai.phase,
-            "reason": "detail_unavailable",
-        }
+    if detail is not None:
+        return _normalize(correlation_key, detail)
 
-    return _normalize(correlation_key, detail)
+    # No code detail yet (item still planning, no AIFactory task id, service down,
+    # or old build). Fall back to the plan stage: draw the PFactory plan DAG so a
+    # plan-stage item still gets a live diagram (#94). Best-effort.
+    pf = wi.pfactory
+    pf_adapter = next((a for a in adapters if isinstance(a, PFactoryAdapter)), None)
+    if pf_adapter is not None and pf.task_id:
+        session = pf_adapter.get_session_detail(pf.task_id)
+        if session is not None:
+            plan = _normalize_plan(correlation_key, session)
+            if plan is not None:
+                return plan
+
+    # Nothing rich to show — hand back the slice state we already have so the
+    # drawer can still show status/phase.
+    return {
+        "available": False,
+        "correlation_key": correlation_key,
+        "service": "aifactory",
+        "task_id": ai.task_id,
+        "status": ai.status,
+        "phase": ai.phase,
+        "reason": "detail_unavailable",
+    }

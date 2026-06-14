@@ -8,6 +8,8 @@ import httpx
 from fastapi.testclient import TestClient
 
 from cfactory.adapters import AIFactoryAdapter
+from cfactory.adapters.pfactory import PFactoryAdapter
+from cfactory.adapters.tfactory import TFactoryAdapter
 from cfactory.app import adapters_dep, create_app, store_dep
 from cfactory.models import CompletionEvent, Service
 from cfactory.task_process import build_process_detail
@@ -28,8 +30,21 @@ _DETAIL = {
         "message": "2/5 subtasks completed",
     },
     "subtasks": [
-        {"title": "Model", "status": "completed"},
-        {"title": "Wire the route", "status": "in_progress"},
+        {
+            "id": "s1",
+            "title": "Model",
+            "status": "completed",
+            "service": "backend",
+            "started_at": "2026-06-05T11:50:00Z",
+            "completed_at": "2026-06-05T11:55:00Z",
+        },
+        {
+            "id": "s2",
+            "title": "Wire the route",
+            "status": "in_progress",
+            "depends_on": ["s1"],
+            "started_at": "2026-06-05T11:56:00Z",
+        },
     ],
 }
 
@@ -59,6 +74,147 @@ def test_build_process_normalizes_detail(store):
     assert out["progress"]["overall_percent"] == 55
     assert out["progress"]["current_subtask"] == "Wire the route"
     assert [s["status"] for s in out["subtasks"]] == ["completed", "in_progress"]
+
+
+def test_build_process_emits_code_graph(store):
+    """The normalized detail carries a live-diagram graph built from subtasks:
+    one node per subtask, depends_on → edges, timing + service preserved (#94)."""
+    _seed(store)
+    ai = AIFactoryAdapter("http://ai", transport=_detail_transport())
+    out = build_process_detail(store, [ai], "7")
+    graph = out["graph"]
+    assert graph is not None
+    assert graph["stage"] == "code"
+    ids = [n["id"] for n in graph["nodes"]]
+    assert ids == ["s1", "s2"]
+    s1, s2 = graph["nodes"]
+    assert s1["status"] == "completed" and s1["kind"] == "backend"
+    assert s1["completed_at"] == "2026-06-05T11:55:00Z"
+    assert s2["deps"] == ["s1"]  # edge s1 → s2
+    assert s2["started_at"] == "2026-06-05T11:56:00Z"
+
+
+def test_build_process_graph_none_without_subtasks(store):
+    """No subtasks → graph is None (additive: the diagram won't render)."""
+    _seed(store)
+    payload = {**_DETAIL, "subtasks": []}
+    ai = AIFactoryAdapter("http://ai", transport=_detail_transport(payload=payload))
+    out = build_process_detail(store, [ai], "7")
+    assert out["graph"] is None
+
+
+_PLAN_SESSION = {
+    "session_id": "sess-1",
+    "title": "Add /status endpoint",
+    "board_state": "human_review",
+    "epic": {
+        "plan_id": "p1",
+        "epic_title": "Add /status endpoint",
+        "children": [
+            {"key": "C1", "title": "Model", "kind": "feature", "depends_on": []},
+            {"key": "C2", "title": "Route", "kind": "feature", "depends_on": ["C1"]},
+            {"key": "C3", "title": "Tests", "kind": "testing", "depends_on": ["C2"]},
+        ],
+    },
+}
+
+
+def _plan_transport(payload=_PLAN_SESSION, status=200):
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/plan/sessions/"):
+            return httpx.Response(status, json=payload)
+        return httpx.Response(404, json={})
+
+    return httpx.MockTransport(handle)
+
+
+def _seed_plan(store):
+    store.upsert_from_event(CompletionEvent(
+        correlation_key="9", service=Service.PFACTORY, task_id="sess-1",
+        status="human_review", phase="plan", updated_at=datetime.now(timezone.utc)))
+
+
+def test_build_process_falls_back_to_plan_graph(store):
+    """A plan-stage item (no AIFactory task) draws the PFactory plan DAG: one
+    node per epic child, depends_on → edges, kind preserved (#94)."""
+    _seed_plan(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    out = build_process_detail(store, [pf], "9")
+    assert out["available"] is True
+    assert out["service"] == "pfactory"
+    graph = out["graph"]
+    assert graph["stage"] == "plan"
+    assert [n["id"] for n in graph["nodes"]] == ["C1", "C2", "C3"]
+    assert graph["nodes"][2]["kind"] == "testing"
+    assert graph["nodes"][1]["deps"] == ["C1"]  # C1 → C2 edge
+
+
+_TEST_DETAIL = {
+    "id": "tspec-1",
+    "spec_id": "tspec-1",
+    "title": "Verify /status endpoint",
+    "status": "in_progress",
+    "phase": "browser",
+    "subtasks": [
+        {"id": "u1", "lane": "unit", "status": "completed",
+         "started_at": "2026-06-05T12:00:00Z", "completed_at": "2026-06-05T12:02:00Z"},
+        {"id": "u2", "lane": "unit", "status": "completed",
+         "started_at": "2026-06-05T12:01:00Z", "completed_at": "2026-06-05T12:03:00Z"},
+        {"id": "b1", "lane": "browser", "status": "in_progress",
+         "started_at": "2026-06-05T12:03:30Z"},
+        {"id": "m1", "lane": "mutation", "status": "stuck"},
+    ],
+}
+
+
+def _test_transport(payload=_TEST_DETAIL, status=200):
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/tasks/"):
+            return httpx.Response(status, json=payload)
+        return httpx.Response(404, json={})
+
+    return httpx.MockTransport(handle)
+
+
+def _seed_test(store):
+    store.upsert_from_event(CompletionEvent(
+        correlation_key="11", service=Service.TFACTORY, task_id="tspec-1",
+        status="in_progress", phase="browser", updated_at=datetime.now(timezone.utc)))
+
+
+def test_build_process_emits_test_lane_graph(store):
+    """A test-stage item draws the lane pipeline: one node per lane in spine
+    order, lane→lane edges, rolled-up status + timing, stuck → stalled (#94)."""
+    _seed_test(store)
+    tf = TFactoryAdapter("http://tf", transport=_test_transport())
+    out = build_process_detail(store, [tf], "11")
+    assert out["available"] is True and out["service"] == "tfactory"
+    graph = out["graph"]
+    assert graph["stage"] == "test"
+    by_id = {n["id"]: n for n in graph["nodes"]}
+    # Spine order: unit before browser before mutation.
+    assert [n["id"] for n in graph["nodes"]] == ["unit", "browser", "mutation"]
+    assert by_id["unit"]["status"] == "completed"
+    assert by_id["unit"]["label"] == "Unit (2/2)"
+    assert by_id["unit"]["started_at"] == "2026-06-05T12:00:00Z"  # earliest start
+    assert by_id["unit"]["completed_at"] == "2026-06-05T12:03:00Z"  # latest finish
+    assert by_id["browser"]["status"] == "active"
+    assert by_id["browser"]["completed_at"] is None  # still running → no end stamp
+    assert by_id["browser"]["deps"] == ["unit"]  # lane spine edge
+    assert by_id["mutation"]["status"] == "stalled"  # stuck → stalled
+
+
+def test_test_stage_wins_over_code(store):
+    """When both a TFactory and AIFactory task exist, the furthest stage (test)
+    is shown — its lane graph, not the code DAG."""
+    _seed_test(store)
+    store.upsert_from_event(CompletionEvent(
+        correlation_key="11", service=Service.AIFACTORY, task_id="proj:spec-1",
+        status="done", phase="coding", updated_at=datetime.now(timezone.utc)))
+    tf = TFactoryAdapter("http://tf", transport=_test_transport())
+    ai = AIFactoryAdapter("http://ai", transport=_detail_transport())
+    out = build_process_detail(store, [tf, ai], "11")
+    assert out["graph"]["stage"] == "test"
 
 
 def test_build_process_no_work_item(store):

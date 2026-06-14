@@ -384,6 +384,38 @@ export interface ProcessSubtask {
   status: string | null;
 }
 
+// --- Live execution graph (#94): the animated DAG behind the task detail ---
+//
+// A stage (plan/code/test) exposes its work as a list of nodes with dependency
+// edges; the cockpit lays them out as wave-columns and animates them live. The
+// contract is deliberately minimal + additive — a node only needs an id, a
+// label and a raw status; everything else (deps for edges, the timestamps for
+// per-node timers, kind for the accent colour) is optional and the diagram
+// degrades gracefully when a producer can't supply it yet.
+
+export interface FlowNode {
+  id: string;
+  label: string;
+  // Domain tag used only for the accent dot: PFactory child kind
+  // (feature/testing/cicd/infra/docs), a TFactory lane name, or a phase.
+  kind?: string | null;
+  // Raw status string from the producer; classified client-side (see taskFlow.ts)
+  // into pending | active | done | failed | stalled.
+  status?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  // IDs of prerequisite nodes — each becomes an edge dep → node.
+  deps?: string[];
+  // Optional producer-computed column; when absent it's derived from deps.
+  wave?: number | null;
+}
+
+export interface ProcessGraph {
+  stage: "plan" | "code" | "test";
+  nodes: FlowNode[];
+  title?: string | null;
+}
+
 export interface ProcessDetail {
   available: boolean;
   correlation_key: string;
@@ -401,6 +433,9 @@ export interface ProcessDetail {
     message: string | null;
   };
   subtasks?: ProcessSubtask[];
+  // The live execution DAG for this stage (#94). Best-effort + additive: absent
+  // on older builds / producers, in which case the diagram simply doesn't render.
+  graph?: ProcessGraph | null;
   branch?: string | null;
   updated_at?: string | null;
 }

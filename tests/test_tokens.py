@@ -27,6 +27,49 @@ def test_usage_persists_on_slice_and_timeline(store):
     assert wi.timeline[-1].usage is not None  # rides the event too
 
 
+def test_billing_summary_splits_metered_from_subscription(store):
+    """A task that ran on a Claude subscription + a metered API provider: the row
+    reports tokens for the subscription work and dollars only for the metered
+    provider, plus the modes present and a wall-time elapsed (#96)."""
+    usage = TokenUsage(
+        input_tokens=1200, output_tokens=600, total_tokens=1800, cost_usd=0.4,
+        by_provider={
+            "claude": {"total_tokens": 1500, "cost_usd": 0.0, "workers": 2,
+                       "duration_ms": 12000, "billing_mode": "subscription"},
+            "openai-compatible": {"total_tokens": 300, "cost_usd": 0.4, "workers": 1,
+                                  "duration_ms": 4000, "billing_mode": "api"},
+        },
+    )
+    _ev(store, "77", Service.AIFACTORY, "done", usage)
+    out = token_totals(store)
+    row = next(r for r in out["by_work_item"] if r["correlation_key"] == "77")
+    b = row["billing"]
+    assert sorted(b["modes"]) == ["api", "subscription"]
+    assert b["metered_cost_usd"] == 0.4  # only the api provider counts as $
+    assert b["nonmetered_tokens"] == 1500  # subscription tokens, shown without $
+    assert b["has_metered"] is True
+    assert b["by_mode"]["subscription"]["cost_usd"] == 0.0
+    assert "elapsed_seconds" in row
+    assert out["total"]["metered_cost_usd"] == 0.4  # fleet headline = real $ only
+    assert out["total"]["has_billing_modes"] is True
+
+
+def test_billing_summary_all_subscription_has_no_metered_cost(store):
+    """Subscription-only task: no metered dollars; the fleet headline is 0 so the
+    cockpit can hide the Cost (USD) stat (#96)."""
+    usage = TokenUsage(
+        input_tokens=800, output_tokens=400, total_tokens=1200, cost_usd=0.0,
+        by_provider={"claude": {"total_tokens": 1200, "cost_usd": 0.0, "workers": 1,
+                                "billing_mode": "subscription"}},
+    )
+    _ev(store, "78", Service.AIFACTORY, "done", usage)
+    out = token_totals(store)
+    row = next(r for r in out["by_work_item"] if r["correlation_key"] == "78")
+    assert row["billing"]["has_metered"] is False
+    assert row["billing"]["metered_cost_usd"] == 0.0
+    assert out["total"]["metered_cost_usd"] == 0.0
+
+
 def test_token_totals_aggregates_and_flags_instrumented(store):
     _ev(store, "1", Service.AIFACTORY, "done", _u(100, 50, 0.20))
     _ev(store, "2", Service.AIFACTORY, "done", _u(200, 100, 0.40))

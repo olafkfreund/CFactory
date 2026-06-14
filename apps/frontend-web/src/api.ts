@@ -51,16 +51,49 @@ export interface BudgetInfo {
   exceeded: boolean;
 }
 
+// Billing mode (#96): real dollars only for metered (api/cloud); subscription /
+// local cost no dollars (cost_usd is notional/zero) — show tokens + time instead.
+export type BillingMode = "api" | "cloud" | "subscription" | "local" | "unknown";
+
+export interface BillingByMode {
+  total_tokens: number;
+  cost_usd: number;
+  duration_ms: number;
+}
+
+// Per-task billing summary. Present once a task carries a provider breakdown;
+// absent on older/in-flight rows (the panel then falls back conservatively).
+export interface BillingSummary {
+  modes: BillingMode[];
+  by_mode: Partial<Record<BillingMode, BillingByMode>>;
+  metered_cost_usd: number; // real $ — api/cloud only
+  nonmetered_tokens: number; // subscription/local tokens (shown without $)
+  has_metered: boolean; // true → cost is real, may be shown
+}
+
+export interface WorkItemTokenRow {
+  correlation_key: string;
+  title: string | null;
+  total_tokens: number;
+  cost_usd: number;
+  budget?: BudgetInfo;
+  billing?: BillingSummary;
+  elapsed_seconds?: number;
+}
+
 export interface TokenTotals {
-  total: { input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number };
-  by_service: Record<string, ServiceTokens>;
-  by_work_item: {
-    correlation_key: string;
-    title: string | null;
+  total: {
+    input_tokens: number;
+    output_tokens: number;
     total_tokens: number;
     cost_usd: number;
-    budget?: BudgetInfo;
-  }[];
+    // Real metered spend across the fleet (#96). When 0 with has_billing_modes,
+    // everything ran on subscription/local → the cockpit hides the Cost stat.
+    metered_cost_usd?: number;
+    has_billing_modes?: boolean;
+  };
+  by_service: Record<string, ServiceTokens>;
+  by_work_item: WorkItemTokenRow[];
 }
 
 export async function fetchTokens(): Promise<TokenTotals> {

@@ -95,12 +95,62 @@ def rollups(store: WorkItemStore) -> dict:
     }
 
 
+_METERED_MODES = {"api", "cloud"}
+
+
+def _wi_elapsed_seconds(wi) -> int | None:
+    """Wall time for a work item: span of its completion-event timeline. The
+    honest 'time spent' headline — present even when per-worker durations aren't
+    (#96). ``None`` when the timeline is too thin to measure."""
+    times = [e.updated_at for e in (wi.timeline or []) if getattr(e, "updated_at", None)]
+    if len(times) < 1:
+        return None
+    return max(0, int((max(times) - min(times)).total_seconds()))
+
+
+def _billing_summary(wi) -> dict | None:
+    """Bucket a work item's usage by billing mode so the cockpit shows the right
+    metric (#96): real dollars only for metered (api/cloud) work, tokens + time
+    for subscription/local. Sourced from each service's ``by_provider`` rollup
+    (which carries ``billing_mode``). ``None`` when no provider breakdown exists
+    yet (older events) — the cockpit then falls back to the legacy cost display."""
+    by_mode: dict[str, dict] = {}
+    for svc in ("pfactory", "aifactory", "tfactory"):
+        bp = getattr(getattr(wi, svc), "by_provider", None)
+        for vals in (bp or {}).values():
+            if not isinstance(vals, dict):
+                continue
+            mode = vals.get("billing_mode") or "unknown"
+            slot = by_mode.setdefault(mode, {"total_tokens": 0, "cost_usd": 0.0, "duration_ms": 0})
+            slot["total_tokens"] += int(vals.get("total_tokens", 0) or 0)
+            slot["cost_usd"] = round(slot["cost_usd"] + float(vals.get("cost_usd", 0.0) or 0.0), 6)
+            slot["duration_ms"] += int(vals.get("duration_ms", 0) or 0)
+    if not by_mode:
+        return None
+    metered_cost = round(
+        sum(v["cost_usd"] for m, v in by_mode.items() if m in _METERED_MODES), 6
+    )
+    nonmetered_tokens = sum(
+        v["total_tokens"] for m, v in by_mode.items() if m not in _METERED_MODES
+    )
+    return {
+        "modes": sorted(by_mode.keys()),
+        "by_mode": by_mode,
+        "metered_cost_usd": metered_cost,
+        "nonmetered_tokens": nonmetered_tokens,
+        # True when any real-dollar work happened → the cockpit may show cost.
+        "has_metered": any(m in _METERED_MODES for m in by_mode),
+    }
+
+
 def token_totals(store: WorkItemStore) -> dict:
     """Aggregate token/cost usage from the RFC-0001 `usage` block (#token-spine).
 
     Returns total + by_service (with an `instrumented` flag so the UI can show
-    'not instrumented yet' honestly) + by_work_item. `by_project` is deferred —
-    CFactory has no project dimension on the WorkItem yet.
+    'not instrumented yet' honestly) + by_work_item. Each row carries a `billing`
+    summary (cost vs tokens+time per billing mode, #96) and `elapsed_seconds` so
+    the cockpit shows real dollars only for metered work. `by_project` is deferred
+    — CFactory has no project dimension on the WorkItem yet.
     """
     services = ("pfactory", "aifactory", "tfactory")
     keys = ("input_tokens", "output_tokens", "total_tokens")
@@ -139,9 +189,25 @@ def token_totals(store: WorkItemStore) -> dict:
             row = {"correlation_key": wi.correlation_key, "title": wi.title, **wi_tot}
             if budget is not None:
                 row["budget"] = budget
+            billing = _billing_summary(wi)
+            if billing is not None:
+                row["billing"] = billing
+            elapsed = _wi_elapsed_seconds(wi)
+            if elapsed is not None:
+                row["elapsed_seconds"] = elapsed
             by_work_item.append(row)
 
     by_work_item.sort(key=lambda w: w["total_tokens"], reverse=True)
+    # Headline metered spend across the fleet: real dollars only (api/cloud),
+    # so the cockpit can hide the "Cost (USD)" stat when everything ran on a
+    # subscription / locally (#96). Falls back to the scalar total when no row
+    # carries a billing breakdown (older events).
+    metered = round(
+        sum(r["billing"]["metered_cost_usd"] for r in by_work_item if "billing" in r), 6
+    )
+    any_billing = any("billing" in r for r in by_work_item)
+    total["metered_cost_usd"] = metered if any_billing else total["cost_usd"]
+    total["has_billing_modes"] = any_billing
     return {"total": total, "by_service": by_service, "by_work_item": by_work_item}
 
 

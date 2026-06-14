@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { fetchAnomalies, fetchRollups, fetchTokens, type Anomaly, type Rollups, type TokenTotals, type WorkItem } from "./api";
+import { fetchAnomalies, fetchRollups, fetchTokens, type Anomaly, type BillingSummary, type Rollups, type TokenTotals, type WorkItem, type WorkItemTokenRow } from "./api";
 import { useCountUp } from "./motion";
 import { keySlug } from "./correlationKey";
 import LiveAgents from "./LiveAgents";
@@ -49,12 +49,7 @@ export default function MissionControl({ items, reloadSignal }: { items: WorkIte
         <Stat label="Events" value={totalEvents} accent="var(--violet)" />
         <Stat label="Anomalies" value={anomalies.length} accent={anomalies.length ? "var(--red)" : "var(--green)"} />
         <StatText label="Avg latency" text={fmtDur(rollups?.latency?.avg_seconds)} accent="var(--muted)" />
-        <StatText
-          label="Cost (USD)"
-          text={tokens && tokens.total.cost_usd > 0 ? `$${tokens.total.cost_usd.toFixed(2)}` : "—"}
-          sub={tokens && tokens.total.total_tokens > 0 ? undefined : "awaiting usage"}
-          accent="var(--code)"
-        />
+        <FleetUsageStat tokens={tokens} />
       </div>
 
       <div className="mc-grid">
@@ -124,29 +119,71 @@ function fmtCost(c: number): string {
   return c >= 1 ? `$${c.toFixed(2)}` : `$${c.toFixed(3)}`;
 }
 
-const STAGE_META: Record<string, { label: string; color: string }> = {
-  pfactory: { label: "plan", color: "var(--violet)" },
-  aifactory: { label: "code", color: "var(--code)" },
-  tfactory: { label: "test", color: "var(--green)" },
-};
+function fmtElapsed(sec?: number): string {
+  if (sec == null) return "";
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return `${h}h ${m}m`;
+}
 
-// Per-task cost & tokens — sourced from CFactory's own event store (/api/tokens),
-// NOT OpenObserve (which holds only fleet aggregates, no task_id). Ranked by
-// spend with a relative cost meter + soft-budget badge.
+// Billing mode → a small, non-scary tag. Metered modes (api/cloud) are accented
+// in the code/yellow; subscription is green ("included"); local is cyan.
+const MODE_TONE: Record<string, string> = {
+  api: "var(--code)", cloud: "var(--code)", subscription: "var(--green)",
+  local: "var(--cyan)", unknown: "var(--faint)",
+};
+const MODE_LABEL: Record<string, string> = {
+  api: "API", cloud: "cloud", subscription: "subscription", local: "local", unknown: "usage",
+};
+function billingTag(b?: BillingSummary): { label: string; tone: string } | null {
+  if (!b || b.modes.length === 0) return null;
+  if (b.modes.length > 1) return { label: "mixed", tone: "var(--violet)" };
+  const m = b.modes[0];
+  return { label: MODE_LABEL[m] ?? m, tone: MODE_TONE[m] ?? "var(--faint)" };
+}
+
+// Fleet headline: real dollars only when something was actually metered;
+// otherwise tokens (a subscription/local run spent no money to show).
+function FleetUsageStat({ tokens }: { tokens: TokenTotals | null }) {
+  const metered = tokens?.total.metered_cost_usd ?? tokens?.total.cost_usd ?? 0;
+  const hasModes = tokens?.total.has_billing_modes ?? false;
+  if (metered > 0) {
+    return <StatText label="Spend (USD)" text={`$${metered.toFixed(2)}`} accent="var(--code)" />;
+  }
+  const tok = tokens?.total.total_tokens ?? 0;
+  return (
+    <StatText
+      label="Tokens"
+      text={tok > 0 ? fmtTokens(tok) : "—"}
+      sub={tok > 0 ? (hasModes ? "subscription / local" : undefined) : "awaiting usage"}
+      accent="var(--code)"
+    />
+  );
+}
+
+// Per-task usage — sourced from CFactory's own event store (/api/tokens). Shows
+// the RIGHT metric per billing mode (#96): real dollars only for metered
+// (api/cloud) work, tokens + time for subscription/local — never a notional $.
+// Ranked by tokens (universal), with time spent and a soft-budget badge.
 function CostByTask({ tokens }: { tokens: TokenTotals | null }) {
-  const rows = (tokens?.by_work_item ?? [])
-    .filter((t) => t.cost_usd > 0 || t.total_tokens > 0)
-    .sort((a, b) => b.cost_usd - a.cost_usd);
+  const rows: WorkItemTokenRow[] = (tokens?.by_work_item ?? [])
+    .filter((t) => t.total_tokens > 0 || t.cost_usd > 0)
+    .sort((a, b) => b.total_tokens - a.total_tokens);
   const top = rows.slice(0, 6);
-  const maxCost = top.reduce((m, t) => Math.max(m, t.cost_usd), 0);
+  const maxTok = top.reduce((m, t) => Math.max(m, t.total_tokens), 0);
+  const fleetMetered = tokens?.total.metered_cost_usd ?? 0;
 
   return (
     <div className="mc-panel cost-panel">
       <div className="panel-title-row">
-        <h2 className="panel-title">Cost &amp; tokens by task</h2>
-        {tokens && tokens.total.cost_usd > 0 && (
-          <span className="cost-grand">{fmtCost(tokens.total.cost_usd)}</span>
-        )}
+        <h2 className="panel-title">Usage by task</h2>
+        {fleetMetered > 0 ? (
+          <span className="cost-grand">{fmtCost(fleetMetered)}</span>
+        ) : tokens && tokens.total.total_tokens > 0 ? (
+          <span className="cost-grand cost-grand--tok">{fmtTokens(tokens.total.total_tokens)} tok</span>
+        ) : null}
       </div>
 
       {top.length === 0 ? (
@@ -155,8 +192,13 @@ function CostByTask({ tokens }: { tokens: TokenTotals | null }) {
         <div className="cost-list">
           <AnimatePresence initial={false}>
             {top.map((t) => {
-              const pct = maxCost > 0 ? Math.max(4, (t.cost_usd / maxCost) * 100) : 0;
-              const over = t.budget?.exceeded;
+              const pct = maxTok > 0 ? Math.max(4, (t.total_tokens / maxTok) * 100) : 0;
+              const tag = billingTag(t.billing);
+              const metered = t.billing?.has_metered ?? false;
+              // Headline: real cost only when metered; else tokens.
+              const meteredCost = t.billing?.metered_cost_usd ?? t.cost_usd;
+              const over = metered ? t.budget?.exceeded : false;
+              const time = fmtElapsed(t.elapsed_seconds);
               return (
                 <motion.div
                   key={t.correlation_key}
@@ -171,8 +213,17 @@ function CostByTask({ tokens }: { tokens: TokenTotals | null }) {
                     <span className="cost-title" title={t.title ?? t.correlation_key}>
                       {t.title ?? "untitled"}
                     </span>
+                    {tag && (
+                      <span className="cost-mode" style={{ color: tag.tone, borderColor: tag.tone }}>
+                        {tag.label}
+                      </span>
+                    )}
                     {over && <span className="cost-budge">over budget</span>}
-                    <span className="cost-amt">{fmtCost(t.cost_usd)}</span>
+                    {metered && meteredCost > 0 ? (
+                      <span className="cost-amt">{fmtCost(meteredCost)}</span>
+                    ) : (
+                      <span className="cost-amt cost-amt--tok">{fmtTokens(t.total_tokens)}</span>
+                    )}
                   </div>
                   <div className="cost-meter">
                     <motion.span
@@ -182,27 +233,19 @@ function CostByTask({ tokens }: { tokens: TokenTotals | null }) {
                       transition={{ duration: 0.5, ease: "easeOut" }}
                     />
                   </div>
-                  <div className="cost-sub">{fmtTokens(t.total_tokens)} tokens</div>
+                  <div className="cost-sub">
+                    <span>{fmtTokens(t.total_tokens)} tokens</span>
+                    {time && <span className="cost-sub-time">· {time}</span>}
+                    {metered && t.budget && (
+                      <span className="cost-sub-budget">
+                        · {fmtCost(t.budget.spent_usd)} / {fmtCost(t.budget.limit_usd)}
+                      </span>
+                    )}
+                  </div>
                 </motion.div>
               );
             })}
           </AnimatePresence>
-        </div>
-      )}
-
-      {tokens && tokens.total.cost_usd > 0 && (
-        <div className="cost-stages">
-          {Object.entries(STAGE_META).map(([svc, m]) => {
-            const s = tokens.by_service?.[svc];
-            const c = s?.cost_usd ?? 0;
-            return (
-              <div key={svc} className="cost-stage" title={`${m.label}: ${fmtCost(c)}`}>
-                <span className="cost-stage-dot" style={{ background: m.color }} />
-                <span className="cost-stage-l">{m.label}</span>
-                <span className="cost-stage-v" style={{ color: m.color }}>{fmtCost(c)}</span>
-              </div>
-            );
-          })}
         </div>
       )}
     </div>

@@ -60,15 +60,64 @@ def _build_code_graph(raw_subs: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"stage": "code", "nodes": nodes}
 
 
-def _build_plan_graph(session: dict[str, Any]) -> dict[str, Any] | None:
+_FAIL_WORDS = ("fail", "reject", "error", "abort", "cancel", "block", "discard")
+_ACTIVE_WORDS = (
+    "progress", "running", "review", "triag", "generat", "coding",
+    "planning", "executing", "await", "building", "queued", "backlog",
+)
+_DONE_WORDS = (
+    "done", "complete", "passed", "merged", "approved", "emitted",
+    "success", "closed", "shipped",
+)
+
+
+def _plan_child_state(wi: Any) -> tuple[str | None, str | None, str | None]:
+    """Derive ``(status, started_at, completed_at)`` for one plan child from its
+    downstream WorkItem — the GitHub issue PFactory emitted for that child, which
+    AIFactory/TFactory then execute. The plan node lights up from the furthest the
+    child has actually reached: failed if any stage failed, in_progress if any is
+    engaged, completed once a stage reports terminal success (#94). Timing spans
+    the child's first → last completion event so the plan node gets a live clock."""
+    states = [getattr(wi, "pfactory", None), getattr(wi, "aifactory", None), getattr(wi, "tfactory", None)]
+    statuses = [s.status.lower() for s in states if s and getattr(s, "status", None)]
+
+    status: str | None = None
+    if any(w in s for s in statuses for w in _FAIL_WORDS):
+        status = "failed"
+    elif any(w in s for s in statuses for w in _DONE_WORDS):
+        status = "completed"
+    elif any(w in s for s in statuses for w in _ACTIVE_WORDS):
+        status = "in_progress"
+    elif statuses:
+        status = "in_progress"  # engaged but unrecognised — treat as live
+
+    started_at = completed_at = None
+    times = sorted(
+        e.updated_at for e in (getattr(wi, "timeline", None) or []) if getattr(e, "updated_at", None)
+    )
+    if times:
+        started_at = times[0].isoformat()
+        if status in ("completed", "failed"):
+            completed_at = times[-1].isoformat()
+    return status, started_at, completed_at
+
+
+def _build_plan_graph(session: dict[str, Any], store: WorkItemStore | None = None) -> dict[str, Any] | None:
     """Turn a PFactory plan session's decomposed ``epic.children`` into the
     plan-stage diagram graph (#94): one node per child, ``depends_on`` → edges,
-    ``kind`` (feature/testing/cicd/infra/docs) as the accent. The plan is a
-    static artifact, so children carry no live status/timing — they render as the
-    agreed, dependency-ordered shape of the work. ``None`` when there's no epic.
-    """
+    ``kind`` (feature/testing/cicd/infra/docs) as the accent.
+
+    Each child is emitted as its own GitHub issue (``emit_result.child_numbers``
+    maps child key → issue#); when ``store`` is supplied we look that issue up and
+    light the node from the child's live downstream state, so the plan view shows
+    children turning green/active/failed as the build progresses. Children with no
+    emitted issue yet (or before emit) stay null = planned/waiting. ``None`` when
+    there's no epic to draw."""
     epic = session.get("epic") if isinstance(session.get("epic"), dict) else None
     children = epic.get("children") if epic and isinstance(epic.get("children"), list) else []
+    emit = session.get("emit_result") if isinstance(session.get("emit_result"), dict) else {}
+    child_numbers = emit.get("child_numbers") if isinstance(emit.get("child_numbers"), dict) else {}
+
     nodes: list[dict[str, Any]] = []
     for i, c in enumerate(children):
         if not isinstance(c, dict):
@@ -76,14 +125,24 @@ def _build_plan_graph(session: dict[str, Any]) -> dict[str, Any] | None:
         key = str(c.get("key") or i)
         deps = c.get("depends_on")
         deps = [str(x) for x in deps] if isinstance(deps, list) else []
+
+        # Light the node from the child's downstream WorkItem when we can map it
+        # to its emitted issue#; otherwise it renders as a planned (waiting) unit.
+        status = started_at = completed_at = None
+        issue = child_numbers.get(key)
+        if issue is not None and store is not None:
+            wi = store.get(str(issue))
+            if wi is not None:
+                status, started_at, completed_at = _plan_child_state(wi)
+
         nodes.append(
             {
                 "id": key,
                 "label": str(c.get("title") or key)[:80],
                 "kind": c.get("kind"),
-                # Static plan: no per-child run status yet. Left null → the
-                # diagram shows them as the planned (waiting) units of work.
-                "status": None,
+                "status": status,
+                "started_at": started_at,
+                "completed_at": completed_at,
                 "deps": deps,
             }
         )
@@ -92,11 +151,14 @@ def _build_plan_graph(session: dict[str, Any]) -> dict[str, Any] | None:
     return {"stage": "plan", "nodes": nodes}
 
 
-def _normalize_plan(correlation_key: str, session: dict[str, Any]) -> dict[str, Any] | None:
+def _normalize_plan(
+    correlation_key: str, session: dict[str, Any], store: WorkItemStore | None = None
+) -> dict[str, Any] | None:
     """Plan-stage process detail from a PFactory session — used as a fallback so
-    a work item still in (or just past) planning shows its plan DAG. ``None`` when
+    a work item still in (or just past) planning shows its plan DAG, with children
+    lit from their live downstream state when ``store`` is supplied. ``None`` when
     the session has no decomposed epic to draw."""
-    graph = _build_plan_graph(session)
+    graph = _build_plan_graph(session, store)
     if graph is None:
         return None
     return {
@@ -273,7 +335,7 @@ def build_process_detail(
     if pf_adapter is not None and pf.task_id:
         session = pf_adapter.get_session_detail(pf.task_id)
         if session is not None:
-            plan = _normalize_plan(correlation_key, session)
+            plan = _normalize_plan(correlation_key, session, store)
             if plan is not None:
                 return plan
 

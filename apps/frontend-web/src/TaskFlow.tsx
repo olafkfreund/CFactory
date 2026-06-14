@@ -13,7 +13,7 @@
 // the gruvbox stage palette (--plan/--code/--test) for the accents. Additive:
 // given an empty graph it renders nothing, so the modal looks exactly as before.
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { ProcessGraph } from "./api";
 import {
@@ -179,11 +179,67 @@ export default function TaskFlow({ graph }: { graph: ProcessGraph | null | undef
     return c;
   }, [layout]);
 
+  // --- Zoom / pan / fit (#94 follow-up) ---------------------------------
+  // The overflow container handles pan (scroll); zoom is a scale() on the
+  // content, with a sizer reserving the scaled space so scrollbars track. Large
+  // plans become navigable instead of overflowing.
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState(1);
+  const [userZoomed, setUserZoomed] = useState(false);
+  const Z_MIN = 0.3;
+  const Z_MAX = 1.5;
+  const clamp = (z: number) => Math.min(Z_MAX, Math.max(Z_MIN, z));
+
+  const w = layout?.width ?? 0;
+  const h = layout?.height ?? 0;
+
+  // Fit-to-view: scale so the whole graph fits the container width (never up-
+  // scaling past 1). Runs on graph change until the user takes manual control.
+  const fit = useCallback(() => {
+    const el = canvasRef.current;
+    if (!el || w === 0) return 1;
+    const avail = el.clientWidth - 8;
+    return clamp(Math.min(1, avail / w));
+  }, [w]);
+
+  useLayoutEffect(() => {
+    if (userZoomed) return;
+    setZoom(fit());
+  }, [fit, userZoomed, w, h]);
+
+  // Re-fit on container resize (until the user zooms manually).
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el || userZoomed || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setZoom(fit()));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fit, userZoomed]);
+
+  const zoomBy = useCallback((delta: number) => {
+    setUserZoomed(true);
+    setZoom((z) => clamp(Math.round((z + delta) * 100) / 100));
+  }, []);
+  const resetZoom = useCallback(() => {
+    setUserZoomed(false);
+    setZoom(fit());
+  }, [fit]);
+
+  // Scroll the first active (or stalled) node into view — "where are we now".
+  const focusActive = useCallback(() => {
+    const el = canvasRef.current;
+    if (!el || !layout) return;
+    const live = layout.placed.find((p) => p.status === "active" || p.status === "stalled");
+    if (!live) return;
+    el.scrollTo({ left: Math.max(0, live.x * zoom - el.clientWidth / 3), behavior: "smooth" });
+  }, [layout, zoom]);
+
   if (!graph || !layout || layout.placed.length === 0) return null;
 
   const accent = STAGE_ACCENT[graph.stage];
   const total = layout.placed.length;
   const done = counts.done;
+  const hasLive = counts.active > 0 || counts.stalled > 0;
 
   return (
     <section className="td-section tf">
@@ -198,15 +254,53 @@ export default function TaskFlow({ graph }: { graph: ProcessGraph | null | undef
         <Legend counts={counts} />
       </div>
 
-      <div className="tf-canvas" role="img" aria-label={`${graph.stage} execution diagram, ${done} of ${total} done`}>
-        <div className="tf-stage-tint" style={{ ["--tf-accent" as string]: accent }}>
-          <svg className="tf-edges" width={layout.width} height={layout.height} aria-hidden="true">
-            <Edges edges={layout.edges} placedById={placedById} />
-          </svg>
-          <div className="tf-nodes" style={{ width: layout.width, height: layout.height }}>
-            {layout.placed.map((p) => (
-              <Node key={p.node.id} p={p} nowMs={nowMs} reduced={reduced} />
-            ))}
+      <div
+        className="tf-canvas"
+        ref={canvasRef}
+        role="img"
+        aria-label={`${graph.stage} execution diagram, ${done} of ${total} done`}
+      >
+        {/* Zoom + navigation controls. Shown for any non-trivial graph. */}
+        {total > 1 && (
+          <div className="tf-zoom" role="group" aria-label="Diagram zoom">
+            {hasLive && (
+              <button className="tf-zoom-btn tf-zoom-focus" onClick={focusActive} title="Scroll to the active node">
+                active
+              </button>
+            )}
+            <button className="tf-zoom-btn" onClick={() => zoomBy(-0.15)} aria-label="Zoom out" title="Zoom out">
+              &minus;
+            </button>
+            <span className="tf-zoom-pct" title="Zoom level">{Math.round(zoom * 100)}%</span>
+            <button className="tf-zoom-btn" onClick={() => zoomBy(0.15)} aria-label="Zoom in" title="Zoom in">
+              +
+            </button>
+            <button className="tf-zoom-btn tf-zoom-fit" onClick={resetZoom} title="Fit to view">
+              fit
+            </button>
+          </div>
+        )}
+
+        {/* Sizer reserves the scaled space so the overflow container can pan. */}
+        <div className="tf-zoom-sizer" style={{ width: w * zoom, height: h * zoom }}>
+          <div
+            className="tf-stage-tint"
+            style={{
+              ["--tf-accent" as string]: accent,
+              width: w,
+              height: h,
+              transform: `scale(${zoom})`,
+              transformOrigin: "top left",
+            }}
+          >
+            <svg className="tf-edges" width={w} height={h} aria-hidden="true">
+              <Edges edges={layout.edges} placedById={placedById} />
+            </svg>
+            <div className="tf-nodes" style={{ width: w, height: h }}>
+              {layout.placed.map((p) => (
+                <Node key={p.node.id} p={p} nowMs={nowMs} reduced={reduced} />
+              ))}
+            </div>
           </div>
         </div>
       </div>

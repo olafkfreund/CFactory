@@ -116,6 +116,9 @@ _PLAN_SESSION = {
             {"key": "C3", "title": "Tests", "kind": "testing", "depends_on": ["C2"]},
         ],
     },
+    # Each child was emitted as its own issue (key -> issue#); CFactory lights the
+    # plan node from that issue's downstream WorkItem (#94).
+    "emit_result": {"child_numbers": {"C1": 101, "C2": 102, "C3": 103}},
 }
 
 
@@ -147,6 +150,30 @@ def test_build_process_falls_back_to_plan_graph(store):
     assert [n["id"] for n in graph["nodes"]] == ["C1", "C2", "C3"]
     assert graph["nodes"][2]["kind"] == "testing"
     assert graph["nodes"][1]["deps"] == ["C1"]  # C1 → C2 edge
+    # No downstream WorkItems seeded for the child issues → nodes stay planned.
+    assert all(n["status"] is None for n in graph["nodes"])
+
+
+def test_plan_children_light_from_downstream_workitems(store):
+    """Plan nodes light up from each child's emitted issue#: C1's WorkItem is done
+    (green), C2's is mid-build (active), C3 has none yet (planned) (#94)."""
+    _seed_plan(store)
+    # C1 (issue 101) finished its code stage; C2 (issue 102) is coding; C3 (103) none.
+    store.upsert_from_event(CompletionEvent(
+        correlation_key="101", service=Service.AIFACTORY, task_id="t101",
+        status="done", phase="coding", updated_at=datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)))
+    store.upsert_from_event(CompletionEvent(
+        correlation_key="102", service=Service.AIFACTORY, task_id="t102",
+        status="in_progress", phase="coding", updated_at=datetime(2026, 6, 5, 12, 30, tzinfo=timezone.utc)))
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    out = build_process_detail(store, [pf], "9")
+    by_id = {n["id"]: n for n in out["graph"]["nodes"]}
+    assert by_id["C1"]["status"] == "completed"  # downstream done -> green
+    assert by_id["C1"]["started_at"] == "2026-06-05T12:00:00+00:00"
+    assert by_id["C1"]["completed_at"] == "2026-06-05T12:00:00+00:00"  # terminal -> stamped
+    assert by_id["C2"]["status"] == "in_progress"  # downstream coding -> active
+    assert by_id["C2"]["completed_at"] is None  # still running -> no end stamp
+    assert by_id["C3"]["status"] is None  # no emitted WorkItem -> planned/waiting
 
 
 _TEST_DETAIL = {

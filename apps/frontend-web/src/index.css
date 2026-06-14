@@ -1302,3 +1302,63 @@ body {
   .copilot-pop { animation: none; }
   .copilot-fab:hover { transform: none; }
 }
+
+/* ── Mission Control · Cost & tokens by task ─────────────────────────────── */
+.cost-panel { display: flex; flex-direction: column; gap: 0.7rem; }
+.cost-grand {
+  font: 700 0.95rem var(--font-mono); color: var(--code);
+  margin-left: auto; letter-spacing: 0.01em;
+}
+.cost-empty { color: var(--muted); font: 500 0.82rem var(--font-mono); padding: 0.6rem 0; }
+.cost-list { display: flex; flex-direction: column; gap: 0.65rem; }
+
+.cost-row {
+  display: flex; flex-direction: column; gap: 0.32rem;
+  padding: 0.55rem 0.65rem; border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+  border: 1px solid var(--border-soft);
+}
+.cost-row--over { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
+
+.cost-row-top { display: flex; align-items: baseline; gap: 0.5rem; }
+.cost-key { font: 600 0.72rem var(--font-mono); color: var(--cyan); }
+.cost-title {
+  flex: 1; min-width: 0; color: var(--text);
+  font-size: 0.84rem; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cost-budge {
+  font: 700 0.58rem var(--font-mono); text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--red); border: 1px solid color-mix(in srgb, var(--red) 50%, transparent);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  padding: 0.1rem 0.36rem; border-radius: 6px; white-space: nowrap;
+}
+.cost-amt { font: 700 0.9rem var(--font-mono); color: var(--code); white-space: nowrap; }
+
+.cost-meter {
+  height: 5px; border-radius: 3px; overflow: hidden;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+}
+.cost-fill {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, var(--cyan), var(--code));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--code) 45%, transparent);
+}
+.cost-row--over .cost-fill { background: linear-gradient(90deg, var(--code), var(--red)); }
+.cost-sub { font: 500 0.7rem var(--font-mono); color: var(--muted); letter-spacing: 0.02em; }
+
+.cost-stages {
+  display: flex; gap: 0.5rem; margin-top: auto; padding-top: 0.6rem;
+  border-top: 1px solid var(--border-soft);
+}
+.cost-stage {
+  display: flex; align-items: center; gap: 0.34rem; flex: 1;
+  padding: 0.4rem 0.5rem; border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent);
+}
+.cost-stage-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.cost-stage-l {
+  font: 600 0.64rem var(--font-mono); text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted);
+}
+.cost-stage-v { font: 700 0.78rem var(--font-mono); margin-left: auto; }

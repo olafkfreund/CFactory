@@ -1431,6 +1431,15 @@ body {
   padding: 0.1rem 0.36rem; border-radius: 6px; white-space: nowrap;
 }
 .cost-amt { font: 700 0.9rem var(--font-mono); color: var(--code); white-space: nowrap; }
+/* Tokens-as-headline (no metered $): muted, not the cost yellow — informative, not scary. */
+.cost-amt--tok { color: var(--muted); font-weight: 600; }
+/* Billing-mode tag (subscription / local / API / cloud / mixed). Colour set inline. */
+.cost-mode {
+  font: 700 0.58rem var(--font-mono); text-transform: lowercase; letter-spacing: 0.03em;
+  padding: 0.08rem 0.4rem; border-radius: 999px; white-space: nowrap;
+  border: 1px solid currentColor; background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.cost-grand--tok { color: var(--muted); }
 
 .cost-meter {
   height: 5px; border-radius: 3px; overflow: hidden;
@@ -1442,7 +1451,12 @@ body {
   box-shadow: 0 0 10px color-mix(in srgb, var(--code) 45%, transparent);
 }
 .cost-row--over .cost-fill { background: linear-gradient(90deg, var(--code), var(--red)); }
-.cost-sub { font: 500 0.7rem var(--font-mono); color: var(--muted); letter-spacing: 0.02em; }
+.cost-sub {
+  font: 500 0.7rem var(--font-mono); color: var(--muted); letter-spacing: 0.02em;
+  display: flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap;
+}
+.cost-sub-time { color: var(--faint); }
+.cost-sub-budget { color: var(--faint); }
 
 .cost-stages {
   display: flex; gap: 0.5rem; margin-top: auto; padding-top: 0.6rem;

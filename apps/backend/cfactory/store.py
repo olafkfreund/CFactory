@@ -91,6 +91,12 @@ def rollup_by(workers: dict | None, dim: str) -> dict[str, dict]:
         for k in _ROLLUP_KEYS:
             b[k] += wd.get(k, 0) or 0
         b["workers"] += 1
+        b["duration_ms"] = b.get("duration_ms", 0) + (wd.get("duration_ms", 0) or 0)
+        # A provider bucket shares one billing mode (#96); carry it when present
+        # (live worker sub-events may omit it — then it stays absent until the
+        # terminal by_provider rollup supplies it).
+        if wd.get("billing_mode"):
+            b.setdefault("billing_mode", wd.get("billing_mode"))
     return out
 
 

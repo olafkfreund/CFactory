@@ -108,6 +108,10 @@ class WorkerUsage(BaseModel):
     total_tokens: int = 0
     cost_usd: float = 0.0
     duration_ms: int = 0
+    # Billing mode of this worker's provider (#96): api/cloud are metered (show
+    # cost); subscription/local are not (show tokens + time). Carried on the
+    # terminal by_provider rollup today; optional on the live sub-event.
+    billing_mode: str | None = None
     # Heartbeat (``phase:"worker_progress"``) samples carry elapsed-so-far as
     # ``elapsed_ms`` (the terminal ``phase:"worker"`` record uses ``duration_ms``).
     # Optional so the terminal worker record round-trips unchanged.

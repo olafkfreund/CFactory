@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import {
   fetchLiveAgents,
   fetchProcess,
+  fetchTokens,
   fetchTokensByWorker,
   fetchWorkerProgress,
   type LiveAgent,
@@ -98,6 +99,9 @@ export default function TaskDetail({
   // Best-effort + additive: kept null until a non-empty series lands; on empty
   // or error the stamp falls back to the stepwise worker-completion series.
   const [progress, setProgress] = useState<ProgressSample[] | null>(null);
+  // Whether this task has real metered (api/cloud) spend — drives the stamp's
+  // cost vs tokens+time display (#96). undefined until the first tokens fetch.
+  const [metered, setMetered] = useState<boolean | undefined>(undefined);
   const [copied, setCopied] = useState(false);
   const key = wi.correlation_key;
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -127,6 +131,16 @@ export default function TaskDetail({
           setProgress(wp.series);
         })
         .catch(() => undefined); // additive; keep prior series, never blank
+      // Billing mode (#96): the stamp shows cost only when this task has real
+      // metered spend; otherwise tokens + time. Best-effort, same source as the
+      // Usage-by-task panel.
+      fetchTokens()
+        .then((r) => {
+          if (!alive) return;
+          const row = r.by_work_item.find((w) => w.correlation_key === key);
+          setMetered(row?.billing?.has_metered);
+        })
+        .catch(() => undefined);
     };
     load();
     const id = window.setInterval(load, POLL_MS);
@@ -260,7 +274,7 @@ export default function TaskDetail({
 
           {/* Live cost/usage stamp — renders nothing without worker data. With a
               Tier-1.5 heartbeat series it ticks smoothly; else stepwise. */}
-          <LiveTaskStamp wi={wi} workers={workers ?? undefined} progress={progress ?? undefined} />
+          <LiveTaskStamp wi={wi} workers={workers ?? undefined} progress={progress ?? undefined} metered={metered} />
 
           {/* Live execution diagram — the animated DAG of this stage's work.
               Renders nothing until a producer supplies graph nodes (#94). */}

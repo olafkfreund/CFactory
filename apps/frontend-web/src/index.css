@@ -748,6 +748,19 @@ body {
 .td-tl-time { margin-left: auto; color: var(--faint); font-size: 0.7rem; }
 
 /* --- Live execution diagram (#94) --------------------------------------- */
+.tf-stack { display: flex; flex-direction: column; }
+/* Stage switcher: plan / code / test tabs above the diagram. */
+.tf-switch { display: inline-flex; gap: 0.3rem; margin-bottom: 0.1rem; }
+.tf-switch-tab {
+  font: 700 0.66rem var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 0.2rem 0.6rem; border-radius: 7px; cursor: pointer;
+  color: var(--muted); background: var(--panel-2); border: 1px solid var(--border);
+}
+.tf-switch-tab:hover { color: var(--text); }
+.tf-switch-tab.on { color: #0c0c0e; border-color: transparent; }
+.tf-switch-tab--plan.on { background: var(--plan); }
+.tf-switch-tab--code.on { background: var(--code); }
+.tf-switch-tab--test.on { background: var(--test); }
 .tf { }
 .tf-head { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; flex-wrap: wrap; }
 .tf-head h3 { display: flex; align-items: center; gap: 0.45rem; margin: 0; }

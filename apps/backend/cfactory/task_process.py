@@ -305,39 +305,48 @@ def build_process_detail(
     if wi is None:
         return {"available": False, "correlation_key": correlation_key, "reason": "no_work_item"}
 
-    # Stage preference: test → code → plan. The furthest-along stage with real
-    # detail wins, so a testing item shows its live lane pipeline, a coding item
-    # the code DAG, and a planning item the plan DAG (#94).
+    # Build EVERY available stage's process detail (plan/code/test), not just the
+    # furthest, so the cockpit can offer a stage switcher and the plan DAG stays
+    # visible after coding begins (#94 follow-up). Each fetch is best-effort.
     tf = wi.tfactory
+    ai = wi.aifactory
+    pf = wi.pfactory
     tf_adapter = next((a for a in adapters if isinstance(a, TFactoryAdapter)), None)
+    ai_adapter = next((a for a in adapters if isinstance(a, AIFactoryAdapter)), None)
+    pf_adapter = next((a for a in adapters if isinstance(a, PFactoryAdapter)), None)
+
+    stages: dict[str, dict[str, Any]] = {}  # stage -> normalized process detail
+
     if tf_adapter is not None and tf.task_id:
         tdetail = tf_adapter.get_test_detail(tf.task_id)
         if tdetail is not None:
             test = _normalize_test(correlation_key, tdetail)
             if test is not None:
-                return test
+                stages["test"] = test
 
-    ai = wi.aifactory
-    adapter = next((a for a in adapters if isinstance(a, AIFactoryAdapter)), None)
+    code_detail = None
+    if ai_adapter is not None and ai.task_id:
+        code_detail = ai_adapter.get_task_detail(ai.task_id)
+    if code_detail is not None:
+        stages["code"] = _normalize(correlation_key, code_detail)
 
-    detail = None
-    if adapter is not None and ai.task_id:
-        detail = adapter.get_task_detail(ai.task_id)
-
-    if detail is not None:
-        return _normalize(correlation_key, detail)
-
-    # No code detail yet (item still planning, no AIFactory task id, service down,
-    # or old build). Fall back to the plan stage: draw the PFactory plan DAG so a
-    # plan-stage item still gets a live diagram (#94). Best-effort.
-    pf = wi.pfactory
-    pf_adapter = next((a for a in adapters if isinstance(a, PFactoryAdapter)), None)
     if pf_adapter is not None and pf.task_id:
         session = pf_adapter.get_session_detail(pf.task_id)
         if session is not None:
             plan = _normalize_plan(correlation_key, session, store)
             if plan is not None:
-                return plan
+                stages["plan"] = plan
+
+    if stages:
+        # Primary = the furthest stage present (test > code > plan): its top-level
+        # fields + `graph` are the default view (back-compat). `graphs` carries
+        # each present stage's graph so the modal can switch between them.
+        order = ("test", "code", "plan")
+        primary = dict(stages[next(s for s in order if s in stages)])
+        graphs = {s: d["graph"] for s, d in stages.items() if d.get("graph")}
+        if graphs:
+            primary["graphs"] = graphs
+        return primary
 
     # Nothing rich to show — hand back the slice state we already have so the
     # drawer can still show status/phase.

@@ -128,16 +128,29 @@ cost, model) to its completion event. CFactory aggregates them into the
 **Tokens & cost** page — totals and a per-service, per-work-item breakdown — so
 real LLM spend across plan, code and test is visible in one place.
 
-### Cost & tokens by task
+### Usage by task (by billing mode)
 
-The same per-work-item spend also surfaces in **Mission Control**: a "Cost &
-tokens by task" panel ranks the top work items by spend with a relative cost
-meter, a per-stage split, and a soft "over budget" badge when the work item's
-budget flag is set. It is fed from CFactory's **own `/api/tokens` event store**
-(the same source as the Tokens & cost page) — **not** the metrics backend, which
-carries only low-cardinality fleet aggregates with no `task_id`. Running task
-cards additionally carry a live cost / token **stamp** (see below) so spend is
-visible on the work item without leaving the board.
+The same per-work-item usage surfaces in **Mission Control** as a "Usage by task"
+panel. It shows the right metric per **billing mode**, because cost is only real
+for metered work: a Claude/Codex/Antigravity *subscription* still makes the SDK
+report a notional `cost_usd`, and a local Ollama model costs no dollars at all.
+AIFactory classifies each provider's billing mode (`api` / `cloud` /
+`subscription` / `local`) and carries it on the `usage.by_provider` rollup; CFactory
+buckets each task's usage by mode and shows:
+
+- **api / cloud** (metered) — real dollars, plus budget spend/limit and an
+  "over budget" badge when the work item's budget is set;
+- **subscription** — tokens + time spent, a "subscription" tag, no dollar figure;
+- **local** (Ollama) — tokens + compute time, a "local" tag, no dollar figure;
+- **time spent** for every task (wall clock from the event timeline).
+
+The Mission Control headline shows real **Spend (USD)** only when something was
+actually metered; otherwise it shows **Tokens**. A row without a billing breakdown
+(older / in-flight events) falls back conservatively to tokens + time — never a
+notional dollar figure. The panel is fed from CFactory's **own `/api/tokens` event
+store** — **not** the metrics backend, which carries only low-cardinality fleet
+aggregates with no `task_id`. Running task cards carry the same billing-aware live
+**stamp** (see below).
 
 ### Per-worker drill-down
 

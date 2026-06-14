@@ -86,7 +86,7 @@ export default function RunningTasksView({
   // Scalar-aggregate cost/tokens per task (from /api/tokens). The per-worker
   // split can be null (attribution gap), so this is the authoritative total the
   // stamp shows as a fallback. Best-effort, same cadence.
-  const [costByKey, setCostByKey] = useState<Map<string, { costUsd: number; totalTokens: number }>>(new Map());
+  const [costByKey, setCostByKey] = useState<Map<string, { costUsd: number; totalTokens: number; metered: boolean }>>(new Map());
 
   // Which work items currently have a live, streamable rmux agent — drives the
   // "open console" affordance. Polled so it tracks tasks starting/finishing.
@@ -133,9 +133,15 @@ export default function RunningTasksView({
       fetchTokens()
         .then((r) => {
           if (!alive) return;
-          const m = new Map<string, { costUsd: number; totalTokens: number }>();
+          const m = new Map<string, { costUsd: number; totalTokens: number; metered: boolean }>();
           for (const row of r.by_work_item) {
-            m.set(row.correlation_key, { costUsd: row.cost_usd, totalTokens: row.total_tokens });
+            // Conservative (#96): only treat as metered when the billing summary
+            // positively says so — otherwise the stamp shows tokens + time, no $.
+            m.set(row.correlation_key, {
+              costUsd: row.cost_usd,
+              totalTokens: row.total_tokens,
+              metered: row.billing?.has_metered ?? false,
+            });
           }
           setCostByKey(m);
         })
@@ -333,7 +339,13 @@ export default function RunningTasksView({
                 {/* Tier 1 live cost/usage stamp + sparkline. Renders nothing
                     until this task has per-worker data, so cards without it are
                     unchanged. */}
-                <LiveTaskStamp wi={r.wi} workers={workers} progress={wprogress} fallback={costByKey.get(r.wi.correlation_key)} />
+                <LiveTaskStamp
+                  wi={r.wi}
+                  workers={workers}
+                  progress={wprogress}
+                  fallback={costByKey.get(r.wi.correlation_key)}
+                  metered={costByKey.get(r.wi.correlation_key)?.metered}
+                />
               </motion.div>
             );
           })}

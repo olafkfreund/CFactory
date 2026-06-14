@@ -163,6 +163,7 @@ export default function LiveTaskStamp({
   workers,
   progress,
   fallback,
+  metered,
 }: {
   wi: Pick<WorkItem, "timeline">;
   // The per-worker rows for THIS task (from /api/tokens/by_worker), or undefined
@@ -179,6 +180,11 @@ export default function LiveTaskStamp({
   // when the per-worker sum is absent or zero. The sparkline + worker count only
   // render when real per-worker data exists.
   fallback?: { costUsd: number; totalTokens: number } | undefined;
+  // Whether this task's spend is real dollars (#96). When false (subscription /
+  // local), the dollar amount is notional, so the stamp hides cost + the
+  // cost-sparkline and shows tokens + time instead. undefined → back-compat:
+  // show cost when there is any (other callers that don't yet pass this).
+  metered?: boolean | undefined;
 }) {
   const stats = useMemo(() => (workers && workers.length ? deriveStampStats(workers) : null), [workers]);
   const elapsed = useMemo(() => deriveElapsedSeconds(wi), [wi]);
@@ -191,24 +197,31 @@ export default function LiveTaskStamp({
   // authoritative scalar aggregate when per-worker is absent or zero.
   const costUsd = stats?.costUsd || fallback?.costUsd || 0;
   const totalTokens = stats?.totalTokens || fallback?.totalTokens || 0;
-  const hasSpark = spark.series.length > 0;
+  // Show cost only when the spend is real: metered === true, or (back-compat)
+  // metered unknown with a positive cost. Never for metered === false.
+  const showCost = metered === false ? false : costUsd > 0;
+  const hasSpark = showCost && spark.series.length > 0;
 
-  // Guard: nothing to show (no workers AND no aggregate) → render as before.
-  if (costUsd <= 0 && totalTokens <= 0) return null;
+  // Guard: nothing to show (no cost-to-show AND no tokens) → render as before.
+  if (!showCost && totalTokens <= 0) return null;
 
   return (
     <div
       className="lts"
       title={
-        stats
-          ? `Live per-worker cost & usage (${spark.dense ? "live ~10s ticks" : "per-worker steps"})`
-          : "Task cost & tokens (aggregate)"
+        showCost
+          ? stats
+            ? `Live per-worker cost & usage (${spark.dense ? "live ~10s ticks" : "per-worker steps"})`
+            : "Task cost & tokens (aggregate)"
+          : "Tokens + time (subscription / local — no metered cost)"
       }
     >
       {hasSpark && <CostSparkline series={spark.series} />}
-      <span className="lts-metric lts-cost" title={`$${costUsd.toFixed(4)} so far`}>
-        {fmtCost(costUsd)}
-      </span>
+      {showCost && (
+        <span className="lts-metric lts-cost" title={`$${costUsd.toFixed(4)} so far`}>
+          {fmtCost(costUsd)}
+        </span>
+      )}
       <span className="lts-metric lts-tok" title={`${totalTokens.toLocaleString()} tokens`}>
         {fmtTokens(totalTokens)} tok
       </span>

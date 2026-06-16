@@ -267,6 +267,17 @@ export default function TaskDetail({
                   </div>
                   <div className="td-stage-status">{st.status || "—"}</div>
                   {st.phase && <div className="td-stage-phase">{st.phase}</div>}
+                  {st.extra?.access?.val3 === "not_run" && (
+                    <div
+                      className="td-stage-access"
+                      title={st.extra.access.risk || ""}
+                    >
+                      {/* RFC-0007 #88: a credentialed (VAL-3) lane could not run —
+                          surfaced honestly, never rendered as covered. */}
+                      ⚠ VAL-3 not run —{" "}
+                      {st.extra.access.reason || "access not available"}
+                    </div>
+                  )}
                 </div>
               );
             })}

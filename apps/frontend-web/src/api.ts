@@ -28,11 +28,21 @@ export interface TokenUsage {
   model?: string | null;
 }
 
+// RFC-0007 (#88): honest access annotation surfaced when a credentialed (VAL-3)
+// lane could not run — e.g. access not curated / interactive MFA. Never a secret.
+export interface AccessAnnotation {
+  val3?: string; // "not_run"
+  reason?: string;
+  risk?: string;
+  blocked?: { resource?: string; reason?: string }[];
+}
+
 export interface ServiceState {
   task_id: string | null;
   status: string | null;
   phase: string | null;
   usage?: TokenUsage | null;
+  extra?: { access?: AccessAnnotation } & Record<string, unknown>;
 }
 
 export interface ServiceTokens {

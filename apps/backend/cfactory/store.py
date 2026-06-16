@@ -26,9 +26,26 @@ def _now() -> datetime:
 # Substring hints for a terminal stage status (mirrors live_agents). A terminal
 # stage is preserved during reconciliation — completed/failed history must stay.
 _TERMINAL_HINTS = (
-    "done", "merged", "triaged", "emitted", "completed", "accept", "passed",
-    "approved", "shipped", "succeeded", "success", "ready", "closed",
-    "fail", "reject", "block", "error", "cancel", "discard", "abort",
+    "done",
+    "merged",
+    "triaged",
+    "emitted",
+    "completed",
+    "accept",
+    "passed",
+    "approved",
+    "shipped",
+    "succeeded",
+    "success",
+    "ready",
+    "closed",
+    "fail",
+    "reject",
+    "block",
+    "error",
+    "cancel",
+    "discard",
+    "abort",
 )
 
 
@@ -85,8 +102,14 @@ def rollup_by(workers: dict | None, dim: str) -> dict[str, dict]:
         wd = w if isinstance(w, dict) else w.model_dump()
         key = wd.get(dim) or "unknown"
         b = out.setdefault(
-            key, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
-                  "cost_usd": 0.0, "workers": 0}
+            key,
+            {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "workers": 0,
+            },
         )
         for k in _ROLLUP_KEYS:
             b[k] += wd.get(k, 0) or 0
@@ -199,7 +222,9 @@ class WorkItemStore:
                         return row.to_model(), False
 
                     if row is None:
-                        row = WorkItemRow(correlation_key=event.correlation_key, timeline=[])
+                        row = WorkItemRow(
+                            correlation_key=event.correlation_key, timeline=[]
+                        )
                         session.add(row)
 
                     prev = getattr(row, event.service.value) or {}
@@ -213,12 +238,14 @@ class WorkItemStore:
                         w = event.worker
                         series_map = dict(prev.get("worker_progress") or {})
                         series = list(series_map.get(w.worker_id) or [])
-                        series.append({
-                            "ts": _coerce_ts_ms(event),
-                            "total_tokens": w.total_tokens,
-                            "cost_usd": w.cost_usd,
-                            "elapsed_ms": w.elapsed_ms,
-                        })
+                        series.append(
+                            {
+                                "ts": _coerce_ts_ms(event),
+                                "total_tokens": w.total_tokens,
+                                "cost_usd": w.cost_usd,
+                                "elapsed_ms": w.elapsed_ms,
+                            }
+                        )
                         if len(series) > _PROGRESS_SERIES_CAP:
                             series = series[-_PROGRESS_SERIES_CAP:]
                         series_map[w.worker_id] = series
@@ -282,11 +309,22 @@ class WorkItemStore:
                         if _is_terminal(event.status):
                             slice_dict["worker_progress"] = {}
                         else:
-                            slice_dict["worker_progress"] = prev.get("worker_progress") or {}
+                            slice_dict["worker_progress"] = (
+                                prev.get("worker_progress") or {}
+                            )
+                    # RFC-0007 (#88): carry an honest access annotation onto the
+                    # slice so the cockpit can render the credentialed-lane gap.
+                    if getattr(event, "access", None):
+                        extra = dict(slice_dict.get("extra") or {})
+                        extra["access"] = event.access
+                        slice_dict["extra"] = extra
                     setattr(row, event.service.value, slice_dict)
 
                     # Reassign (not .append) so SQLAlchemy detects the JSON column change.
-                    row.timeline = [*(row.timeline or []), event.model_dump(mode="json")]
+                    row.timeline = [
+                        *(row.timeline or []),
+                        event.model_dump(mode="json"),
+                    ]
                     row.updated_at = _now()
                     session.flush()
                     return row.to_model(), True

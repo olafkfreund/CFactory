@@ -151,6 +151,11 @@ class CompletionEvent(BaseModel):
     # Both leave the service-level ``usage``/status/phase untouched. Absent on
     # every legacy / non-worker event.
     worker: WorkerUsage | None = None
+    # RFC-0007 (#88): honest access annotation a service may attach when a
+    # credentialed (VAL-3) lane could not run (e.g. TFactory when the contract's
+    # access wasn't curated/reachable): {val3, reason, risk, blocked}. Optional —
+    # absent on every event that declares no external access.
+    access: dict[str, Any] | None = None
 
 
 class ServiceState(BaseModel):

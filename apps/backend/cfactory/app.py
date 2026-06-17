@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from pydantic import BaseModel
@@ -40,6 +40,7 @@ from .adapters import (
     build_adapters,
     hydrate,
 )
+from .adapters.tfactory import TFactoryAdapter
 from .config import (
     COPILOT_PROVIDERS,
     check_audit_secret,
@@ -514,6 +515,44 @@ def create_app() -> FastAPI:
             return await run_in_threadpool(
                 build_process_detail, store, adapters, correlation_key
             )
+        finally:
+            for adapter in adapters:
+                adapter.close()
+
+    @app.get("/api/workitems/{correlation_key}/evidence/{kind}/{name}")
+    async def get_evidence_media(
+        correlation_key: str,
+        kind: str,
+        name: str,
+        store: WorkItemStore = Depends(store_dep),
+        adapters: list[BaseHTTPAdapter] = Depends(adapters_dep),
+    ) -> Response:
+        """Proxy one browser-lane screenshot/recording from TFactory.
+
+        The cockpit is same-origin to CFactory but NOT to TFactory, so an
+        ``<img>``/``<video>`` can't carry the TFactory bearer. CFactory fetches the
+        bytes with its own upstream token and streams them back, keeping the
+        TFactory URL + token inside this process. ``kind`` ∈ {screenshots, videos}.
+        """
+        if kind not in ("screenshots", "videos"):
+            raise HTTPException(status_code=400, detail=f"invalid kind: {kind!r}")
+        # Defence in depth — the adapter also scopes to the findings dir, but reject
+        # traversal here before any upstream call.
+        if "/" in name or ".." in name or name.startswith("."):
+            raise HTTPException(status_code=400, detail="invalid artifact name")
+        try:
+            wi = store.get(correlation_key)
+            spec_id = wi.tfactory.task_id if wi else None
+            if not spec_id:
+                raise HTTPException(status_code=404, detail="no tfactory spec for work item")
+            tf = next((a for a in adapters if isinstance(a, TFactoryAdapter)), None)
+            if tf is None:
+                raise HTTPException(status_code=503, detail="tfactory adapter unavailable")
+            media = await run_in_threadpool(tf.fetch_media, spec_id, kind, name)
+            if media is None:
+                raise HTTPException(status_code=404, detail=f"evidence not found: {kind}/{name}")
+            content, content_type = media
+            return Response(content=content, media_type=content_type)
         finally:
             for adapter in adapters:
                 adapter.close()

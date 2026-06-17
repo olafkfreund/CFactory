@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import httpx
 from typing import Any
 
 from ..models import Service
 from .base import AdapterError, AdapterItem, BaseHTTPAdapter, first
+
+# The canonical TFactory task/evidence API is mounted under this prefix.
+_TF_PREFIX = "/api/tfactory/tasks"
 
 
 class TFactoryAdapter(BaseHTTPAdapter):
@@ -24,6 +28,35 @@ class TFactoryAdapter(BaseHTTPAdapter):
         except AdapterError:
             return None
         return data if isinstance(data, dict) else None
+
+    def get_evidence_manifest(self, spec_id: str) -> dict[str, list[str]]:
+        """Browser-lane media captured for a spec: screenshot + recording file
+        names, from ``GET /api/tfactory/tasks/{spec}`` artefacts. Empty lists when
+        none/unavailable (best-effort — the cockpit degrades, never errors)."""
+        try:
+            data = self._get_json(f"{_TF_PREFIX}/{spec_id}")
+        except AdapterError:
+            return {"screenshots": [], "videos": []}
+        arts = (data or {}).get("artefacts", {}) if isinstance(data, dict) else {}
+        return {
+            "screenshots": list((arts.get("screenshots") or {}).get("files") or []),
+            "videos": list((arts.get("videos") or {}).get("files") or []),
+        }
+
+    def fetch_media(
+        self, spec_id: str, kind: str, name: str
+    ) -> tuple[bytes, str] | None:
+        """Fetch one screenshot/recording's raw bytes + content-type so CFactory
+        can proxy it same-origin (the browser is authenticated to CFactory, not
+        TFactory). ``kind`` is ``screenshots`` or ``videos``. None when missing."""
+        if kind not in ("screenshots", "videos"):
+            return None
+        try:
+            resp = self._client.get(f"{_TF_PREFIX}/{spec_id}/{kind}/{name}")
+            resp.raise_for_status()
+        except httpx.HTTPError:
+            return None
+        return resp.content, resp.headers.get("content-type", "application/octet-stream")
 
     def _normalize(self, row: dict[str, Any]) -> AdapterItem | None:
         task_id = first(row, "spec_id", "id", "task_id")

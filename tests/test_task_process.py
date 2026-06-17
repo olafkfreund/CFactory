@@ -231,6 +231,41 @@ def test_build_process_emits_test_lane_graph(store):
     assert by_id["mutation"]["status"] == "stalled"  # stuck → stalled
 
 
+def _evidence_transport():
+    """Mock that also answers the evidence manifest GET with screenshots + videos."""
+    def handle(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/tfactory/tasks/tspec-1":
+            return httpx.Response(200, json={"artefacts": {
+                "screenshots": {"exists": True, "files": ["root.png", "ping.png"]},
+                "videos": {"exists": True, "files": ["ping.webm"]},
+            }})
+        if path.startswith("/api/tasks/"):
+            return httpx.Response(200, json=_TEST_DETAIL)
+        return httpx.Response(404, json={})
+    return httpx.MockTransport(handle)
+
+
+def test_build_process_surfaces_browser_evidence(store):
+    """The test-stage detail carries the browser-lane screenshots + recordings
+    TFactory captured, so the cockpit can render them on the finished task."""
+    _seed_test(store)
+    tf = TFactoryAdapter("http://tf", transport=_evidence_transport())
+    out = build_process_detail(store, [tf], "11")
+    ev = out["evidence"]
+    assert ev["spec_id"] == "tspec-1"
+    assert ev["screenshots"] == ["root.png", "ping.png"]
+    assert ev["videos"] == ["ping.webm"]
+
+
+def test_build_process_no_evidence_key_when_none_captured(store):
+    """No evidence block when TFactory reports no media (manifest 404/empty)."""
+    _seed_test(store)
+    tf = TFactoryAdapter("http://tf", transport=_test_transport())
+    out = build_process_detail(store, [tf], "11")
+    assert "evidence" not in out
+
+
 def test_test_stage_wins_over_code(store):
     """When both a TFactory and AIFactory task exist, the furthest stage (test)
     is shown — its lane graph, not the code DAG."""

@@ -317,7 +317,20 @@ def build_process_detail(
 
     stages: dict[str, dict[str, Any]] = {}  # stage -> normalized process detail
 
+    # Browser-lane evidence (screenshots + recordings) for the test stage — fetched
+    # independently of the lane graph so the cockpit can show the captured proof
+    # even when the graph can't be aggregated. CFactory proxies the bytes (the
+    # browser is authenticated to CFactory, not TFactory): see the
+    # /api/workitems/{key}/evidence/{kind}/{name} route.
+    tf_evidence: dict[str, Any] | None = None
     if tf_adapter is not None and tf.task_id:
+        manifest = tf_adapter.get_evidence_manifest(tf.task_id)
+        if manifest.get("screenshots") or manifest.get("videos"):
+            tf_evidence = {
+                "spec_id": tf.task_id,
+                "screenshots": manifest["screenshots"],
+                "videos": manifest["videos"],
+            }
         tdetail = tf_adapter.get_test_detail(tf.task_id)
         if tdetail is not None:
             test = _normalize_test(correlation_key, tdetail)
@@ -346,12 +359,14 @@ def build_process_detail(
         graphs = {s: d["graph"] for s, d in stages.items() if d.get("graph")}
         if graphs:
             primary["graphs"] = graphs
+        if tf_evidence:
+            primary["evidence"] = tf_evidence
         return primary
 
     # Nothing rich to show — hand back the slice state we already have so the
-    # drawer can still show status/phase.
-    return {
-        "available": False,
+    # drawer can still show status/phase (+ any captured evidence).
+    fallback = {
+        "available": bool(tf_evidence),
         "correlation_key": correlation_key,
         "service": "aifactory",
         "task_id": ai.task_id,
@@ -359,3 +374,6 @@ def build_process_detail(
         "phase": ai.phase,
         "reason": "detail_unavailable",
     }
+    if tf_evidence:
+        fallback["evidence"] = tf_evidence
+    return fallback

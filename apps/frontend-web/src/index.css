@@ -725,6 +725,11 @@ body {
 .td-stage-access { color: var(--warn, #d9822b); font-size: 0.7rem; margin-top: 0.2rem; }
 .td-section h3 { font: 700 0.74rem var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 0.5rem; color: var(--muted); }
 .td-proc-meta { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.78rem; margin-bottom: 0.5rem; }
+/* Test-evidence gallery (screenshots + recordings proxied from TFactory). */
+.td-evidence-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.6rem; margin: 0.3rem 0 0.8rem; }
+.td-evidence-item { margin: 0; border: 1px solid var(--border, #2a2a2a); border-radius: 0.4rem; padding: 0.35rem; background: var(--card, #1a1a1a); }
+.td-evidence-item img, .td-evidence-item video { width: 100%; border-radius: 0.25rem; display: block; }
+.td-evidence-item figcaption { font: 0.66rem var(--font-mono); color: var(--muted); margin-top: 0.3rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .td-bar { margin: 0.4rem 0; }
 .td-bar-label { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--muted); margin-bottom: 0.2rem; }
 .td-bar-track { height: 7px; background: var(--panel-2); border-radius: 5px; overflow: hidden; }

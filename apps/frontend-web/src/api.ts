@@ -484,12 +484,33 @@ export interface ProcessDetail {
   graphs?: Partial<Record<"plan" | "code" | "test", ProcessGraph>>;
   branch?: string | null;
   updated_at?: string | null;
+  // Browser-lane test evidence captured by TFactory: screenshot + recording file
+  // names. CFactory proxies the bytes (see evidenceMediaUrl) so they render
+  // same-origin. Absent when the task produced none.
+  evidence?: {
+    spec_id: string;
+    screenshots: string[];
+    videos: string[];
+  } | null;
 }
 
 export async function fetchProcess(correlationKey: string): Promise<ProcessDetail> {
   const resp = await fetch(`/api/workitems/${encodeURIComponent(correlationKey)}/process`);
   if (!resp.ok) throw new Error(`process error: HTTP ${resp.status}`);
   return (await resp.json()) as ProcessDetail;
+}
+
+/**
+ * URL for one piece of browser-lane evidence, proxied through CFactory (so it's
+ * same-origin and authenticated by the cockpit session). Use directly as an
+ * `<img src>` / `<video src>`. `kind` ∈ {screenshots, videos}.
+ */
+export function evidenceMediaUrl(
+  correlationKey: string,
+  kind: "screenshots" | "videos",
+  name: string,
+): string {
+  return `/api/workitems/${encodeURIComponent(correlationKey)}/evidence/${kind}/${encodeURIComponent(name)}`;
 }
 
 export interface Anomaly {

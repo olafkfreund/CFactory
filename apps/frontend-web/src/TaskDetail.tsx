@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
+  evidenceMediaUrl,
   fetchLiveAgents,
   fetchProcess,
   fetchTokens,
@@ -290,6 +291,52 @@ export default function TaskDetail({
           {/* Live execution diagram — animated DAG with a plan/code/test stage
               switcher; defaults to the furthest stage (#94). */}
           <StageFlow graphs={proc?.graphs} fallback={proc?.graph} />
+
+          {/* Test evidence — the browser-lane screenshots + recordings TFactory
+              captured, proxied through CFactory so they render here on the
+              finished task. Renders nothing when the task produced none. */}
+          {proc?.evidence && (proc.evidence.screenshots.length > 0 || proc.evidence.videos.length > 0) && (
+            <section className="td-section" data-testid="td-evidence">
+              <h3>Test evidence</h3>
+              {proc.evidence.videos.length > 0 && (
+                <>
+                  <div className="td-proc-meta"><b>Recordings ({proc.evidence.videos.length})</b></div>
+                  <div className="td-evidence-grid">
+                    {proc.evidence.videos.map((name) => (
+                      <figure key={name} className="td-evidence-item">
+                        <video
+                          data-testid={`td-evidence-video-${name}`}
+                          src={evidenceMediaUrl(key, "videos", name)}
+                          controls
+                        />
+                        <figcaption title={name}>{name}</figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                </>
+              )}
+              {proc.evidence.screenshots.length > 0 && (
+                <>
+                  <div className="td-proc-meta"><b>Screenshots ({proc.evidence.screenshots.length})</b></div>
+                  <div className="td-evidence-grid">
+                    {proc.evidence.screenshots.map((name) => (
+                      <figure key={name} className="td-evidence-item">
+                        <a href={evidenceMediaUrl(key, "screenshots", name)} target="_blank" rel="noreferrer">
+                          <img
+                            data-testid={`td-evidence-shot-${name}`}
+                            src={evidenceMediaUrl(key, "screenshots", name)}
+                            alt={name}
+                            loading="lazy"
+                          />
+                        </a>
+                        <figcaption title={name}>{name}</figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
 
           {/* Actions — approve / reject / unstick / remove */}
           <TaskActions

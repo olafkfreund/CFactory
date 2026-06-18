@@ -180,6 +180,16 @@ export interface TimelineEvent {
   updated_at: string;
 }
 
+// Liveness signal for a work item (RFC-0008 §3.4, #105): a `stalled` task is one
+// hung in a non-terminal stage past the idle deadline — surfaced as an alert.
+export interface Liveness {
+  last_activity_age_seconds: number;
+  active_service: string | null;
+  active_status: string | null;
+  stalled: boolean;
+  deadline_seconds: number;
+}
+
 export interface WorkItem {
   correlation_key: string;
   title: string | null;
@@ -187,6 +197,8 @@ export interface WorkItem {
   aifactory: ServiceState;
   tfactory: ServiceState;
   timeline: TimelineEvent[];
+  updated_at?: string | null;
+  liveness?: Liveness;
 }
 
 export async function fetchHealth(): Promise<Health> {

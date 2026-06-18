@@ -24,6 +24,7 @@ interface Row {
   activeIdx: number;
   percent: number | null; // null → indeterminate
   whatsLeft: string;
+  stalled: boolean; // #105: hung in a non-terminal stage past the idle deadline
 }
 
 function buildRow(wi: WorkItem, lp: LiveProgress | undefined): Row | null {
@@ -56,10 +57,25 @@ function buildRow(wi: WorkItem, lp: LiveProgress | undefined): Row | null {
             ? "queued"
             : (lp?.subtask || lp?.phase || cur.phase || cur.status || "working…");
 
-  return { wi, stageStates, overall, activeIdx, percent, whatsLeft };
+  // A stalled task (#105) is still "running" to the stage machine but the
+  // watchdog/last-activity says no movement past the deadline — surface it.
+  const stalled = (wi.liveness?.stalled ?? false) && overall === "running";
+
+  return { wi, stageStates, overall, activeIdx, percent, whatsLeft, stalled };
 }
 
 const ORDER: Record<TaskState, number> = { failed: 0, running: 1, review: 2, queued: 3, done: 4, idle: 5 };
+
+// Compact human age for the stalled badge (#105): "18m", "2h", "1d".
+function fmtAge(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 90) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 36) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
 
 export default function RunningTasksView({
   items,
@@ -265,7 +281,7 @@ export default function RunningTasksView({
             return (
               <motion.div
                 key={r.wi.correlation_key}
-                className={`rt-card rt-card--${r.overall} rt-card--clickable`}
+                className={`rt-card rt-card--${r.overall} rt-card--clickable ${r.stalled ? "rt-card--stalled" : ""}`}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.25, delay: Math.min(i * 0.025, 0.3) }}
@@ -279,6 +295,14 @@ export default function RunningTasksView({
                     <span className="rt-key" title={r.wi.correlation_key}>#{keySlug(r.wi.correlation_key)}</span>
                     <span className="rt-title">{displayTitle(r.wi.title, r.wi.correlation_key)}</span>
                   </span>
+                  {r.stalled && (
+                    <span
+                      className="rt-stalled-badge"
+                      title={`No activity for ${fmtAge(r.wi.liveness?.last_activity_age_seconds ?? 0)} while ${r.wi.liveness?.active_status ?? "active"} — may be stuck`}
+                    >
+                      STALLED · {fmtAge(r.wi.liveness?.last_activity_age_seconds ?? 0)}
+                    </span>
+                  )}
                   <span className={`status-pill ${STATE_PILL[r.overall]}`}>
                     <span className="dot" /> {STATE_LABEL[r.overall]}
                   </span>

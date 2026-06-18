@@ -16,11 +16,78 @@ from sqlalchemy.types import JSON
 
 from .config import Settings, get_settings
 from .db import Base, make_engine
-from .models import CompletionEvent, Service, ServiceState, WorkItem
+from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Idle budget before an active (non-terminal) stage is flagged stalled (#105).
+# Generous by default — real stages can be legitimately quiet (LLM calls, Docker,
+# stability re-runs); mirrors TFactory's watchdog default. Env-tunable.
+_DEFAULT_STALL_DEADLINE_SECONDS = 900.0
+_PIPELINE_ORDER = ("pfactory", "aifactory", "tfactory")
+
+
+def stall_deadline_seconds() -> float:
+    """The stall deadline in seconds (env ``CFACTORY_STALL_DEADLINE_SECONDS``)."""
+    import os
+
+    raw = os.environ.get("CFACTORY_STALL_DEADLINE_SECONDS")
+    if raw is None:
+        return _DEFAULT_STALL_DEADLINE_SECONDS
+    try:
+        val = float(raw)
+    except ValueError:
+        return _DEFAULT_STALL_DEADLINE_SECONDS
+    return val if val > 0 else _DEFAULT_STALL_DEADLINE_SECONDS
+
+
+def _as_aware(dt: datetime | None) -> datetime | None:
+    """Treat a naive timestamp (SQLite drops tz) as UTC so subtraction is safe."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def compute_liveness(
+    item: WorkItem,
+    *,
+    now: datetime | None = None,
+    deadline_seconds: float | None = None,
+) -> Liveness:
+    """Compute a WorkItem's liveness signal (RFC-0008 §3.4, #105).
+
+    The *active frontier* is the furthest-along service (pfactory → aifactory →
+    tfactory) that has a status; the item is "active" only when that frontier
+    status is non-terminal (an agent claims to be working). ``stalled`` is True
+    when it's active but ``updated_at`` hasn't moved within ``deadline_seconds``
+    — the silent 'reviewing' hang from the taskboard demo. An item between
+    stages (frontier terminal, downstream not started) is NOT flagged, to keep
+    false positives out of the watch plane.
+    """
+    now = now or _now()
+    deadline = stall_deadline_seconds() if deadline_seconds is None else deadline_seconds
+    updated = _as_aware(item.updated_at)
+    age = (now - updated).total_seconds() if updated is not None else 0.0
+
+    last_service: str | None = None
+    last_status: str | None = None
+    for svc in _PIPELINE_ORDER:
+        status = getattr(item, svc).status
+        if status:
+            last_service, last_status = svc, status
+
+    active = last_status is not None and not _is_terminal(last_status)
+    stalled = active and updated is not None and age > deadline
+    return Liveness(
+        last_activity_age_seconds=round(age, 1),
+        active_service=last_service if active else None,
+        active_status=last_status if active else None,
+        stalled=stalled,
+        deadline_seconds=deadline,
+    )
 
 
 # Substring hints for a terminal stage status (mirrors live_agents). A terminal
@@ -194,6 +261,8 @@ class WorkItemRow(Base):
             aifactory=ServiceState(**(self.aifactory or {})),
             tfactory=ServiceState(**(self.tfactory or {})),
             timeline=[CompletionEvent(**e) for e in (self.timeline or [])],
+            created_at=self.created_at,
+            updated_at=self.updated_at,
         )
 
 

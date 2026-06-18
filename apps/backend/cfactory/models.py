@@ -187,6 +187,22 @@ class ServiceState(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class Liveness(BaseModel):
+    """Request-time liveness signal for a WorkItem (RFC-0008 §3.4, #105).
+
+    A task that hangs in a non-terminal stage (e.g. TFactory stuck at
+    ``reviewing``) produced no signal in the watch plane. ``stalled`` flags a
+    work item whose furthest-along stage is still active but hasn't changed
+    within ``deadline_seconds`` — surfaced as an alert, not a quiet phase.
+    """
+
+    last_activity_age_seconds: float = 0.0
+    active_service: str | None = None  # furthest-along service still non-terminal
+    active_status: str | None = None
+    stalled: bool = False
+    deadline_seconds: float = 0.0
+
+
 class WorkItem(BaseModel):
     """A unit of work threaded across plan -> code -> test."""
 
@@ -196,6 +212,10 @@ class WorkItem(BaseModel):
     aifactory: ServiceState = Field(default_factory=ServiceState)
     tfactory: ServiceState = Field(default_factory=ServiceState)
     timeline: list[CompletionEvent] = Field(default_factory=list)
+    # Persistence timestamps (#105): surfaced so the cockpit can show a
+    # last-activity age and compute staleness live. None for in-memory items.
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # TokenUsage / CompletionEvent reference WorkerUsage as a forward ref (it is

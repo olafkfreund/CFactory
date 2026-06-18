@@ -438,6 +438,16 @@ body {
 .rt-card--running { border-left-color: var(--code); }
 .rt-card--failed { border-left-color: var(--red); }
 .rt-card--done { border-left-color: var(--green); opacity: 0.92; }
+/* Stuck-task alert (#105): a running card whose work hasn't moved past the
+   idle deadline gets an amber accent + badge so it can't hide as "running". */
+.rt-card--stalled { border-left-color: var(--amber, #d99a2b); }
+.rt-stalled-badge {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  margin-right: 0.4rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.02em;
+  color: #6b4a00; background: var(--amber-bg, #f6e3b8);
+  border: 1px solid var(--amber, #d99a2b);
+}
 
 .rt-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.7rem; }
 .rt-ident { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }

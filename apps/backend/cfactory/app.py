@@ -64,7 +64,7 @@ from .live_agent_proxy import ConnectFn, proxy_agent_console
 from .task_process import build_process_detail
 from .models import CompletionEvent, Service
 from .progress import LiveProgressHub, get_progress_hub, start_progress, stop_progress
-from .store import WorkItemStore, get_store
+from .store import WorkItemStore, compute_liveness, get_store
 from .upstream_ws import start_subscribers
 from .ws import get_manager
 
@@ -386,7 +386,19 @@ def create_app() -> FastAPI:
     @app.get("/api/workitems")
     def list_workitems(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:
         items = store.list()
-        return {"count": len(items), "items": [wi.model_dump(mode="json") for wi in items]}
+        # Attach a request-time liveness signal per item (#105): last-activity
+        # age + a `stalled` flag for a task hung in a non-terminal stage, so the
+        # watch plane can alert instead of showing a quiet non-terminal phase.
+        out = []
+        for wi in items:
+            data = wi.model_dump(mode="json")
+            data["liveness"] = compute_liveness(wi).model_dump(mode="json")
+            out.append(data)
+        return {
+            "count": len(out),
+            "items": out,
+            "stalled_count": sum(1 for d in out if d["liveness"]["stalled"]),
+        }
 
     @app.get("/api/rollups")
     def get_rollups(store: WorkItemStore = Depends(store_dep)) -> dict[str, object]:

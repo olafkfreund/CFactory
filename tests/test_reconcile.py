@@ -56,3 +56,34 @@ def test_reconcile_is_per_service():
     wi = s.get("7")
     assert wi.aifactory.status is None
     assert wi.pfactory.status == "planning"
+
+
+def test_prune_removes_orphan_duplicate_after_rekey():
+    # An early poll keyed task 'p:6' under fallback 'af-6' (frozen failed); the
+    # real GitHub-issue key '18' now reports the same task. The orphan must go.
+    s = _store()
+    s.upsert_snapshot("af-6", Service.AIFACTORY, ServiceState(task_id="p:6", status="failed"))
+    s.upsert_snapshot("18", Service.AIFACTORY, ServiceState(task_id="p:6", status="in_progress"))
+    affected = s.prune_duplicate_stages(Service.AIFACTORY, {"p:6": "18"})
+    assert affected == 1
+    assert s.get("af-6") is None          # orphan row deleted (no other stage)
+    assert s.get("18").aifactory.status == "in_progress"  # canonical card kept
+
+
+def test_prune_keeps_canonical_and_unrelated():
+    s = _store()
+    s.upsert_snapshot("18", Service.AIFACTORY, ServiceState(task_id="p:6", status="in_progress"))
+    # canonical key matches -> nothing pruned
+    assert s.prune_duplicate_stages(Service.AIFACTORY, {"p:6": "18"}) == 0
+    assert s.get("18").aifactory.status == "in_progress"
+
+
+def test_prune_only_clears_stage_when_other_services_present():
+    s = _store()
+    s.upsert_snapshot("af-6", Service.AIFACTORY, ServiceState(task_id="p:6", status="failed"))
+    s.upsert_snapshot("af-6", Service.PFACTORY, ServiceState(task_id="pf:6", status="done"))
+    s.upsert_snapshot("18", Service.AIFACTORY, ServiceState(task_id="p:6", status="in_progress"))
+    assert s.prune_duplicate_stages(Service.AIFACTORY, {"p:6": "18"}) == 1
+    row = s.get("af-6")
+    assert row is not None and row.aifactory.status is None   # ai stage cleared
+    assert row.pfactory.status == "done"                       # row kept (pf remains)

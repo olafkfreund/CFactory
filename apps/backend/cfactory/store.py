@@ -56,6 +56,16 @@ def _is_terminal(status: str | None) -> bool:
     return any(hint in low for hint in _TERMINAL_HINTS)
 
 
+def _row_has_stage_data(row: "WorkItemRow") -> bool:
+    """True if any of the three service stages carries a status or task_id —
+    i.e. the work item still represents real upstream state."""
+    for svc in ("pfactory", "aifactory", "tfactory"):
+        data = getattr(row, svc, None) or {}
+        if data.get("status") or data.get("task_id"):
+            return True
+    return False
+
+
 def _is_worker_event(event: CompletionEvent) -> bool:
     """True for a v1.3 live per-worker sub-event (``phase:"worker"`` + worker)."""
     return event.phase == "worker" and event.worker is not None
@@ -390,6 +400,36 @@ class WorkItemStore:
                     row.updated_at = _now()
                     cleared += 1
         return cleared
+
+    def prune_duplicate_stages(
+        self, service: Service, task_id_to_key: dict[str, str]
+    ) -> int:
+        """Drop a service's stage from a work item when that task is now reported
+        under a DIFFERENT correlation_key — i.e. the upstream re-keyed it.
+
+        An early poll can key a task by a fallback id (e.g. ``af-<spec>``) before
+        its real GitHub-issue key is exposed; once the issue appears the task is
+        re-keyed, leaving an orphaned duplicate card frozen at its last (often
+        terminal, e.g. ``failed``) stage that ``reconcile_snapshot`` deliberately
+        preserves. This removes that orphan: clear the stale stage, and delete the
+        row entirely if no stage data remains. Returns rows affected. Call only
+        after a successful poll (``task_id_to_key`` from the same fetch)."""
+        affected = 0
+        with self._session.begin() as session:
+            rows = session.scalars(select(WorkItemRow)).all()
+            for row in rows:
+                data = getattr(row, service.value) or {}
+                tid = data.get("task_id")
+                if tid is None:
+                    continue
+                canon = task_id_to_key.get(tid)
+                if canon is not None and canon != row.correlation_key:
+                    setattr(row, service.value, ServiceState().model_dump())
+                    row.updated_at = _now()
+                    affected += 1
+                    if not _row_has_stage_data(row):
+                        session.delete(row)
+        return affected
 
     def get(self, correlation_key: str) -> WorkItem | None:
         with self._session() as session:

@@ -14,7 +14,11 @@ _TF_PREFIX = "/api/tfactory/tasks"
 
 class TFactoryAdapter(BaseHTTPAdapter):
     service = Service.TFACTORY
-    list_path = "/api/tasks"
+    # The TEST stage lives in the spec-ingest task store, exposed under
+    # /api/tfactory/tasks ({"tasks": [...]}). The generic /api/tasks is the
+    # agent-task store and is empty for verification runs — polling it left the
+    # cockpit's TEST column permanently empty even for triaged tasks.
+    list_path = "/api/tfactory/tasks"
 
     def get_test_detail(self, task_id: str) -> dict[str, Any] | None:
         """Rich detail for one test task: ``GET /api/tasks/{task_id}``.

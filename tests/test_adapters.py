@@ -135,6 +135,13 @@ def test_tfactory_reads_nested_provenance():
     assert items[0].task_id == "spec1"
 
 
+def test_tfactory_lists_from_tfactory_tasks_endpoint():
+    # The TEST stage lives under /api/tfactory/tasks, not the generic /api/tasks
+    # (empty for verification runs). Guards the regression that left the cockpit's
+    # TEST column permanently empty.
+    assert TFactoryAdapter.list_path == "/api/tfactory/tasks"
+
+
 def test_correlation_key_falls_back_to_task_id_when_no_issue():
     payload = {"tasks": [{"id": "t9", "status": "done"}]}
     items = AIFactoryAdapter("http://x", transport=_transport(payload)).list_items()

@@ -156,6 +156,10 @@ class CompletionEvent(BaseModel):
     # access wasn't curated/reachable): {val3, reason, risk, blocked}. Optional —
     # absent on every event that declares no external access.
     access: dict[str, Any] | None = None
+    # RFC-0006 (#76): gate-normalized verification block a verifier attaches —
+    # {target_level, achieved_level, levels[], claim, _gate}. The cockpit renders
+    # achieved_level + the honest claim so a VAL-2 result never looks like "done".
+    verification: dict[str, Any] | None = None
 
 
 class ServiceState(BaseModel):

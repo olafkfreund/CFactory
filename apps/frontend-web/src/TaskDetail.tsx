@@ -279,6 +279,22 @@ export default function TaskDetail({
                       {st.extra.access.reason || "access not available"}
                     </div>
                   )}
+                  {st.extra?.verification?.achieved_level && (
+                    <div
+                      className={`td-stage-val td-stage-val--${
+                        st.extra.verification.achieved_level === "VAL-3" ||
+                        st.extra.verification.achieved_level === "VAL-4"
+                          ? "high"
+                          : "capped"
+                      }`}
+                      title={st.extra.verification.claim}
+                    >
+                      {/* RFC-0006 #76: render the assurance level + honest claim
+                          so a VAL-2 result is never mistaken for "done". */}
+                      {st.extra.verification.claim ||
+                        `Verified to ${st.extra.verification.achieved_level}`}
+                    </div>
+                  )}
                 </div>
               );
             })}

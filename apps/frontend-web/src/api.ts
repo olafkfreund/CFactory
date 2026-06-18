@@ -37,12 +37,22 @@ export interface AccessAnnotation {
   blocked?: { resource?: string; reason?: string }[];
 }
 
+// RFC-0006 (#76): the gate-normalized verification block a verifier attaches.
+// `achieved_level` is the truth (never an overclaim); `claim` is the honest
+// one-liner. Rendered on the test stage so a VAL-2 result never looks "done".
+export interface VerificationBlock {
+  target_level?: string;
+  achieved_level: string;
+  claim: string;
+  levels?: { level: string; status: string; reason?: string }[];
+}
+
 export interface ServiceState {
   task_id: string | null;
   status: string | null;
   phase: string | null;
   usage?: TokenUsage | null;
-  extra?: { access?: AccessAnnotation } & Record<string, unknown>;
+  extra?: { access?: AccessAnnotation; verification?: VerificationBlock } & Record<string, unknown>;
 }
 
 export interface ServiceTokens {

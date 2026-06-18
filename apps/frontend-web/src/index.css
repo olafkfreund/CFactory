@@ -742,6 +742,10 @@ body {
 .td-stage-phase { color: var(--code); font-size: 0.7rem; }
 /* RFC-0007 #88: honest credentialed-lane (VAL-3) gap on the test stage. */
 .td-stage-access { color: var(--warn, #d9822b); font-size: 0.7rem; margin-top: 0.2rem; }
+/* RFC-0006 #76: assurance-level claim on the test stage. */
+.td-stage-val { font-size: 0.7rem; margin-top: 0.2rem; }
+.td-stage-val--high { color: var(--green, #2e8b57); }
+.td-stage-val--capped { color: var(--warn, #d9822b); }
 .td-section h3 { font: 700 0.74rem var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 0.5rem; color: var(--muted); }
 .td-proc-meta { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.78rem; margin-bottom: 0.5rem; }
 /* Test-evidence gallery (screenshots + recordings proxied from TFactory). */

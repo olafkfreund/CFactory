@@ -397,6 +397,13 @@ class WorkItemStore:
                         extra = dict(slice_dict.get("extra") or {})
                         extra["access"] = event.access
                         slice_dict["extra"] = extra
+                    # RFC-0006 (#76): carry the gate-normalized verification block
+                    # (achieved_level + honest claim) onto the slice so the cockpit
+                    # renders the assurance level and never shows VAL-2 as "done".
+                    if getattr(event, "verification", None):
+                        extra = dict(slice_dict.get("extra") or {})
+                        extra["verification"] = event.verification
+                        slice_dict["extra"] = extra
                     setattr(row, event.service.value, slice_dict)
 
                     # Reassign (not .append) so SQLAlchemy detects the JSON column change.

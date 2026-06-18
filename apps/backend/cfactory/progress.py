@@ -114,6 +114,12 @@ def poll_progress_once(
             if store is not None:
                 hydrate(store, items)
                 store.reconcile_snapshot(adapter.service, {i.task_id for i in items})
+                # Drop orphaned duplicate cards left when an upstream re-keys a
+                # task (fallback id -> real GitHub-issue key); reconcile preserves
+                # their terminal stage, so prune by task_id->canonical-key here.
+                store.prune_duplicate_stages(
+                    adapter.service, {i.task_id: i.correlation_key for i in items}
+                )
         except AdapterError:
             pass
         finally:

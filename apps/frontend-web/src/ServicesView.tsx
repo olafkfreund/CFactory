@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType, type SVGProps } from "react";
-import { fetchServices, updateService, type Health, type ServiceStatus } from "./api";
+import { fetchProviderHealth, fetchServices, updateService, type Health, type ProviderAuthEntry, type ServiceStatus } from "./api";
 import {
   IconControlTower,
   IconDocument,
@@ -58,6 +58,8 @@ function pillFor(s: ServiceStatus | undefined): { cls: string; label: string; de
 export default function ServicesView({ backend, reloadSignal }: { backend: Backend; reloadSignal: number }) {
   const health = backend.kind === "ok" ? backend.health : null;
   const [statuses, setStatuses] = useState<Record<string, ServiceStatus> | null>(null);
+  // Provider-auth health (#109): per-service credential config pre-flight.
+  const [providerAuth, setProviderAuth] = useState<Record<string, ProviderAuthEntry>>({});
 
   // Inline endpoint editing.
   const [editing, setEditing] = useState<string | null>(null);
@@ -75,6 +77,13 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
       })
       .catch(() => {
         if (alive) setStatuses({});
+      });
+    fetchProviderHealth()
+      .then((ph) => {
+        if (alive) setProviderAuth(Object.fromEntries(ph.services.map((s) => [s.name, s])));
+      })
+      .catch(() => {
+        if (alive) setProviderAuth({});
       });
     return () => {
       alive = false;
@@ -154,6 +163,29 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
                   </span>
                 </div>
                 <div className="svc-role"><span className="svc-role-pill">{meta.role}</span> endpoint configured</div>
+
+                {(() => {
+                  // Provider-auth pre-flight tile (#109): alert when the service
+                  // reports it has NO usable provider credential.
+                  const pa = providerAuth[name];
+                  if (!pa || !pa.reachable) return null;
+                  if (!pa.reported) {
+                    return <div className="svc-auth svc-auth--unknown">provider auth: unknown</div>;
+                  }
+                  const configured = pa.providers.filter((p) => p.configured).map((p) => p.name);
+                  if (!pa.any_configured) {
+                    return (
+                      <div className="svc-auth svc-auth--alert" title="No provider credential configured — this service cannot authenticate to any model">
+                        provider auth: no credentials configured
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="svc-auth svc-auth--ok" title={`Configured providers: ${configured.join(", ")}`}>
+                      provider auth: {configured.join(", ")}
+                    </div>
+                  );
+                })()}
 
                 {isEditing ? (
                   <div className="svc-edit">

@@ -132,6 +132,49 @@ def observe_transport_dep() -> httpx.BaseTransport | None:
     return None
 
 
+def provider_health_transport_dep() -> httpx.BaseTransport | None:
+    """Dependency seam for the per-service provider-auth health fetch (#109) —
+    overridden in tests with a MockTransport. None → real transport."""
+    return None
+
+
+def _fetch_provider_auth(
+    base_url: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = 3.0,
+) -> dict[str, object]:
+    """Fetch a service's provider-credential pre-flight from GET /api/health (#109).
+
+    Returns ``{reachable, reported, any_configured, providers, error}``. A service
+    that doesn't yet emit the ``provider_auth`` block (older build) is reachable
+    but ``reported=False`` — surfaced as "unknown", never a false alert.
+    """
+    try:
+        with httpx.Client(base_url=base_url, timeout=timeout, transport=transport) as c:
+            resp = c.get("/api/health")
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as exc:
+        return {
+            "reachable": False, "reported": False, "any_configured": False,
+            "providers": [], "error": str(exc),
+        }
+    pa = data.get("provider_auth") if isinstance(data, dict) else None
+    if not isinstance(pa, dict):
+        return {
+            "reachable": True, "reported": False, "any_configured": False,
+            "providers": [], "error": None,
+        }
+    return {
+        "reachable": True,
+        "reported": True,
+        "any_configured": bool(pa.get("any_configured", False)),
+        "providers": pa.get("providers", []),
+        "error": None,
+    }
+
+
 def _probe_observe(
     base_url: str,
     *,
@@ -351,6 +394,34 @@ def create_app() -> FastAPI:
             }
         )
         return {"services": out}
+
+    @app.get("/api/provider-health")
+    async def provider_health(
+        transport: httpx.BaseTransport | None = Depends(provider_health_transport_dep),
+    ) -> dict[str, object]:
+        """Per-service provider-auth pre-flight tile (RFC-0008 §3.4, #109).
+
+        Reads each factory's ``/api/health.provider_auth`` (config pre-flight:
+        which provider credentials are present) and flags a service that is
+        reachable, reports the block, and has NO usable provider credential — the
+        "can't authenticate to any model" alert (the expired/un-rotated-token
+        class from the taskboard demo). Best-effort: never fatal."""
+        roles = {"pfactory": "Plan", "aifactory": "Code", "tfactory": "Test"}
+        urls = {
+            "pfactory": settings.pfactory_api_url,
+            "aifactory": settings.aifactory_api_url,
+            "tfactory": settings.tfactory_api_url,
+        }
+        out: list[dict[str, object]] = []
+        for name, url in urls.items():
+            info = await run_in_threadpool(
+                lambda u=url: _fetch_provider_auth(u, transport=transport)
+            )
+            out.append({"name": name, "role": roles[name], "url": url, **info})
+        alert_count = sum(
+            1 for s in out if s["reachable"] and s["reported"] and not s["any_configured"]
+        )
+        return {"services": out, "alert_count": alert_count}
 
     @app.put("/api/services/{name}")
     async def update_service(

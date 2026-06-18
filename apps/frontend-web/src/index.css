@@ -562,6 +562,15 @@ body {
 .svc-card--observe .svc-ico { color: var(--violet); }
 .svc-role .svc-role-pill { margin-right: 0.4rem; }
 .svc-role { color: var(--muted); font-size: 0.82rem; margin-bottom: 0.7rem; }
+/* Provider-auth pre-flight line (#109). */
+.svc-auth { font-size: 0.74rem; margin: -0.35rem 0 0.7rem; letter-spacing: 0.01em; }
+.svc-auth--ok { color: var(--green, #2e8b57); }
+.svc-auth--unknown { color: var(--muted); }
+.svc-auth--alert {
+  color: #6b4a00; background: var(--amber-bg, #f6e3b8);
+  border: 1px solid var(--amber, #d99a2b); border-radius: 6px;
+  padding: 0.1rem 0.4rem; display: inline-block; font-weight: 600;
+}
 .svc-role-pill { font-size: 0.7rem; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0.1rem 0.45rem; }
 .svc-url { font-size: 0.76rem; color: var(--cyan); word-break: break-all; }
 .svc-url-row { display: flex; align-items: center; gap: 0.4rem; }

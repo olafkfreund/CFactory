@@ -216,6 +216,31 @@ export async function fetchServices(): Promise<ServiceStatus[]> {
   return data.services ?? [];
 }
 
+// Provider-auth health (#109): per-service config pre-flight — which provider
+// credentials are present. `reported=false` → the service doesn't emit it yet
+// (unknown, not an alert); `reachable && reported && !any_configured` → alert.
+export interface ProviderAuthEntry {
+  name: string;
+  role: string;
+  url: string;
+  reachable: boolean;
+  reported: boolean;
+  any_configured: boolean;
+  providers: { name: string; configured: boolean }[];
+  error: string | null;
+}
+
+export interface ProviderHealth {
+  services: ProviderAuthEntry[];
+  alert_count: number;
+}
+
+export async function fetchProviderHealth(): Promise<ProviderHealth> {
+  const resp = await fetch("/api/provider-health");
+  if (!resp.ok) throw new Error(`provider-health error: HTTP ${resp.status}`);
+  return (await resp.json()) as ProviderHealth;
+}
+
 export interface CopilotSettings {
   provider: string;            // "claude" | "ollama"
   model: string;

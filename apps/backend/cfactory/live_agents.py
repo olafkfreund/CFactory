@@ -21,53 +21,7 @@ from pydantic import BaseModel
 from .adapters.aifactory import AIFactoryAdapter
 from .adapters.base import AdapterError
 from .models import Service
-
-# Substring hints for a status where NO agent is actively executing — so the
-# rmux console would have nothing to stream (it would open and immediately end).
-# Three groups: terminal, parked-for-review, and queued/not-started. An agent is
-# "live" only while its status matches none of these. Surfacing review/queued
-# tasks was the cause of consoles that all showed "— stream ended —" (#33).
-_INACTIVE_HINTS = (
-    # terminal
-    "done",
-    "merged",
-    "triaged",
-    "emitted",
-    "completed",
-    "accept",
-    "passed",
-    "approved",
-    "fail",
-    "reject",
-    "block",
-    "error",
-    "cancel",
-    "discard",
-    "skip",
-    "abort",
-    # parked for human/AI review — finished executing, awaiting a person
-    "review",
-    # queued / not started — no agent attached yet
-    "backlog",
-    "pending",
-    "queued",
-    "todo",
-    "icebox",
-    "draft",
-)
-
-
-def _is_active(status: str | None) -> bool:
-    """True when a task is actively executing (an agent may be live to stream).
-
-    False for terminal, review-parked, and queued statuses — none of which have a
-    running agent, so their consoles would open and immediately close. A missing
-    status still reads as active: a just-started agent often has no mark yet.
-    """
-    if not status:
-        return True
-    low = status.lower()
-    return not any(hint in low for hint in _INACTIVE_HINTS)
+from .status_taxonomy import is_active as _is_active
 
 
 class LiveAgent(BaseModel):

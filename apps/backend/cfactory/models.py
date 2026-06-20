@@ -13,7 +13,16 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+# The base token-usage shape (RFC-0001 v1.1 `usage` block) is the Factory hub's
+# GENERATED single source of truth, vendored + pinned at
+# cfactory._contracts.factory_contracts (Factory#160). CFactory's TokenUsage
+# DERIVES from it and adds the v1.3 breakdowns below, so the shared scalar
+# contract (input/output/total tokens + cost + model) is defined once fleet-wide
+# instead of re-declared per service. The JSON shape is unchanged (see the
+# behaviour tests in tests/test_factory_contracts_consumption.py).
+from ._contracts.factory_contracts import Usage as _SharedUsage
 
 
 class Service(str, Enum):
@@ -42,8 +51,16 @@ class BudgetInfo(BaseModel):
     exceeded: bool = False
 
 
-class TokenUsage(BaseModel):
+class TokenUsage(_SharedUsage):
     """LLM token/cost usage for one stage (RFC-0001 v1.1 additive `usage` block).
+
+    Derives from the hub's generated ``Usage`` (vendored single source of truth,
+    Factory#160): the scalar contract — ``input_tokens`` / ``output_tokens`` /
+    ``total_tokens`` / ``cost_usd`` / ``model`` — is inherited, and CFactory adds
+    the v1.3 breakdowns below. The scalar defaults are pinned to ``0`` here
+    (CFactory aggregates these in arithmetic, so a missing block reads as zero,
+    not ``None``) — this preserves the exact prior wire/JSON shape; the shared
+    base only supplies the field *contract*, not the defaults.
 
     Optional everywhere — only present when a service instruments and emits it
     (AIFactory does today; PFactory/TFactory pending). Aggregated by CFactory.
@@ -58,6 +75,12 @@ class TokenUsage(BaseModel):
     when the contract set a budget, absent (``None``) on the common case.
     """
 
+    # Keep CFactory's historic extra-handling (ignore unknown wire fields) rather
+    # than inheriting the shared base's ``extra="allow"``; the JSON shape stays
+    # byte-for-byte what it was before this derivation.
+    model_config = ConfigDict(extra="ignore")
+
+    # Re-declared to pin the zero defaults (the shared base defaults to None).
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0

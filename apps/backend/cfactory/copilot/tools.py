@@ -1,14 +1,16 @@
 """Copilot read tools (#14).
 
 Pure, structured queries over the WorkItem store — used to enrich the copilot's
-context and exposed as read API endpoints for the cockpit UI. Cost roll-ups are
-intentionally omitted: the WorkItem/CompletionEvent model does not yet carry
-cost data (a future enhancement). Latency is derived from event timestamps.
+context and exposed as read API endpoints for the cockpit UI. Roll-ups aggregate
+the RFC-0001 ``usage`` block carried on each service slice: token totals, cost
+(real dollars for metered work), and latency derived from event timestamps.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+
+from cfactory.usage import add_usage, empty_bucket
 
 from ..models import Stage, WorkItem
 from ..store import WorkItemStore
@@ -66,7 +68,7 @@ def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | Non
 
 
 def rollups(store: WorkItemStore) -> dict:
-    """Aggregate counts + latency across the board (cost not tracked yet)."""
+    """Aggregate counts + latency + cost across the board (RFC-0001 usage)."""
     items = store.list()
     by_stage = {"plan": 0, "code": 0, "test": 0}
     by_status: Counter[str] = Counter()
@@ -223,18 +225,8 @@ def token_totals(store: WorkItemStore) -> dict:
 def _merge_rollup(dst: dict, src: dict | None) -> None:
     """Sum a per-provider/per-model rollup dict ``src`` into ``dst`` in place."""
     for key, vals in (src or {}).items():
-        b = dst.setdefault(
-            key,
-            {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "cost_usd": 0.0,
-                "workers": 0,
-            },
-        )
-        for k in ("input_tokens", "output_tokens", "total_tokens", "cost_usd", "workers"):
-            b[k] += vals.get(k, 0) or 0
+        b = dst.setdefault(key, empty_bucket())
+        add_usage(b, vals)
 
 
 def token_by_worker(store: WorkItemStore) -> dict:

@@ -67,14 +67,19 @@ def _detect_for_item(wi: WorkItem, now: datetime, stale_seconds: int) -> list[An
     # 2. Handback loop — a failing test event followed by a return to code.
     # Counts test→code bounces. (RFC-0001 idempotency dedups identical events,
     # so we detect bounces by the test-fail→later-code transition, not a raw
-    # repeat count.)
+    # repeat count.) Single pass (O(n)): a test-failure counts as a handback iff
+    # some code event comes after it — i.e. iff its index is before the LAST
+    # AIFactory event. Precompute that index once, then count earlier TFactory
+    # failures, instead of scanning the tail per event (was O(n^2)).
     tl = wi.timeline
+    last_code_idx = -1
+    for i, e in enumerate(tl):
+        if e.service is Service.AIFACTORY:
+            last_code_idx = i
     handbacks = sum(
         1
         for i, e in enumerate(tl)
-        if e.service is Service.TFACTORY
-        and _is_failure(e.status)
-        and any(later.service is Service.AIFACTORY for later in tl[i + 1 :])
+        if i < last_code_idx and e.service is Service.TFACTORY and _is_failure(e.status)
     )
     if handbacks:
         found.append(

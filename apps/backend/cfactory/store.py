@@ -17,6 +17,7 @@ from sqlalchemy.types import JSON
 from .config import Settings, get_settings
 from .db import Base, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem
+from .usage import add_usage, empty_bucket
 
 
 def _now() -> datetime:
@@ -164,9 +165,6 @@ def _coerce_ts_ms(event: CompletionEvent) -> int:
         return 0
 
 
-_ROLLUP_KEYS = ("input_tokens", "output_tokens", "total_tokens", "cost_usd")
-
-
 def rollup_by(workers: dict | None, dim: str) -> dict[str, dict]:
     """Roll a ``worker_id -> worker`` map up by a dimension (``provider``/``model``).
 
@@ -178,19 +176,8 @@ def rollup_by(workers: dict | None, dim: str) -> dict[str, dict]:
     for w in (workers or {}).values():
         wd = w if isinstance(w, dict) else w.model_dump()
         key = wd.get(dim) or "unknown"
-        b = out.setdefault(
-            key,
-            {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "cost_usd": 0.0,
-                "workers": 0,
-            },
-        )
-        for k in _ROLLUP_KEYS:
-            b[k] += wd.get(k, 0) or 0
-        b["workers"] += 1
+        b = out.setdefault(key, empty_bucket())
+        add_usage(b, wd, count_worker=True)
         b["duration_ms"] = b.get("duration_ms", 0) + (wd.get("duration_ms", 0) or 0)
         # A provider bucket shares one billing mode (#96); carry it when present
         # (live worker sub-events may omit it — then it stays absent until the

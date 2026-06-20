@@ -16,6 +16,8 @@ override ``keystore_dep`` (preferred) or call ``set_keys()`` / ``reset_keystore(
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import Depends, Header, HTTPException
 
 from .config import get_settings
@@ -23,6 +25,19 @@ from .config import get_settings
 # Recognised scopes.
 READ = "read"
 WRITE = "write"
+
+
+def secret_matches(candidate: str | None, expected: str | None) -> bool:
+    """Constant-time equality for a presented secret vs an expected one.
+
+    The single constant-time comparison helper shared by the API-key keystore
+    (auth.py) and the MCP bearer check (mcp.py). Returns False when either side
+    is missing. Uses ``hmac.compare_digest`` so the comparison time does not leak
+    how many leading characters matched (timing-attack resistant).
+    """
+    if not candidate or not expected:
+        return False
+    return hmac.compare_digest(candidate, expected)
 
 
 def parse_api_keys(raw: str | None) -> dict[str, set[str]]:
@@ -65,10 +80,22 @@ class KeyStore:
         return bool(self._keys)
 
     def scopes_for(self, key: str | None) -> set[str] | None:
-        """Return the scope set for ``key``, or None if the key is unknown."""
+        """Return the scope set for ``key``, or None if the key is unknown.
+
+        Constant-time: rather than a hashed dict lookup (whose failure time can
+        leak how many characters of a candidate key matched), every configured
+        key is compared with ``secret_matches`` and the loop never short-circuits
+        on the first match — so the comparison cost is independent of which (or
+        whether any) key matches. Avoids timing-attack key recovery on the
+        keystore that gates the whole /api and /connect surface.
+        """
         if key is None:
             return None
-        return self._keys.get(key)
+        matched: set[str] | None = None
+        for known, scopes in self._keys.items():
+            if secret_matches(key, known):
+                matched = scopes
+        return matched
 
     def preferred_key(self) -> str | None:
         """Return a configured key suitable for handing to a client (#73).

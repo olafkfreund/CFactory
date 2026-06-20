@@ -12,9 +12,12 @@ name: Code quality (ratchet)
 # reviewed - section 3.6) and a drift gate confirming the vendored configs still
 # match the pinned hub baseline.
 #
-# Python-only. The React/Vite frontend (apps/frontend-web) lint/strictness gate
-# is tracked as follow-up (see issues #112, #116); the existing test.yml already
-# typechecks + builds the frontend.
+# The Python backend gate (ratchet + format + drift) plus the React/Vite
+# frontend gate (#112): ESLint 9 flat config (typescript-eslint strictTypeChecked
+# + react-hooks), prettier --check, and the vitest boundary-schema suite. The
+# frontend gate is tuned green at adoption via a warning baseline + scoped
+# prettier (see eslint.config.js / package.json TODOs) and tightens over time.
+# The existing test.yml separately typechecks + builds the frontend.
 
 on:
   pull_request: {}
@@ -127,3 +130,29 @@ jobs:
       - name: Hub unavailable (private repo / no token)
         if: steps.hub.outcome != 'success'
         run: echo "Hub checkout unavailable; skipping drift diff (configure a read token to enforce)."
+
+  frontend-quality:
+    name: frontend lint + format + unit tests (blocking)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/frontend-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/frontend-web/package-lock.json
+      - name: Install frontend deps (incl. dev)
+        # --include=dev is explicit so the gate never silently skips the lint /
+        # test toolchain if the runner inherits NODE_ENV=production.
+        run: npm ci --include=dev
+      - name: ESLint (strictTypeChecked + react-hooks; warning baseline)
+        # The legacy tree carries a grandfathered warning backlog (--max-warnings
+        # in package.json); net-new warnings and ALL errors fail the build.
+        run: npm run lint
+      - name: Prettier --check (PR-owned files)
+        run: npm run format:check
+      - name: Vitest (HTTP/WS boundary schema suite)
+        run: npm test

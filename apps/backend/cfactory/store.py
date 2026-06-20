@@ -17,6 +17,7 @@ from sqlalchemy.types import JSON
 from .config import Settings, get_settings
 from .db import Base, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem
+from .status_taxonomy import is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
 
 
@@ -89,39 +90,6 @@ def compute_liveness(
         stalled=stalled,
         deadline_seconds=deadline,
     )
-
-
-# Substring hints for a terminal stage status (mirrors live_agents). A terminal
-# stage is preserved during reconciliation — completed/failed history must stay.
-_TERMINAL_HINTS = (
-    "done",
-    "merged",
-    "triaged",
-    "emitted",
-    "completed",
-    "accept",
-    "passed",
-    "approved",
-    "shipped",
-    "succeeded",
-    "success",
-    "ready",
-    "closed",
-    "fail",
-    "reject",
-    "block",
-    "error",
-    "cancel",
-    "discard",
-    "abort",
-)
-
-
-def _is_terminal(status: str | None) -> bool:
-    if not status:
-        return False
-    low = status.lower()
-    return any(hint in low for hint in _TERMINAL_HINTS)
 
 
 def _row_has_stage_data(row: WorkItemRow) -> bool:
@@ -226,6 +194,112 @@ def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
     )
 
 
+def _apply_worker_progress(prev: dict, event: CompletionEvent) -> dict:
+    """Build the slice for a Tier-1.5 heartbeat (``phase:"worker_progress"``).
+
+    APPENDS a ProgressPoint to the rolling per-worker series, capped at the last
+    ``_PROGRESS_SERIES_CAP`` points. Does NOT touch the service slice's
+    status/phase/usage/workers — it's a stream, not a terminal record (and the
+    caller appends no timeline entry; the series IS the record).
+    """
+    w = event.worker
+    series_map = dict(prev.get("worker_progress") or {})
+    series = list(series_map.get(w.worker_id) or [])
+    series.append(
+        {
+            "ts": _coerce_ts_ms(event),
+            "total_tokens": w.total_tokens,
+            "cost_usd": w.cost_usd,
+            "elapsed_ms": w.elapsed_ms,
+        }
+    )
+    if len(series) > _PROGRESS_SERIES_CAP:
+        series = series[-_PROGRESS_SERIES_CAP:]
+    series_map[w.worker_id] = series
+    slice_dict = {**prev, "worker_progress": series_map}
+    # task_id is handy for the running-task progress API but never overwrites an
+    # existing one.
+    slice_dict.setdefault("task_id", event.task_id)
+    return slice_dict
+
+
+def _apply_worker(prev: dict, event: CompletionEvent) -> dict:
+    """Build the slice for a live per-worker sub-event (``phase:"worker"``).
+
+    Upserts into the slice's ``workers`` map (idempotent by worker_id — a re-emit
+    replaces, no double count) WITHOUT touching the service-level
+    usage/status/phase, then recomputes the provider/model rollups from the
+    resulting map.
+    """
+    workers = dict(prev.get("workers") or {})
+    workers[event.worker.worker_id] = event.worker.model_dump()
+    return {
+        **prev,
+        "task_id": prev.get("task_id") or event.task_id,
+        "workers": workers,
+        "by_provider": rollup_by(workers, "provider"),
+        "by_model": rollup_by(workers, "model"),
+    }
+
+
+def _apply_terminal_or_scalar(prev: dict, event: CompletionEvent) -> dict:
+    """Build the slice for an ordinary / terminal event.
+
+    Refreshes the scalar slice but PRESERVES any per-worker map accumulated from
+    live sub-events. A terminal event that carries its own
+    ``usage.workers``/``by_provider``/``by_model`` seeds the slice too (terminal
+    rollup), recomputing rollups from the merged worker map for consistency. The
+    rolling progress series is preserved while running and pruned on a terminal
+    event so finished tasks don't bloat the store.
+    """
+    slice_dict = ServiceState(
+        task_id=event.task_id,
+        status=event.status,
+        phase=event.phase,
+        usage=event.usage,
+    ).model_dump()
+    workers = dict(prev.get("workers") or {})
+    if event.usage and event.usage.workers:
+        for w in event.usage.workers:
+            workers[w.worker_id] = w.model_dump()
+    slice_dict["workers"] = workers
+    # Prefer the terminal event's explicit breakdowns when present; otherwise
+    # derive from the worker map.
+    if event.usage and event.usage.by_provider:
+        slice_dict["by_provider"] = event.usage.by_provider
+    else:
+        slice_dict["by_provider"] = rollup_by(workers, "provider")
+    if event.usage and event.usage.by_model:
+        slice_dict["by_model"] = event.usage.by_model
+    else:
+        slice_dict["by_model"] = rollup_by(workers, "model")
+    if _is_terminal(event.status):
+        slice_dict["worker_progress"] = {}
+    else:
+        slice_dict["worker_progress"] = prev.get("worker_progress") or {}
+    return slice_dict
+
+
+def _attach_access_verification(slice_dict: dict, event: CompletionEvent) -> dict:
+    """Carry the honest access (#88) and verification (#76) annotations onto a slice.
+
+    RFC-0007 attaches the credentialed-lane access annotation; RFC-0006 attaches
+    the gate-normalized verification block (achieved_level + honest claim) so the
+    cockpit renders the assurance level and never shows VAL-2 as "done". Both land
+    under the slice's ``extra`` map. Returns the slice for chaining.
+    """
+    access = getattr(event, "access", None)
+    verification = getattr(event, "verification", None)
+    if access or verification:
+        extra = dict(slice_dict.get("extra") or {})
+        if access:
+            extra["access"] = access
+        if verification:
+            extra["verification"] = verification
+        slice_dict["extra"] = extra
+    return slice_dict
+
+
 class WorkItemRow(Base):
     __tablename__ = "work_items"
 
@@ -292,100 +366,19 @@ class WorkItemStore:
 
                     prev = getattr(row, event.service.value) or {}
                     if _is_worker_progress_event(event):
-                        # Tier 1.5 heartbeat: APPEND a ProgressPoint to the
-                        # rolling per-worker series, capped at the last
-                        # ``_PROGRESS_SERIES_CAP`` points. Do NOT touch the
-                        # service slice's status/phase/usage/workers — it's a
-                        # stream, not a terminal record. No timeline entry (the
-                        # stream is high-frequency; the series IS the record).
-                        w = event.worker
-                        series_map = dict(prev.get("worker_progress") or {})
-                        series = list(series_map.get(w.worker_id) or [])
-                        series.append(
-                            {
-                                "ts": _coerce_ts_ms(event),
-                                "total_tokens": w.total_tokens,
-                                "cost_usd": w.cost_usd,
-                                "elapsed_ms": w.elapsed_ms,
-                            }
-                        )
-                        if len(series) > _PROGRESS_SERIES_CAP:
-                            series = series[-_PROGRESS_SERIES_CAP:]
-                        series_map[w.worker_id] = series
-                        slice_dict = {**prev, "worker_progress": series_map}
-                        # task_id is handy for the running-task progress API but
-                        # never overwrites an existing one.
-                        slice_dict.setdefault("task_id", event.task_id)
-                        setattr(row, event.service.value, slice_dict)
+                        # A heartbeat is a high-frequency STREAM: it updates the
+                        # rolling series only and appends NO timeline entry, so it
+                        # returns early before the shared slice/timeline write.
+                        setattr(row, event.service.value, _apply_worker_progress(prev, event))
                         row.updated_at = _now()
                         session.flush()
                         return row.to_model(), True
+
                     if _is_worker_event(event):
-                        # Live per-worker sub-event: upsert into the slice's
-                        # ``workers`` map (idempotent by worker_id — re-emit
-                        # replaces, no double count) WITHOUT touching the
-                        # service-level usage / status / phase. Recompute the
-                        # provider/model rollups from the resulting map.
-                        workers = dict(prev.get("workers") or {})
-                        workers[event.worker.worker_id] = event.worker.model_dump()
-                        slice_dict = {
-                            **prev,
-                            "task_id": prev.get("task_id") or event.task_id,
-                            "workers": workers,
-                            "by_provider": rollup_by(workers, "provider"),
-                            "by_model": rollup_by(workers, "model"),
-                        }
+                        slice_dict = _apply_worker(prev, event)
                     else:
-                        # Ordinary / terminal event: refresh the scalar slice as
-                        # before, but PRESERVE any per-worker map accumulated
-                        # from live sub-events. A terminal event that carries its
-                        # own usage.workers/by_provider/by_model seeds the slice
-                        # too (terminal rollup), recomputing rollups from the
-                        # merged worker map for consistency.
-                        slice_ = ServiceState(
-                            task_id=event.task_id,
-                            status=event.status,
-                            phase=event.phase,
-                            usage=event.usage,
-                        )
-                        slice_dict = slice_.model_dump()
-                        workers = dict(prev.get("workers") or {})
-                        if event.usage and event.usage.workers:
-                            for w in event.usage.workers:
-                                workers[w.worker_id] = w.model_dump()
-                        slice_dict["workers"] = workers
-                        # Prefer the terminal event's explicit breakdowns when
-                        # present; otherwise derive from the worker map.
-                        if event.usage and event.usage.by_provider:
-                            slice_dict["by_provider"] = event.usage.by_provider
-                        else:
-                            slice_dict["by_provider"] = rollup_by(workers, "provider")
-                        if event.usage and event.usage.by_model:
-                            slice_dict["by_model"] = event.usage.by_model
-                        else:
-                            slice_dict["by_model"] = rollup_by(workers, "model")
-                        # Rolling progress series is only needed WHILE running.
-                        # On a TERMINAL event for the task, prune it (the slice
-                        # rebuild already dropped it — keep it dropped) so
-                        # finished tasks don't bloat the store. On a non-terminal
-                        # ordinary event, PRESERVE the accumulated series.
-                        if _is_terminal(event.status):
-                            slice_dict["worker_progress"] = {}
-                        else:
-                            slice_dict["worker_progress"] = prev.get("worker_progress") or {}
-                    # RFC-0007 (#88): carry an honest access annotation onto the
-                    # slice so the cockpit can render the credentialed-lane gap.
-                    if getattr(event, "access", None):
-                        extra = dict(slice_dict.get("extra") or {})
-                        extra["access"] = event.access
-                        slice_dict["extra"] = extra
-                    # RFC-0006 (#76): carry the gate-normalized verification block
-                    # (achieved_level + honest claim) onto the slice so the cockpit
-                    # renders the assurance level and never shows VAL-2 as "done".
-                    if getattr(event, "verification", None):
-                        extra = dict(slice_dict.get("extra") or {})
-                        extra["verification"] = event.verification
-                        slice_dict["extra"] = extra
+                        slice_dict = _apply_terminal_or_scalar(prev, event)
+                    slice_dict = _attach_access_verification(slice_dict, event)
                     setattr(row, event.service.value, slice_dict)
 
                     # Reassign (not .append) so SQLAlchemy detects the JSON column change.

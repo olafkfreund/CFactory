@@ -11,21 +11,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
+from cfactory.status_taxonomy import is_done as _is_terminal_ok
+from cfactory.status_taxonomy import is_failure_or_stuck as _is_failure
+
 from ..models import Service, WorkItem
 from ..store import WorkItemStore
-
-_FAILURE_HINTS = ("fail", "reject", "block", "error", "stuck")
-_TERMINAL_OK = {
-    "done",
-    "merged",
-    "triaged",
-    "emitted",
-    "completed",
-    "accept",
-    "accepted",
-    "passed",
-    "approved",
-}
 
 # A stage with no new event for this long (and not terminal) is "stuck".
 _DEFAULT_STALE_SECONDS = 86_400  # 24h
@@ -38,14 +28,6 @@ class Anomaly:
     correlation_key: str
     title: str | None
     detail: str
-
-
-def _is_failure(status: str | None) -> bool:
-    return bool(status) and any(h in status.lower() for h in _FAILURE_HINTS)
-
-
-def _is_terminal_ok(status: str | None) -> bool:
-    return bool(status) and status.lower() in _TERMINAL_OK
 
 
 def _detect_for_item(wi: WorkItem, now: datetime, stale_seconds: int) -> list[Anomaly]:

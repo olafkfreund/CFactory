@@ -152,7 +152,9 @@ export default function TaskDetail({
       // RFC-0014 (#124): estimate-vs-actual + routing rationale for this task.
       // Best-effort; a 404/error keeps the last-good value and never blanks.
       fetchCostRouting(key)
-        .then((cr) => alive && setCostRouting(cr))
+        .then((cr) => {
+          if (alive) setCostRouting(cr);
+        })
         .catch(() => undefined);
     };
     load();

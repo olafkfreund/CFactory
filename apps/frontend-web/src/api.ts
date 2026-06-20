@@ -261,7 +261,7 @@ export type CostRouting = z.infer<typeof CostRoutingSchema>;
 // error or a 404 (unknown task) never blanks the task detail.
 export async function fetchCostRouting(correlationKey: string): Promise<CostRouting> {
   const resp = await fetch(`/api/tasks/${encodeURIComponent(correlationKey)}/cost-routing`);
-  if (!resp.ok) throw new Error(`cost-routing error: HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(`cost-routing error: HTTP ${String(resp.status)}`);
   return CostRoutingSchema.parse(await resp.json());
 }
 

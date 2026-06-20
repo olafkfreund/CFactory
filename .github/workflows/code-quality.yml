@@ -131,6 +131,45 @@ jobs:
         if: steps.hub.outcome != 'success'
         run: echo "Hub checkout unavailable; skipping drift diff (configure a read token to enforce)."
 
+  contracts-drift:
+    name: vendored factory-contracts matches the pinned hub (drift gate)
+    runs-on: ubuntu-latest
+    # The backend vendors a BYTE-IDENTICAL copy of the hub's generated
+    # factory-contracts single source of truth (Factory#160) at
+    # apps/backend/cfactory/_contracts/factory_contracts/__init__.py. This gate
+    # fails if that copy drifts from the hub source at the pinned SHA, so the
+    # status taxonomy + usage shape CFactory consumes can never silently rot away
+    # from upstream. To update: re-vendor from the hub and bump the SHA below
+    # (and _VENDORED_SHA256 in tests/test_factory_contracts_drift.py).
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cfactory
+      - name: Check out hub at the pinned contracts SHA
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: 48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9
+          path: factory-hub
+          # If Factory is private, a token with read access is needed here.
+        continue-on-error: true
+        id: hub
+      - name: Diff vendored module against the pinned hub source
+        if: steps.hub.outcome == 'success'
+        run: |
+          set -e
+          vendored="cfactory/apps/backend/cfactory/_contracts/factory_contracts/__init__.py"
+          hub="factory-hub/shared/factory-contracts/python/factory_contracts/__init__.py"
+          if ! diff -u "$vendored" "$hub"; then
+            echo "DRIFT: vendored factory_contracts diverged from the pinned hub source."
+            echo "Re-vendor from the hub and bump the pinned SHA (here + _contracts/__init__.py + the drift test)."
+            exit 1
+          fi
+          echo "No drift: vendored factory-contracts matches the pinned hub source."
+      - name: Hub unavailable (private repo / no token)
+        if: steps.hub.outcome != 'success'
+        run: echo "Hub checkout unavailable; the in-repo checksum drift test still guards local edits."
+
   frontend-quality:
     name: frontend lint + format + unit tests (blocking)
     runs-on: ubuntu-latest

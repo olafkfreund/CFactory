@@ -27,14 +27,15 @@ Configure in an MCP client:
 
 from __future__ import annotations
 
+import json
 import logging
-import os
-import secrets
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .auth import secret_matches
+from .config import get_settings
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline
@@ -115,11 +116,11 @@ MCP_TOOLS: list[dict[str, Any]] = [
 
 
 def _verify_mcp_token(request: Request) -> None:
-    expected = os.environ.get("CFACTORY_MCP_SECRET", "")
+    expected = get_settings().mcp_secret
     if not expected:
         return  # no secret configured — open (dev mode)
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not token or not secrets.compare_digest(token, expected):
+    if not secret_matches(token, expected):
         raise HTTPException(status_code=401, detail="Invalid MCP token")
 
 
@@ -240,11 +241,9 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         except Exception as exc:
             logger.exception("[cfactory-mcp] tool call failed tool=%s", tool_name)
             return JSONResponse(_error(-32603, f"Internal error: {exc}", rpc_id))
-        import json as _json
-
         return JSONResponse(
             _result(
-                {"content": [{"type": "text", "text": _json.dumps(payload, indent=2)}]},
+                {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]},
                 rpc_id,
             )
         )

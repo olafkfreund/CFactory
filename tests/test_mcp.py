@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from cfactory import mcp
+from cfactory import config, mcp
 from cfactory.app import create_app
 from cfactory.models import CompletionEvent, Service
 
@@ -24,14 +24,21 @@ def seeded_store(store):
     now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
     store.upsert_from_event(
         CompletionEvent(
-            correlation_key="142", service=Service.PFACTORY,
-            task_id="plan-1", status="done", updated_at=now,
+            correlation_key="142",
+            service=Service.PFACTORY,
+            task_id="plan-1",
+            status="done",
+            updated_at=now,
         )
     )
     store.upsert_from_event(
         CompletionEvent(
-            correlation_key="142", service=Service.AIFACTORY,
-            task_id="010-x", status="in_progress", phase="coding", updated_at=now,
+            correlation_key="142",
+            service=Service.AIFACTORY,
+            task_id="010-x",
+            status="in_progress",
+            phase="coding",
+            updated_at=now,
         )
     )
     return store
@@ -42,7 +49,11 @@ def mcp_client(seeded_store, monkeypatch):
     # The MCP handlers call get_store() directly (not via Depends), so point that
     # at the hermetic fixture store.
     monkeypatch.setattr(mcp, "get_store", lambda: seeded_store)
+    # The MCP secret now flows through the typed Settings boundary (#113), so set
+    # the env var AND drop the cached Settings singleton so get_settings() rebuilds
+    # from the patched environment.
     monkeypatch.setenv("CFACTORY_MCP_SECRET", "test-secret")
+    monkeypatch.setattr(config, "_settings", None)
     return TestClient(create_app())
 
 
@@ -51,9 +62,14 @@ AUTH = {"Authorization": "Bearer test-secret"}
 
 def _call(client, name, arguments=None):
     return client.post(
-        "/mcp", headers=AUTH,
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-              "params": {"name": name, "arguments": arguments or {}}},
+        "/mcp",
+        headers=AUTH,
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        },
     )
 
 
@@ -63,16 +79,21 @@ def test_auth_required(mcp_client):
 
 
 def test_initialize_and_tools_list(mcp_client):
-    r = mcp_client.post("/mcp", headers=AUTH,
-                        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+    r = mcp_client.post(
+        "/mcp", headers=AUTH, json={"jsonrpc": "2.0", "id": 1, "method": "initialize"}
+    )
     assert r.json()["result"]["serverInfo"]["name"] == "cfactory"
 
-    r = mcp_client.post("/mcp", headers=AUTH,
-                        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    r = mcp_client.post(
+        "/mcp", headers=AUTH, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+    )
     names = {t["name"] for t in r.json()["result"]["tools"]}
     assert names == {
-        "cfactory_list_workitems", "cfactory_get_workitem", "cfactory_get_timeline",
-        "cfactory_get_rollups", "cfactory_get_anomalies",
+        "cfactory_list_workitems",
+        "cfactory_get_workitem",
+        "cfactory_get_timeline",
+        "cfactory_get_rollups",
+        "cfactory_get_anomalies",
     }
 
 
@@ -107,7 +128,6 @@ def test_get_workitem_missing_key(mcp_client):
 
 
 def test_unknown_method_is_jsonrpc_error(mcp_client):
-    r = mcp_client.post("/mcp", headers=AUTH,
-                        json={"jsonrpc": "2.0", "id": 9, "method": "nope"})
+    r = mcp_client.post("/mcp", headers=AUTH, json={"jsonrpc": "2.0", "id": 9, "method": "nope"})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == -32601

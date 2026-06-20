@@ -281,21 +281,31 @@ def _apply_terminal_or_scalar(prev: dict, event: CompletionEvent) -> dict:
 
 
 def _attach_access_verification(slice_dict: dict, event: CompletionEvent) -> dict:
-    """Carry the honest access (#88) and verification (#76) annotations onto a slice.
+    """Carry the honest access (#88), verification (#76), and routing (#124)
+    annotations onto a slice.
 
     RFC-0007 attaches the credentialed-lane access annotation; RFC-0006 attaches
     the gate-normalized verification block (achieved_level + honest claim) so the
-    cockpit renders the assurance level and never shows VAL-2 as "done". Both land
-    under the slice's ``extra`` map. Returns the slice for chaining.
+    cockpit renders the assurance level and never shows VAL-2 as "done"; RFC-0014
+    attaches the pre-execution cost-aware routing decision (class, cost estimate
+    vs ceiling, per-role models, runtime, budget_mode, autonomy, rationale) so the
+    cockpit shows estimate-vs-actual. All land under the slice's ``extra`` map.
+    Returns the slice for chaining.
     """
     access = getattr(event, "access", None)
     verification = getattr(event, "verification", None)
-    if access or verification:
+    routing = getattr(event, "routing", None)
+    if access or verification or routing:
         extra = dict(slice_dict.get("extra") or {})
         if access:
             extra["access"] = access
         if verification:
             extra["verification"] = verification
+        if routing:
+            # Pydantic model on the event; persist as plain JSON-safe dict.
+            extra["routing"] = (
+                routing.model_dump(mode="json") if hasattr(routing, "model_dump") else routing
+            )
         slice_dict["extra"] = extra
     return slice_dict
 

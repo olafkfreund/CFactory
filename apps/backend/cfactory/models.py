@@ -51,6 +51,39 @@ class BudgetInfo(BaseModel):
     exceeded: bool = False
 
 
+class RoutingInfo(BaseModel):
+    """Pre-execution cost-aware routing decision (RFC-0014 ``execution.routing``).
+
+    Emitted by PFactory on the plan/contract event: the deterministic router's
+    forward-looking pick — the routing ``class`` (``economy``/``standard``/
+    ``premium``/``governed``), the cost ``estimate`` (``cost_estimate_usd``,
+    ``None`` for subscription/local where there is no metered ``$``, mirroring
+    CFactory's billing-mode display), the ``ceiling``, the per-role
+    ``phase_models``, the chosen ``runtime``, the ``budget_mode``
+    (``observe``/``enforce``), the ``autonomy`` verdict + reason (§4b), and the
+    human-readable ``rationale``. Purely informational in the cockpit — CFactory
+    surfaces estimate-vs-actual and the rationale; it never changes a run.
+
+    Every field is optional so a partial routing block (or a legacy event with
+    none) round-trips unchanged; ``extra="ignore"`` keeps unknown wire fields
+    from breaking ingest.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    routing_class: str | None = None
+    cost_estimate_usd: float | None = None
+    cost_ceiling_usd: float | None = None
+    budget_mode: str | None = None
+    runtime: str | None = None
+    policy: str | None = None
+    rationale: str | None = None
+    autonomy: str | None = None
+    autonomy_reason: str | None = None
+    # Per-role model picks: {"planning": "opus", "coding": "sonnet", ...}.
+    phase_models: dict[str, str] = Field(default_factory=dict)
+
+
 class TokenUsage(_SharedUsage):
     """LLM token/cost usage for one stage (RFC-0001 v1.1 additive `usage` block).
 
@@ -183,6 +216,12 @@ class CompletionEvent(BaseModel):
     # {target_level, achieved_level, levels[], claim, _gate}. The cockpit renders
     # achieved_level + the honest claim so a VAL-2 result never looks like "done".
     verification: dict[str, Any] | None = None
+    # RFC-0014 (#124): pre-execution cost-aware routing decision PFactory attaches
+    # to the plan/contract event (routing class, cost estimate vs ceiling,
+    # per-role models, runtime, budget_mode, autonomy verdict, rationale). The
+    # cockpit shows it next to actual rolled-up spend. Optional — absent on every
+    # event that carries no routing block, so legacy events ingest unchanged.
+    routing: RoutingInfo | None = None
 
 
 class ServiceState(BaseModel):

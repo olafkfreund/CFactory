@@ -76,6 +76,24 @@ export const VerificationBlockSchema = z.object({
 });
 export type VerificationBlock = z.infer<typeof VerificationBlockSchema>;
 
+// RFC-0014 (#124): the pre-execution cost-aware routing decision PFactory
+// attaches to the plan/contract event. `cost_estimate_usd` is null for
+// subscription/local runs (no metered $), mirroring the billing-mode display.
+// All fields optional so a partial block (or none) round-trips unchanged.
+export const RoutingInfoSchema = z.object({
+  routing_class: z.string().nullable().optional(),
+  cost_estimate_usd: z.number().nullable().optional(),
+  cost_ceiling_usd: z.number().nullable().optional(),
+  budget_mode: z.string().nullable().optional(),
+  runtime: z.string().nullable().optional(),
+  policy: z.string().nullable().optional(),
+  rationale: z.string().nullable().optional(),
+  autonomy: z.string().nullable().optional(),
+  autonomy_reason: z.string().nullable().optional(),
+  phase_models: z.record(z.string()).optional(),
+});
+export type RoutingInfo = z.infer<typeof RoutingInfoSchema>;
+
 export const ServiceStateSchema = z.object({
   task_id: z.string().nullable(),
   status: z.string().nullable(),
@@ -85,6 +103,7 @@ export const ServiceStateSchema = z.object({
     .object({
       access: AccessAnnotationSchema.optional(),
       verification: VerificationBlockSchema.optional(),
+      routing: RoutingInfoSchema.optional(),
     })
     .passthrough()
     .optional(),
@@ -207,6 +226,43 @@ export async function fetchTokensByWorker(): Promise<TokensByWorker> {
   const resp = await fetch("/api/tokens/by_worker");
   if (!resp.ok) throw new Error(`tokens by_worker error: HTTP ${resp.status}`);
   return TokensByWorkerSchema.parse(await resp.json());
+}
+
+// --- RFC-0014: cost-aware routing — estimate vs actual --------------------
+
+// Actual per-model rolled-up spend (a row of the RFC-0001 usage breakdown).
+export const ActualModelRowSchema = z.object({
+  total_tokens: z.number(),
+  cost_usd: z.number(),
+  workers: z.number(),
+});
+export type ActualModelRow = z.infer<typeof ActualModelRowSchema>;
+
+// Pre-execution estimate joined with actual rolled-up spend for one task.
+// `routing` is null for a legacy task with no routing block; actuals still come
+// through. Metered fields are null for subscription/local runs (no real $).
+export const CostRoutingSchema = z.object({
+  correlation_key: z.string(),
+  routing: RoutingInfoSchema.nullable(),
+  actual_cost_usd: z.number().nullable(),
+  actual_total_tokens: z.number(),
+  actual_by_model: z.record(ActualModelRowSchema),
+  billing: BillingSummarySchema.nullable().optional(),
+  estimate_vs_actual: z.object({
+    estimate_usd: z.number().nullable(),
+    ceiling_usd: z.number().nullable(),
+    actual_usd: z.number().nullable(),
+    variance_usd: z.number().nullable(),
+  }),
+});
+export type CostRouting = z.infer<typeof CostRoutingSchema>;
+
+// Best-effort: the caller swallows failures and renders nothing, so a transient
+// error or a 404 (unknown task) never blanks the task detail.
+export async function fetchCostRouting(correlationKey: string): Promise<CostRouting> {
+  const resp = await fetch(`/api/tasks/${encodeURIComponent(correlationKey)}/cost-routing`);
+  if (!resp.ok) throw new Error(`cost-routing error: HTTP ${resp.status}`);
+  return CostRoutingSchema.parse(await resp.json());
 }
 
 // --- Tier 1.5: per-worker progress heartbeat series ----------------------

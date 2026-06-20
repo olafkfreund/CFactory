@@ -14,13 +14,14 @@ from .adapters import BaseHTTPAdapter
 from .adapters.tfactory import TFactoryAdapter
 from .api_deps import adapters_dep, progress_hub_dep, store_dep
 from .copilot.anomalies import detect_anomalies
-from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import (
+    cost_routing,
     summarize_timeline,
     token_by_worker,
     token_totals,
     worker_progress,
 )
+from .copilot.tools import rollups as compute_rollups
 from .progress import LiveProgressHub
 from .store import WorkItemStore, compute_liveness
 from .task_process import build_process_detail
@@ -82,6 +83,25 @@ def get_worker_progress(
     task or one with no progress yet — the frontend falls back to the
     stepwise worker-completion series, so existing cards are unaffected."""
     return worker_progress(store, correlation_key)
+
+
+@router.get("/api/tasks/{correlation_key}/cost-routing")
+def get_cost_routing(
+    correlation_key: str,
+    store: Annotated[WorkItemStore, Depends(store_dep)],
+) -> dict[str, object]:
+    """Pre-execution routing estimate vs actual rolled-up spend (RFC-0014 #124).
+
+    Joins PFactory's ``execution.routing`` decision (class, cost estimate vs
+    ceiling, per-role models, runtime, budget_mode, autonomy, rationale) with the
+    actual RFC-0001 usage CFactory already rolls up (per-model cost + the
+    billing-mode summary, real ``$`` only for metered work). ``404`` for an
+    unknown work item; the ``routing`` field is ``null`` when no routing block was
+    emitted (legacy task) but actual spend is still returned."""
+    result = cost_routing(store, correlation_key)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"no work item for {correlation_key!r}")
+    return result
 
 
 @router.get("/api/progress")

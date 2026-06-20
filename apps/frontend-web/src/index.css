@@ -747,6 +747,35 @@ body {
 .td-stage-val--high { color: var(--green, #2e8b57); }
 .td-stage-val--capped { color: var(--warn, #d9822b); }
 .td-section h3 { font: 700 0.74rem var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 0.5rem; color: var(--muted); }
+/* RFC-0014 #124: cost & routing panel — estimate vs actual + per-role models. */
+.crp-badges { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.55rem; }
+.crp-badge { font: 600 0.66rem var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; padding: 0.12rem 0.45rem; border-radius: 0.4rem; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); }
+.crp-badge--muted { color: var(--faint); }
+.crp-badge--class-economy { color: var(--green); border-color: var(--green); }
+.crp-badge--class-standard { color: var(--cyan); border-color: var(--cyan); }
+.crp-badge--class-premium { color: var(--code); border-color: var(--code); }
+.crp-badge--class-governed { color: var(--red, #fb4934); border-color: var(--red, #fb4934); }
+.crp-badge--autonomy-autonomous { color: var(--green); border-color: var(--green); }
+.crp-badge--autonomy-review { color: var(--code); border-color: var(--code); }
+.crp-badge--autonomy-approval { color: var(--red, #fb4934); border-color: var(--red, #fb4934); }
+.crp-badge--budget-enforce { color: var(--code); border-color: var(--code); }
+.crp-eva { display: flex; flex-wrap: wrap; gap: 1.1rem; margin-bottom: 0.5rem; }
+.crp-eva-cell { display: flex; flex-direction: column; gap: 0.1rem; }
+.crp-eva-label { font: 0.62rem var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+.crp-eva-val { font: 700 0.95rem var(--font-mono); color: var(--fg, #ebdbb2); }
+.crp-eva-val--actual { color: var(--code); }
+.crp-variance--over { color: var(--red, #fb4934); }
+.crp-variance--under { color: var(--green); }
+.crp-note { font-size: 0.72rem; color: var(--faint); margin-bottom: 0.45rem; }
+.crp-roles { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
+.crp-role { display: flex; gap: 0.35rem; align-items: baseline; font-size: 0.72rem; background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 0.35rem; padding: 0.1rem 0.45rem; }
+.crp-role-name { color: var(--faint); font-family: var(--font-mono); text-transform: uppercase; font-size: 0.62rem; letter-spacing: 0.04em; }
+.crp-role-model { color: var(--cyan); font-weight: 600; }
+.crp-models { width: 100%; border-collapse: collapse; font-size: 0.74rem; margin-bottom: 0.5rem; }
+.crp-models th { text-align: left; font: 600 0.62rem var(--font-mono); text-transform: uppercase; letter-spacing: 0.05em; color: var(--faint); padding: 0.15rem 0.4rem; border-bottom: 1px solid var(--border-soft); }
+.crp-models td { padding: 0.15rem 0.4rem; border-bottom: 1px solid var(--border-soft); font-family: var(--font-mono); color: var(--muted); }
+.crp-models td:first-child { color: var(--fg, #ebdbb2); }
+.crp-rationale { font-size: 0.73rem; color: var(--muted); line-height: 1.45; margin: 0.2rem 0 0; }
 .td-proc-meta { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.78rem; margin-bottom: 0.5rem; }
 /* Test-evidence gallery (screenshots + recordings proxied from TFactory). */
 .td-evidence-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.6rem; margin: 0.3rem 0 0.8rem; }

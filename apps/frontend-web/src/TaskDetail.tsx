@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
+  type CostRouting,
   evidenceMediaUrl,
+  fetchCostRouting,
   fetchLiveAgents,
   fetchProcess,
   fetchTokens,
@@ -16,6 +18,7 @@ import {
 } from "./api";
 import { AgentTerminal } from "./LiveAgents";
 import TaskActions from "./TaskActions";
+import CostRoutingPanel from "./CostRoutingPanel";
 import LiveTaskStamp from "./LiveTaskStamp";
 import { StageFlow } from "./TaskFlow";
 import { displayTitle, keySlug } from "./correlationKey";
@@ -103,6 +106,10 @@ export default function TaskDetail({
   // Whether this task has real metered (api/cloud) spend — drives the stamp's
   // cost vs tokens+time display (#96). undefined until the first tokens fetch.
   const [metered, setMetered] = useState<boolean | undefined>(undefined);
+  // RFC-0014 (#124): pre-execution routing estimate vs actual rolled-up spend.
+  // Best-effort + additive: a 404 (unknown task) or error leaves it null and the
+  // Cost & routing panel simply doesn't render.
+  const [costRouting, setCostRouting] = useState<CostRouting | null>(null);
   const [copied, setCopied] = useState(false);
   const key = wi.correlation_key;
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -140,6 +147,13 @@ export default function TaskDetail({
           if (!alive) return;
           const row = r.by_work_item.find((w) => w.correlation_key === key);
           setMetered(row?.billing?.has_metered);
+        })
+        .catch(() => undefined);
+      // RFC-0014 (#124): estimate-vs-actual + routing rationale for this task.
+      // Best-effort; a 404/error keeps the last-good value and never blanks.
+      fetchCostRouting(key)
+        .then((cr) => {
+          if (alive) setCostRouting(cr);
         })
         .catch(() => undefined);
     };
@@ -303,6 +317,11 @@ export default function TaskDetail({
           {/* Live cost/usage stamp — renders nothing without worker data. With a
               Tier-1.5 heartbeat series it ticks smoothly; else stepwise. */}
           <LiveTaskStamp wi={wi} workers={workers ?? undefined} progress={progress ?? undefined} metered={metered} />
+
+          {/* RFC-0014 (#124): pre-execution cost-aware routing — estimate vs
+              actual spend, per-role/model cost, routing class + rationale,
+              autonomy verdict + budget mode. Renders nothing without data. */}
+          <CostRoutingPanel data={costRouting ?? undefined} />
 
           {/* Live execution diagram — animated DAG with a plan/code/test stage
               switcher; defaults to the furthest stage (#94). */}

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CostRoutingSchema,
   FeedMessageSchema,
   HealthSchema,
+  ServiceStateSchema,
   ServiceStatusSchema,
   TokenTotalsSchema,
   WorkItemSchema,
@@ -117,6 +119,87 @@ describe("TokenTotalsSchema", () => {
     });
     expect(parsed.total.total_tokens).toBe(3);
     expect(parsed.by_work_item[0].correlation_key).toBe("k");
+  });
+});
+
+describe("CostRoutingSchema (RFC-0014 #124)", () => {
+  it("parses the estimate-vs-actual + routing payload", () => {
+    const parsed = CostRoutingSchema.parse({
+      correlation_key: "42",
+      routing: {
+        routing_class: "standard",
+        cost_estimate_usd: 2.1,
+        cost_ceiling_usd: 5.0,
+        budget_mode: "observe",
+        runtime: "claude",
+        autonomy: "review",
+        autonomy_reason: "difficulty medium",
+        rationale: "tier=medium floor=sonnet",
+        phase_models: { planning: "opus", coding: "sonnet" },
+      },
+      actual_cost_usd: 2.4,
+      actual_total_tokens: 120000,
+      actual_by_model: { sonnet: { total_tokens: 120000, cost_usd: 2.4, workers: 1 } },
+      estimate_vs_actual: {
+        estimate_usd: 2.1,
+        ceiling_usd: 5.0,
+        actual_usd: 2.4,
+        variance_usd: 0.3,
+      },
+    });
+    expect(parsed.routing?.routing_class).toBe("standard");
+    expect(parsed.routing?.phase_models?.planning).toBe("opus");
+    expect(parsed.estimate_vs_actual.variance_usd).toBe(0.3);
+    expect(parsed.actual_by_model.sonnet.cost_usd).toBe(2.4);
+  });
+
+  it("tolerates a legacy task: null routing + null metered estimate", () => {
+    const parsed = CostRoutingSchema.parse({
+      correlation_key: "99",
+      routing: null,
+      actual_cost_usd: null,
+      actual_total_tokens: 50000,
+      actual_by_model: {},
+      estimate_vs_actual: {
+        estimate_usd: null,
+        ceiling_usd: null,
+        actual_usd: null,
+        variance_usd: null,
+      },
+    });
+    expect(parsed.routing).toBeNull();
+    expect(parsed.estimate_vs_actual.estimate_usd).toBeNull();
+    expect(parsed.actual_total_tokens).toBe(50000);
+  });
+
+  it("rejects a payload missing the estimate_vs_actual block", () => {
+    expect(() =>
+      CostRoutingSchema.parse({
+        correlation_key: "x",
+        routing: null,
+        actual_cost_usd: null,
+        actual_total_tokens: 0,
+        actual_by_model: {},
+      }),
+    ).toThrow();
+  });
+});
+
+describe("ServiceStateSchema routing in extra (RFC-0014 #124)", () => {
+  it("parses a plan slice carrying a routing block under extra", () => {
+    const parsed = ServiceStateSchema.parse({
+      task_id: "p-1",
+      status: "planned",
+      phase: "plan",
+      extra: { routing: { routing_class: "governed", autonomy: "approval" } },
+    });
+    expect(parsed.extra?.routing?.routing_class).toBe("governed");
+    expect(parsed.extra?.routing?.autonomy).toBe("approval");
+  });
+
+  it("leaves extra absent when no routing block is present", () => {
+    const parsed = ServiceStateSchema.parse({ task_id: null, status: null, phase: null });
+    expect(parsed.extra).toBeUndefined();
   });
 });
 

@@ -321,6 +321,81 @@ def worker_progress(store: WorkItemStore, correlation_key: str) -> dict:
     return {"correlation_key": correlation_key, "series": series, "workers": raw}
 
 
+def _routing_block(wi) -> dict | None:
+    """The pre-execution routing decision attached to a work item (RFC-0014 #124).
+
+    PFactory emits ``execution.routing`` on its plan/contract event, which the
+    store lands under the plan slice's ``extra``; a verifier or coder could in
+    principle re-attach it on a later slice, so we prefer the plan slice but fall
+    back to code/test. ``None`` when no slice carries a routing block (legacy /
+    pre-RFC-0014 work item)."""
+    for svc in ("pfactory", "aifactory", "tfactory"):
+        extra = getattr(getattr(wi, svc), "extra", None) or {}
+        routing = extra.get("routing")
+        if routing:
+            return routing
+    return None
+
+
+def cost_routing(store: WorkItemStore, correlation_key: str) -> dict | None:
+    """Pre-execution routing estimate vs actual rolled-up spend for one task
+    (RFC-0014 #124).
+
+    Joins the routing decision PFactory emitted (``routing`` block: class,
+    ``cost_estimate_usd`` vs ``cost_ceiling_usd``, per-role ``phase_models``,
+    ``runtime``, ``budget_mode``, ``autonomy`` verdict, ``rationale``) with the
+    ACTUAL spend CFactory already rolls up (RFC-0001 usage): the per-task billing
+    summary (reused — real ``$`` only for metered work) and a per-model cost
+    breakdown from the ``by_model`` rollup, so the cockpit shows estimate-vs-actual
+    side by side. ``None`` for an unknown work item; the ``routing`` field is
+    ``None`` when no routing block was emitted, but actuals are still returned so
+    the panel can show spend even pre-RFC-0014."""
+    wi = store.get(correlation_key)
+    if wi is None:
+        return None
+
+    # Actual per-model cost across every service slice (real rolled-up spend).
+    by_model: dict[str, dict] = {}
+    for svc in ("pfactory", "aifactory", "tfactory"):
+        _merge_rollup(by_model, getattr(wi, svc).by_model)
+    actual_by_model = {
+        model: {
+            "total_tokens": int(b.get("total_tokens", 0) or 0),
+            "cost_usd": round(float(b.get("cost_usd", 0.0) or 0.0), 6),
+            "workers": int(b.get("workers", 0) or 0),
+        }
+        for model, b in by_model.items()
+    }
+
+    billing = _billing_summary(wi)
+    # Actual metered spend (real dollars) — reuse the billing-mode display rule.
+    actual_cost = billing["metered_cost_usd"] if billing else None
+    routing = _routing_block(wi)
+    estimate = routing.get("cost_estimate_usd") if routing else None
+    # Variance only when both an estimate AND a real metered actual exist; for
+    # subscription/local runs the estimate is None, so there is nothing to compare.
+    variance = (
+        round(actual_cost - estimate, 6)
+        if (estimate is not None and actual_cost is not None and billing and billing["has_metered"])
+        else None
+    )
+
+    return {
+        "correlation_key": correlation_key,
+        "routing": routing,
+        "actual_cost_usd": actual_cost,
+        "actual_total_tokens": sum(b["total_tokens"] for b in actual_by_model.values()),
+        "actual_by_model": actual_by_model,
+        "billing": billing,
+        "estimate_vs_actual": {
+            "estimate_usd": estimate,
+            "ceiling_usd": routing.get("cost_ceiling_usd") if routing else None,
+            "actual_usd": actual_cost,
+            "variance_usd": variance,
+        },
+    }
+
+
 def rollups_summary_line(store: WorkItemStore) -> str:
     """One-line rollups summary for the copilot context."""
     r = rollups(store)

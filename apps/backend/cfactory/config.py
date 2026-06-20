@@ -98,9 +98,7 @@ class Settings(BaseSettings):
     # well as the CFACTORY_-prefixed forms.
     ollama_cloud_base_url: str = Field(
         default="https://ollama.com/v1",
-        validation_alias=AliasChoices(
-            "CFACTORY_OLLAMA_CLOUD_BASE_URL", "OLLAMA_CLOUD_BASE_URL"
-        ),
+        validation_alias=AliasChoices("CFACTORY_OLLAMA_CLOUD_BASE_URL", "OLLAMA_CLOUD_BASE_URL"),
     )
     ollama_api_key: str | None = Field(
         default=None,
@@ -137,6 +135,7 @@ class Settings(BaseSettings):
 
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""
+
         def to_ws(url: str) -> str:
             ws = url.replace("https://", "wss://").replace("http://", "ws://")
             return ws.rstrip("/") + "/api/ws"
@@ -260,9 +259,7 @@ def load_copilot_overrides(settings: Settings | None = None) -> Settings:
     return settings
 
 
-def set_copilot_settings(
-    provider: str, model: str, settings: Settings | None = None
-) -> None:
+def set_copilot_settings(provider: str, model: str, settings: Settings | None = None) -> None:
     """Update the copilot provider + model at runtime and persist them. Raises
     ``ValueError`` on an unknown provider or empty model. The API key is not
     touched here — it is supplied via the environment/secret only."""

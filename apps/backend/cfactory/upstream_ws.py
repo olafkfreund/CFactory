@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import websockets
@@ -34,8 +34,16 @@ def parse_upstream_message(service: Service, raw: str | bytes) -> CompletionEven
     if not isinstance(data, dict):
         return None
 
-    key = first(data, "correlation_key", "github_issue", "githubIssueNumber",
-                "issue_number", "metadata.githubIssueNumber", "task_id", "id")
+    key = first(
+        data,
+        "correlation_key",
+        "github_issue",
+        "githubIssueNumber",
+        "issue_number",
+        "metadata.githubIssueNumber",
+        "task_id",
+        "id",
+    )
     task_id = first(data, "task_id", "id", "spec_id", "session_id")
     status = first(data, "status", "board_state")
     if key is None or task_id is None or status is None:
@@ -43,9 +51,9 @@ def parse_upstream_message(service: Service, raw: str | bytes) -> CompletionEven
 
     raw_ts = first(data, "updated_at")
     try:
-        ts = datetime.fromisoformat(raw_ts) if isinstance(raw_ts, str) else datetime.now(timezone.utc)
+        ts = datetime.fromisoformat(raw_ts) if isinstance(raw_ts, str) else datetime.now(UTC)
     except ValueError:
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
 
     return CompletionEvent(
         correlation_key=str(key),
@@ -111,7 +119,9 @@ async def subscribe(
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — keep retrying a flaky/down upstream
-            log.debug("subscription to %s failed (%s); retrying in %ss", service.value, exc, retry_delay)
+            log.debug(
+                "subscription to %s failed (%s); retrying in %ss", service.value, exc, retry_delay
+            )
             await asyncio.sleep(retry_delay)
 
 

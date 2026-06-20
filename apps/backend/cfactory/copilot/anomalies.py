@@ -9,14 +9,23 @@ data yet (see #14). Pure functions; ``now`` is injectable for hermetic tests.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..models import Service, WorkItem
 from ..store import WorkItemStore
 
 _FAILURE_HINTS = ("fail", "reject", "block", "error", "stuck")
-_TERMINAL_OK = {"done", "merged", "triaged", "emitted", "completed", "accept",
-                "accepted", "passed", "approved"}
+_TERMINAL_OK = {
+    "done",
+    "merged",
+    "triaged",
+    "emitted",
+    "completed",
+    "accept",
+    "accepted",
+    "passed",
+    "approved",
+}
 
 # A stage with no new event for this long (and not terminal) is "stuck".
 _DEFAULT_STALE_SECONDS = 86_400  # 24h
@@ -24,8 +33,8 @@ _DEFAULT_STALE_SECONDS = 86_400  # 24h
 
 @dataclass
 class Anomaly:
-    kind: str            # failure | handback_loop | stuck
-    severity: str        # high | medium
+    kind: str  # failure | handback_loop | stuck
+    severity: str  # high | medium
     correlation_key: str
     title: str | None
     detail: str
@@ -45,8 +54,15 @@ def _detect_for_item(wi: WorkItem, now: datetime, stale_seconds: int) -> list[An
     # 1. Failure / gate rejection on any stage slice.
     for stage, s in (("plan", wi.pfactory), ("code", wi.aifactory), ("test", wi.tfactory)):
         if _is_failure(s.status):
-            found.append(Anomaly("failure", "high", wi.correlation_key, wi.title,
-                                  f"{stage} stage status={s.status!r}"))
+            found.append(
+                Anomaly(
+                    "failure",
+                    "high",
+                    wi.correlation_key,
+                    wi.title,
+                    f"{stage} stage status={s.status!r}",
+                )
+            )
 
     # 2. Handback loop — a failing test event followed by a return to code.
     # Counts test→code bounces. (RFC-0001 idempotency dedups identical events,
@@ -58,11 +74,18 @@ def _detect_for_item(wi: WorkItem, now: datetime, stale_seconds: int) -> list[An
         for i, e in enumerate(tl)
         if e.service is Service.TFACTORY
         and _is_failure(e.status)
-        and any(later.service is Service.AIFACTORY for later in tl[i + 1:])
+        and any(later.service is Service.AIFACTORY for later in tl[i + 1 :])
     )
     if handbacks:
-        found.append(Anomaly("handback_loop", "high", wi.correlation_key, wi.title,
-                             f"{handbacks} test-failure→code handback(s) — code↔test bouncing"))
+        found.append(
+            Anomaly(
+                "handback_loop",
+                "high",
+                wi.correlation_key,
+                wi.title,
+                f"{handbacks} test-failure→code handback(s) — code↔test bouncing",
+            )
+        )
 
     # 3. Stuck / stale — last event old and not in a terminal-OK state.
     if wi.timeline:
@@ -70,8 +93,15 @@ def _detect_for_item(wi: WorkItem, now: datetime, stale_seconds: int) -> list[An
         age = (now - last.updated_at).total_seconds()
         if age > stale_seconds and not _is_terminal_ok(last.status):
             hours = int(age // 3600)
-            found.append(Anomaly("stuck", "medium", wi.correlation_key, wi.title,
-                                 f"no progress for ~{hours}h (last: {last.service.value}={last.status})"))
+            found.append(
+                Anomaly(
+                    "stuck",
+                    "medium",
+                    wi.correlation_key,
+                    wi.title,
+                    f"no progress for ~{hours}h (last: {last.service.value}={last.status})",
+                )
+            )
     return found
 
 
@@ -81,7 +111,7 @@ def detect_anomalies(
     now: datetime | None = None,
     stale_seconds: int = _DEFAULT_STALE_SECONDS,
 ) -> list[dict]:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     out: list[Anomaly] = []
     for wi in store.list():
         out.extend(_detect_for_item(wi, now, stale_seconds))

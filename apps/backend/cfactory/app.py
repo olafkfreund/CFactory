@@ -10,28 +10,15 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from starlette.concurrency import run_in_threadpool
-
 from pydantic import BaseModel
-
-import httpx
+from starlette.concurrency import run_in_threadpool
 
 from . import __version__
 from .actions import PreparedAction, execute_action, propose
-from .audit import AuditStore, get_audit_store
-from .auth import (
-    READ,
-    KeyStore,
-    authorize_headers,
-    get_keystore,
-    keystore_dep,
-    require_scope,
-)
-from .connect import build_redirect, validate_redirect
-from .enterprise import identity_dep
 from .adapters import (
     AdapterError,
     AIFactoryAdapter,
@@ -41,6 +28,15 @@ from .adapters import (
     hydrate,
 )
 from .adapters.tfactory import TFactoryAdapter
+from .audit import AuditStore, get_audit_store
+from .auth import (
+    READ,
+    KeyStore,
+    authorize_headers,
+    get_keystore,
+    keystore_dep,
+    require_scope,
+)
 from .config import (
     COPILOT_PROVIDERS,
     check_audit_secret,
@@ -50,6 +46,7 @@ from .config import (
     set_copilot_settings,
     set_service_url,
 )
+from .connect import build_redirect, validate_redirect
 from .copilot import Copilot, get_copilot, provider_status, reset_copilot
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
@@ -59,12 +56,13 @@ from .copilot.tools import (
     token_totals,
     worker_progress,
 )
-from .live_agents import LiveAgentsResult, discover_live_agents
+from .enterprise import identity_dep
 from .live_agent_proxy import ConnectFn, proxy_agent_console
-from .task_process import build_process_detail
+from .live_agents import LiveAgentsResult, discover_live_agents
 from .models import CompletionEvent, Service
 from .progress import LiveProgressHub, get_progress_hub, start_progress, stop_progress
 from .store import WorkItemStore, compute_liveness, get_store
+from .task_process import build_process_detail
 from .upstream_ws import start_subscribers
 from .ws import get_manager
 
@@ -157,14 +155,20 @@ def _fetch_provider_auth(
             data = resp.json()
     except httpx.HTTPError as exc:
         return {
-            "reachable": False, "reported": False, "any_configured": False,
-            "providers": [], "error": str(exc),
+            "reachable": False,
+            "reported": False,
+            "any_configured": False,
+            "providers": [],
+            "error": str(exc),
         }
     pa = data.get("provider_auth") if isinstance(data, dict) else None
     if not isinstance(pa, dict):
         return {
-            "reachable": True, "reported": False, "any_configured": False,
-            "providers": [], "error": None,
+            "reachable": True,
+            "reported": False,
+            "any_configured": False,
+            "providers": [],
+            "error": None,
         }
     return {
         "reachable": True,
@@ -305,9 +309,7 @@ def create_app() -> FastAPI:
         RFC-documented ``/api/events/completion`` resolve here."""
         work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
         if applied:
-            await manager.broadcast(
-                {"type": "workitem", "item": work_item.model_dump(mode="json")}
-            )
+            await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
         return {
             "status": "accepted" if applied else "duplicate",
             "correlation_key": event.correlation_key,
@@ -595,9 +597,7 @@ def create_app() -> FastAPI:
         subtask, subtask list) from its REST detail endpoint. Best-effort:
         ``available: false`` when there's no task or the service is unreachable."""
         try:
-            return await run_in_threadpool(
-                build_process_detail, store, adapters, correlation_key
-            )
+            return await run_in_threadpool(build_process_detail, store, adapters, correlation_key)
         finally:
             for adapter in adapters:
                 adapter.close()
@@ -649,13 +649,13 @@ def create_app() -> FastAPI:
         Advise-only: this never touches an upstream service. 400 for an unknown
         kind; 404 if there's no work item for the correlation key."""
         try:
-            action = await run_in_threadpool(propose, store, req.kind, req.correlation_key, req.note)
+            action = await run_in_threadpool(
+                propose, store, req.kind, req.correlation_key, req.note
+            )
         except KeyError:
             raise HTTPException(status_code=400, detail=f"unknown action kind: {req.kind!r}")
         if action is None:
-            raise HTTPException(
-                status_code=404, detail=f"no work item for {req.correlation_key!r}"
-            )
+            raise HTTPException(status_code=404, detail=f"no work item for {req.correlation_key!r}")
         return action
 
     @app.post("/api/actions/execute")
@@ -727,7 +727,9 @@ def create_app() -> FastAPI:
         return {"count": len(events), "activity": events[: max(0, limit)]}
 
     @app.post("/api/copilot/ask")
-    async def copilot_ask(req: AskRequest, copilot: Copilot = Depends(copilot_dep)) -> dict[str, object]:
+    async def copilot_ask(
+        req: AskRequest, copilot: Copilot = Depends(copilot_dep)
+    ) -> dict[str, object]:
         result = await run_in_threadpool(copilot.ask, req.question)
         return {"answer": result.answer, "work_items_considered": result.work_items_considered}
 
@@ -831,9 +833,7 @@ def create_app() -> FastAPI:
             return True
 
     @app.websocket("/api/ws")
-    async def cockpit_feed(
-        websocket: WebSocket, store: WorkItemStore = Depends(store_dep)
-    ) -> None:
+    async def cockpit_feed(websocket: WebSocket, store: WorkItemStore = Depends(store_dep)) -> None:
         if await _reject_unauthorized_ws(websocket):
             return
         await manager.connect(websocket)

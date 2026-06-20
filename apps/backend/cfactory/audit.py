@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
 from sqlalchemy import Boolean, DateTime, Integer, String, select
@@ -32,7 +32,7 @@ from .db import Base, make_engine
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # Field order is part of the on-disk contract: the canonical string fed to the
@@ -59,7 +59,7 @@ def _canonical_ts(value: datetime) -> str:
     whether the value came from memory or a round-trip through the DB.
     """
     if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        value = value.astimezone(UTC).replace(tzinfo=None)
     return value.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
@@ -201,9 +201,7 @@ class AuditStore:
     def list(self, limit: int = 100) -> list[AuditEntryModel]:
         """Return the most recent entries, newest first."""
         with self._session() as session:
-            rows = session.scalars(
-                select(AuditEntry).order_by(AuditEntry.id.desc()).limit(limit)
-            )
+            rows = session.scalars(select(AuditEntry).order_by(AuditEntry.id.desc()).limit(limit))
             return [r.to_model() for r in rows]
 
     def verify(self) -> list[int]:
@@ -219,9 +217,7 @@ class AuditStore:
         with self._session() as session:
             rows = session.scalars(select(AuditEntry).order_by(AuditEntry.id.asc()))
             for row in rows:
-                recomputed = compute_entry_hash(
-                    self._secret, row._hashed_values(), row.prev_hash
-                )
+                recomputed = compute_entry_hash(self._secret, row._hashed_values(), row.prev_hash)
                 if row.prev_hash != expected_prev or row.entry_hash != recomputed:
                     breaks.append(row.id)
                 expected_prev = row.entry_hash
@@ -240,9 +236,7 @@ def get_audit_store(settings: Settings | None = None) -> AuditStore:
     global _audit_store
     if _audit_store is None:
         settings = settings or get_settings()
-        _audit_store = AuditStore(
-            settings.database_url, hmac_secret=settings.audit_hmac_secret
-        )
+        _audit_store = AuditStore(settings.database_url, hmac_secret=settings.audit_hmac_secret)
     return _audit_store
 
 

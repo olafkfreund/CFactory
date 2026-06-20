@@ -21,7 +21,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Awaitable, Callable
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import quote
 
 import websockets
@@ -35,7 +36,7 @@ from .config import Settings
 log = logging.getLogger("cfactory.live_agent_proxy")
 
 # WebSocket close codes (4000-4999 are application-defined).
-WS_NO_AGENT = 4404      # no live agent for this correlation key
+WS_NO_AGENT = 4404  # no live agent for this correlation key
 WS_UPSTREAM_DOWN = 1011  # upstream console unreachable / errored
 
 # Injectable so tests can supply a fake upstream instead of a real socket.

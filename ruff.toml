@@ -1,0 +1,66 @@
+# CFactory Python lint config.
+#
+# VENDORED, PINNED COPY of the Factory fleet shared baseline:
+#   Factory/standards/ruff.toml @ 93c3bb49ed5f3f3d3d46aae5f8a13ff601550702
+# See Factory/standards/coding-standards.md (section 1) for the normative rules.
+#
+# Tighten-only: per the standard, this service config may ADD rules or LOWER
+# numeric caps, but may not remove a selected category, raise a cap, or disable a
+# gate. A drift gate diffs this copy against the hub at the pinned SHA. To update
+# the baseline, re-vendor from the hub and bump the SHA above.
+#
+# Adoption is a ratchet (coding-standards.md section 4.6): the blocking CI gate
+# runs ruff + mypy on the PR's CHANGED Python files only. The legacy hotspot
+# count (127 violations at adoption) means a whole-repo strict gate would be
+# instantly red, so it is intentionally NOT blocking yet. Legacy files are fixed
+# on touch. Tracks issues #112, #116.
+
+target-version = "py311"
+line-length = 100
+
+[lint]
+# Explicit, reviewable select set (standards section 1.1). Do not replace with a
+# bare default and do not blanket-ignore categories.
+select = [
+    "E", "F", "W",      # pycodestyle + pyflakes
+    "I",                # isort
+    "N",                # pep8-naming
+    "UP",               # pyupgrade
+    "B",                # flake8-bugbear
+    "C4",               # comprehensions
+    "S",                # flake8-bandit (security sinks, section 1.4)
+    "SIM",              # flake8-simplify
+    "RUF",              # ruff-specific
+    "PTH",              # use pathlib (section 1.9)
+    "TID",              # tidy imports
+    "ASYNC",            # async correctness
+    "A",                # shadowing builtins
+    "DTZ",              # tz-aware datetimes (section 1.9)
+    "T20",              # no print() in service code (section 1.9)
+    "ARG",              # unused arguments (section 1.10)
+    "ERA",              # no commented-out code (section 1.10)
+    "BLE",              # no blind except (section 1.6)
+    "PGH",              # no blanket noqa / type: ignore (section 1.3)
+    "PL",               # pylint subset, curated below
+]
+
+# Curated complexity caps (standards section 1.8). These are the program defaults;
+# services may lower the numbers, never raise them.
+[lint.pylint]
+max-args = 5
+max-branches = 12
+max-statements = 50
+
+[lint.mccabe]
+max-complexity = 10
+
+[lint.per-file-ignores]
+# Tests may use assert and need not be import-tidy; they still get the security
+# and dead-code rules.
+"**/test_*.py" = ["S101", "PLR2004"]
+"**/*_test.py" = ["S101", "PLR2004"]
+"**/tests/**" = ["S101", "PLR2004"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

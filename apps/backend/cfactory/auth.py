@@ -103,9 +103,7 @@ class KeyStore:
                 headers={"WWW-Authenticate": "Bearer"},
             )
         if scope not in scopes:
-            raise HTTPException(
-                status_code=403, detail=f"API key lacks required scope: {scope!r}"
-            )
+            raise HTTPException(status_code=403, detail=f"API key lacks required scope: {scope!r}")
 
 
 _keystore: KeyStore | None = None

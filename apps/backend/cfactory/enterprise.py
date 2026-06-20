@@ -117,9 +117,7 @@ def identity_from_keystore(keystore: KeyStore, request: Request) -> str:
     """
     if not keystore.configured:
         return LOCAL_IDENTITY
-    key = _extract_key(
-        request.headers.get("authorization"), request.headers.get("x-api-key")
-    )
+    key = _extract_key(request.headers.get("authorization"), request.headers.get("x-api-key"))
     if key is not None and keystore.scopes_for(key) is not None:
         return key
     return LOCAL_IDENTITY

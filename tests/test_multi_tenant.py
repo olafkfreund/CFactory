@@ -15,8 +15,8 @@ from __future__ import annotations
 from fastapi import Request
 from fastapi.testclient import TestClient
 
-import cfactory.app as app_module
 import cfactory.enterprise as enterprise
+import cfactory.routes_health as health_router
 from cfactory.app import create_app, store_dep
 from cfactory.config import Settings
 from cfactory.enterprise import DEFAULT_TENANT, tenant_id_for
@@ -34,7 +34,9 @@ def _patch_multi_tenant(monkeypatch, value: bool) -> Settings:
     """Force the multi_tenant flag everywhere it's read, without real env."""
     settings = Settings(multi_tenant=value)
     monkeypatch.setattr(enterprise, "get_settings", lambda: settings)
-    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    # The /health endpoint lives in the health router and reads get_settings from
+    # its own namespace; patch it there so the flag is forced where it's read.
+    monkeypatch.setattr(health_router, "get_settings", lambda: settings)
     return settings
 
 

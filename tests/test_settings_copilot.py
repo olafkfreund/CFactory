@@ -55,10 +55,10 @@ def test_set_copilot_settings_rejects_empty_model(tmp_path):
 
 def _stub_provider_status(monkeypatch):
     """Keep the endpoint tests hermetic — no network probe of ollama.com."""
-    import cfactory.app as appmod
+    import cfactory.routes_copilot as copilot_router
 
     monkeypatch.setattr(
-        appmod,
+        copilot_router,
         "provider_status",
         lambda settings: {
             "provider": settings.copilot_provider,

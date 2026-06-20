@@ -62,12 +62,29 @@ def _build_code_graph(raw_subs: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 _FAIL_WORDS = ("fail", "reject", "error", "abort", "cancel", "block", "discard")
 _ACTIVE_WORDS = (
-    "progress", "running", "review", "triag", "generat", "coding",
-    "planning", "executing", "await", "building", "queued", "backlog",
+    "progress",
+    "running",
+    "review",
+    "triag",
+    "generat",
+    "coding",
+    "planning",
+    "executing",
+    "await",
+    "building",
+    "queued",
+    "backlog",
 )
 _DONE_WORDS = (
-    "done", "complete", "passed", "merged", "approved", "emitted",
-    "success", "closed", "shipped",
+    "done",
+    "complete",
+    "passed",
+    "merged",
+    "approved",
+    "emitted",
+    "success",
+    "closed",
+    "shipped",
 )
 
 
@@ -78,7 +95,11 @@ def _plan_child_state(wi: Any) -> tuple[str | None, str | None, str | None]:
     child has actually reached: failed if any stage failed, in_progress if any is
     engaged, completed once a stage reports terminal success (#94). Timing spans
     the child's first → last completion event so the plan node gets a live clock."""
-    states = [getattr(wi, "pfactory", None), getattr(wi, "aifactory", None), getattr(wi, "tfactory", None)]
+    states = [
+        getattr(wi, "pfactory", None),
+        getattr(wi, "aifactory", None),
+        getattr(wi, "tfactory", None),
+    ]
     statuses = [s.status.lower() for s in states if s and getattr(s, "status", None)]
 
     status: str | None = None
@@ -93,7 +114,9 @@ def _plan_child_state(wi: Any) -> tuple[str | None, str | None, str | None]:
 
     started_at = completed_at = None
     times = sorted(
-        e.updated_at for e in (getattr(wi, "timeline", None) or []) if getattr(e, "updated_at", None)
+        e.updated_at
+        for e in (getattr(wi, "timeline", None) or [])
+        if getattr(e, "updated_at", None)
     )
     if times:
         started_at = times[0].isoformat()
@@ -102,7 +125,9 @@ def _plan_child_state(wi: Any) -> tuple[str | None, str | None, str | None]:
     return status, started_at, completed_at
 
 
-def _build_plan_graph(session: dict[str, Any], store: WorkItemStore | None = None) -> dict[str, Any] | None:
+def _build_plan_graph(
+    session: dict[str, Any], store: WorkItemStore | None = None
+) -> dict[str, Any] | None:
     """Turn a PFactory plan session's decomposed ``epic.children`` into the
     plan-stage diagram graph (#94): one node per child, ``depends_on`` → edges,
     ``kind`` (feature/testing/cicd/infra/docs) as the accent.
@@ -185,7 +210,9 @@ def _lane_status(statuses: list[str]) -> str | None:
         return "stalled"
     if any("progress" in x or "running" in x for x in s):
         return "active"
-    if statuses and all("complet" in str(x or "").lower() or "passed" in str(x or "").lower() for x in statuses):
+    if statuses and all(
+        "complet" in str(x or "").lower() or "passed" in str(x or "").lower() for x in statuses
+    ):
         return "completed"
     return None
 
@@ -210,7 +237,9 @@ def _build_test_graph(raw_subs: list[dict[str, Any]]) -> dict[str, Any] | None:
         return None
 
     # Spine lanes first (in canonical order), then any unknown lanes as seen.
-    ordered = [ln for ln in _LANE_SPINE if ln in lanes] + [ln for ln in order if ln not in _LANE_SPINE]
+    ordered = [ln for ln in _LANE_SPINE if ln in lanes] + [
+        ln for ln in order if ln not in _LANE_SPINE
+    ]
 
     nodes: list[dict[str, Any]] = []
     prev: str | None = None

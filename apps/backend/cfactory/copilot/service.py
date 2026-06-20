@@ -45,8 +45,10 @@ def build_board_snapshot(store: WorkItemStore, *, limit: int = _MAX_ITEMS) -> st
         return "(no work items)"
     lines = []
     for wi in items:
+
         def slot(s):
             return f"{s.status or '-'}" + (f"/{s.phase}" if s.phase else "")
+
         lines.append(
             f"#{wi.correlation_key} {wi.title or ''}".rstrip()
             + f" | plan(pfactory)={slot(wi.pfactory)}"

@@ -29,13 +29,31 @@ from .models import Service
 # tasks was the cause of consoles that all showed "— stream ended —" (#33).
 _INACTIVE_HINTS = (
     # terminal
-    "done", "merged", "triaged", "emitted", "completed", "accept",
-    "passed", "approved", "fail", "reject", "block", "error",
-    "cancel", "discard", "skip", "abort",
+    "done",
+    "merged",
+    "triaged",
+    "emitted",
+    "completed",
+    "accept",
+    "passed",
+    "approved",
+    "fail",
+    "reject",
+    "block",
+    "error",
+    "cancel",
+    "discard",
+    "skip",
+    "abort",
     # parked for human/AI review — finished executing, awaiting a person
     "review",
     # queued / not started — no agent attached yet
-    "backlog", "pending", "queued", "todo", "icebox", "draft",
+    "backlog",
+    "pending",
+    "queued",
+    "todo",
+    "icebox",
+    "draft",
 )
 
 

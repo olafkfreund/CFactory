@@ -147,9 +147,7 @@ class BaseHTTPAdapter:
                 detail=f"{code} {resp.reason_phrase} — check CFACTORY_UPSTREAM_TOKEN",
             )
         if code >= 400:
-            return ServiceProbe(
-                online=False, status="error", detail=f"{code} {resp.reason_phrase}"
-            )
+            return ServiceProbe(online=False, status="error", detail=f"{code} {resp.reason_phrase}")
         return ServiceProbe(online=True, status="online")
 
     def list_items(self) -> list[AdapterItem]:

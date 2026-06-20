@@ -62,11 +62,11 @@ PF_SESSION_PROCESS = "/api/plan/sessions/{sid}/process"
 _PFACTORY = Service.PFACTORY.value
 
 ActionKind = Literal[
-    "approve_plan",     # approve a plan gate (planning phase)
-    "approve_review",   # accept code in human_review → open PR, then merge
-    "reject_review",    # send code back to the QA fixer with a reason
-    "recover",          # unstick a stalled/errored task
-    "delete_task",      # remove the task from the upstream factory
+    "approve_plan",  # approve a plan gate (planning phase)
+    "approve_review",  # accept code in human_review → open PR, then merge
+    "reject_review",  # send code back to the QA fixer with a reason
+    "recover",  # unstick a stalled/errored task
+    "delete_task",  # remove the task from the upstream factory
 ]
 
 
@@ -312,7 +312,9 @@ def _base_url_for(settings: Settings, target_service: str) -> str:
     }[target_service]
 
 
-def _do(client: httpx.Client, method: str, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _do(
+    client: httpx.Client, method: str, endpoint: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     resp = client.request(method, endpoint, json=payload)
     try:
         body: Any = resp.json()
@@ -358,7 +360,11 @@ def execute_action(
     # Defense in depth: re-check every endpoint reached us as a safe path.
     for _m, ep, _p in steps:
         if not is_safe_endpoint(ep):
-            return {"status_code": 0, "ok": False, "error": "unsafe endpoint (must be root-relative)"}
+            return {
+                "status_code": 0,
+                "ok": False,
+                "error": "unsafe endpoint (must be root-relative)",
+            }
 
     headers = {}
     if settings.upstream_token:

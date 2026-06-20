@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -28,14 +28,14 @@ from .ws import ConnectionManager
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class LiveProgress(BaseModel):
     correlation_key: str
     service: Service
     phase: str | None = None
-    percent: float | None = None      # 0..100 when known (AIFactory); else None = indeterminate
+    percent: float | None = None  # 0..100 when known (AIFactory); else None = indeterminate
     subtask: str | None = None
     updated_at: datetime
 

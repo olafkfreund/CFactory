@@ -7,7 +7,7 @@ events upsert the matching slice and append to the timeline.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Integer, String, select
 from sqlalchemy.exc import IntegrityError
@@ -20,7 +20,7 @@ from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # Idle budget before an active (non-terminal) stage is flagged stalled (#105).
@@ -48,7 +48,7 @@ def _as_aware(dt: datetime | None) -> datetime | None:
     """Treat a naive timestamp (SQLite drops tz) as UTC so subtraction is safe."""
     if dt is None:
         return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 def compute_liveness(
@@ -123,7 +123,7 @@ def _is_terminal(status: str | None) -> bool:
     return any(hint in low for hint in _TERMINAL_HINTS)
 
 
-def _row_has_stage_data(row: "WorkItemRow") -> bool:
+def _row_has_stage_data(row: WorkItemRow) -> bool:
     """True if any of the three service stages carries a status or task_id —
     i.e. the work item still represents real upstream state."""
     for svc in ("pfactory", "aifactory", "tfactory"):
@@ -235,8 +235,7 @@ def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
             for e in entries
         )
     return any(
-        e.get("service") == event.service.value and e.get("status") == event.status
-        for e in entries
+        e.get("service") == event.service.value and e.get("status") == event.status for e in entries
     )
 
 
@@ -301,9 +300,7 @@ class WorkItemStore:
                         return row.to_model(), False
 
                     if row is None:
-                        row = WorkItemRow(
-                            correlation_key=event.correlation_key, timeline=[]
-                        )
+                        row = WorkItemRow(correlation_key=event.correlation_key, timeline=[])
                         session.add(row)
 
                     prev = getattr(row, event.service.value) or {}
@@ -388,9 +385,7 @@ class WorkItemStore:
                         if _is_terminal(event.status):
                             slice_dict["worker_progress"] = {}
                         else:
-                            slice_dict["worker_progress"] = (
-                                prev.get("worker_progress") or {}
-                            )
+                            slice_dict["worker_progress"] = prev.get("worker_progress") or {}
                     # RFC-0007 (#88): carry an honest access annotation onto the
                     # slice so the cockpit can render the credentialed-lane gap.
                     if getattr(event, "access", None):
@@ -477,9 +472,7 @@ class WorkItemStore:
                     cleared += 1
         return cleared
 
-    def prune_duplicate_stages(
-        self, service: Service, task_id_to_key: dict[str, str]
-    ) -> int:
+    def prune_duplicate_stages(self, service: Service, task_id_to_key: dict[str, str]) -> int:
         """Drop a service's stage from a work item when that task is now reported
         under a DIFFERENT correlation_key — i.e. the upstream re-keyed it.
 
@@ -514,9 +507,7 @@ class WorkItemStore:
 
     def list(self) -> list[WorkItem]:
         with self._session() as session:
-            rows = session.scalars(
-                select(WorkItemRow).order_by(WorkItemRow.updated_at.desc())
-            )
+            rows = session.scalars(select(WorkItemRow).order_by(WorkItemRow.updated_at.desc()))
             return [r.to_model() for r in rows]
 
     @staticmethod

@@ -1,0 +1,129 @@
+name: Code quality (ratchet)
+
+# Factory coding-standards adoption for the CFactory Python backend.
+#
+# This is a RATCHET gate (coding-standards.md section 4.6): ruff (shared select
+# set) + mypy --strict run ONLY on the Python lines a PR changes. Untouched
+# legacy hotspots are allowed until touched, so the gate is green at adoption and
+# tightens monotonically. A whole-repo strict gate is intentionally NOT blocking
+# (127 legacy violations would make it instantly red).
+#
+# Also runs a whole-repo `ruff format --check` (formatting is auto-applied, never
+# reviewed - section 3.6) and a drift gate confirming the vendored configs still
+# match the pinned hub baseline.
+#
+# Python-only. The React/Vite frontend (apps/frontend-web) lint/strictness gate
+# is tracked as follow-up (see issues #112, #116); the existing test.yml already
+# typechecks + builds the frontend.
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+concurrency:
+  group: code-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RUFF_VERSION: "0.15.17"
+  MYPY_VERSION: "1.20.1"
+  PACKAGE_DIR: "apps/backend/cfactory"
+
+jobs:
+  ratchet:
+    name: ruff ratchet (diff-scoped, blocking) + mypy (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need history back to the PR base for the diff-scoped ratchet.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install lint toolchain + backend deps (pinned)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ruff==${RUFF_VERSION}" "mypy==${MYPY_VERSION}"
+          # Backend deps so mypy can resolve imports on changed files.
+          pip install -r apps/backend/requirements.txt -r tests/requirements-test.txt
+
+      - name: Determine base ref
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=HEAD~1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ratchet (ruff on changed files; blocks net-new violations)
+        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
+
+      - name: mypy --strict on changed files (informational)
+        # Non-blocking for now: the legacy backend is largely untyped, so
+        # mypy --strict over touched files reports a large existing backlog. This
+        # surfaces type debt without making the adoption PR red. Promoting this to
+        # a blocking per-file ratchet is tracked as follow-up (issues #112, #116).
+        continue-on-error: true
+        env:
+          MYPYPATH: apps/backend
+          PYTHONPATH: apps/backend
+        run: |
+          mapfile -t files < <(git diff --name-only --diff-filter=AM "${{ steps.base.outputs.ref }}...HEAD" -- "${PACKAGE_DIR}" | grep '\.py$' || true)
+          if [ ${#files[@]} -eq 0 ]; then echo "no changed Python files"; exit 0; fi
+          mypy --config-file mypy.ini "${files[@]}" || true
+
+  format-check:
+    name: ruff format --check (whole repo, blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+      - name: Check formatting
+        run: ruff format --check --config ruff.toml "${PACKAGE_DIR}"
+
+  config-drift:
+    name: shared-baseline drift gate (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: cfactory
+      - name: Check out hub standards at the pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: 93c3bb49ed5f3f3d3d46aae5f8a13ff601550702
+          path: factory-hub
+          # If Factory is private, a token with read access is needed here.
+        continue-on-error: true
+        id: hub
+      - name: Diff vendored configs against the pinned hub baseline
+        if: steps.hub.outcome == 'success'
+        run: |
+          set -e
+          # Vendored copies carry a header above the body; compare the rule body
+          # only by stripping leading comment lines from both sides.
+          strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
+          for f in ruff.toml mypy.ini .editorconfig; do
+            if ! diff <(strip "cfactory/$f") <(strip "factory-hub/standards/$f"); then
+              echo "DRIFT: cfactory/$f diverged from the pinned hub baseline (standards/$f)."
+              echo "Re-vendor from the hub and bump the pinned SHA, or justify a tighten-only override."
+              exit 1
+            fi
+          done
+          echo "No drift: vendored configs match the pinned hub baseline."
+      - name: Hub unavailable (private repo / no token)
+        if: steps.hub.outcome != 'success'
+        run: echo "Hub checkout unavailable; skipping drift diff (configure a read token to enforce)."

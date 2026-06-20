@@ -30,7 +30,9 @@ def query_work_items(
         if stage is not None and not _slice(wi, stage).status:
             continue
         if status is not None and status not in {
-            wi.pfactory.status, wi.aifactory.status, wi.tfactory.status
+            wi.pfactory.status,
+            wi.aifactory.status,
+            wi.tfactory.status,
         }:
             continue
         out.append(wi)
@@ -43,8 +45,12 @@ def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | Non
     if wi is None:
         return None
     events = [
-        {"service": e.service.value, "status": e.status, "phase": e.phase,
-         "updated_at": e.updated_at.isoformat()}
+        {
+            "service": e.service.value,
+            "status": e.status,
+            "phase": e.phase,
+            "updated_at": e.updated_at.isoformat(),
+        }
         for e in wi.timeline
     ]
     span = None
@@ -127,9 +133,7 @@ def _billing_summary(wi) -> dict | None:
             slot["duration_ms"] += int(vals.get("duration_ms", 0) or 0)
     if not by_mode:
         return None
-    metered_cost = round(
-        sum(v["cost_usd"] for m, v in by_mode.items() if m in _METERED_MODES), 6
-    )
+    metered_cost = round(sum(v["cost_usd"] for m, v in by_mode.items() if m in _METERED_MODES), 6)
     nonmetered_tokens = sum(
         v["total_tokens"] for m, v in by_mode.items() if m not in _METERED_MODES
     )
@@ -155,8 +159,13 @@ def token_totals(store: WorkItemStore) -> dict:
     services = ("pfactory", "aifactory", "tfactory")
     keys = ("input_tokens", "output_tokens", "total_tokens")
     by_service = {
-        s: {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0,
-            "instrumented": False}
+        s: {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "instrumented": False,
+        }
         for s in services
     }
     total = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
@@ -215,8 +224,14 @@ def _merge_rollup(dst: dict, src: dict | None) -> None:
     """Sum a per-provider/per-model rollup dict ``src`` into ``dst`` in place."""
     for key, vals in (src or {}).items():
         b = dst.setdefault(
-            key, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
-                  "cost_usd": 0.0, "workers": 0}
+            key,
+            {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "workers": 0,
+            },
         )
         for k in ("input_tokens", "output_tokens", "total_tokens", "cost_usd", "workers"):
             b[k] += vals.get(k, 0) or 0
@@ -248,11 +263,13 @@ def token_by_worker(store: WorkItemStore) -> dict:
             _merge_rollup(by_model, state.by_model)
         if workers:
             workers.sort(key=lambda x: x.get("total_tokens", 0), reverse=True)
-            items.append({
-                "correlation_key": wi.correlation_key,
-                "title": wi.title,
-                "workers": workers,
-            })
+            items.append(
+                {
+                    "correlation_key": wi.correlation_key,
+                    "title": wi.title,
+                    "workers": workers,
+                }
+            )
 
     items.sort(
         key=lambda it: sum(w.get("total_tokens", 0) for w in it["workers"]),
@@ -301,11 +318,13 @@ def worker_progress(store: WorkItemStore, correlation_key: str) -> dict:
                     }
                     i += 1
                 cursors[wid] = i
-            series.append({
-                "ts": ts,
-                "total_tokens": sum(v["total_tokens"] for v in last.values()),
-                "cost_usd": sum(v["cost_usd"] for v in last.values()),
-            })
+            series.append(
+                {
+                    "ts": ts,
+                    "total_tokens": sum(v["total_tokens"] for v in last.values()),
+                    "cost_usd": sum(v["cost_usd"] for v in last.values()),
+                }
+            )
 
     return {"correlation_key": correlation_key, "series": series, "workers": raw}
 

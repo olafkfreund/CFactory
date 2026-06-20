@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import httpx
 from typing import Any
+
+import httpx
 
 from ..models import Service
 from .base import AdapterError, AdapterItem, BaseHTTPAdapter, first
@@ -47,9 +48,7 @@ class TFactoryAdapter(BaseHTTPAdapter):
             "videos": list((arts.get("videos") or {}).get("files") or []),
         }
 
-    def fetch_media(
-        self, spec_id: str, kind: str, name: str
-    ) -> tuple[bytes, str] | None:
+    def fetch_media(self, spec_id: str, kind: str, name: str) -> tuple[bytes, str] | None:
         """Fetch one screenshot/recording's raw bytes + content-type so CFactory
         can proxy it same-origin (the browser is authenticated to CFactory, not
         TFactory). ``kind`` is ``screenshots`` or ``videos``. None when missing."""

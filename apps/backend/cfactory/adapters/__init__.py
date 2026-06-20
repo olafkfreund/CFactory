@@ -37,7 +37,5 @@ def build_adapters(settings: Settings | None = None) -> list[BaseHTTPAdapter]:
 def hydrate(store: WorkItemStore, items: list[AdapterItem]) -> int:
     """Upsert a batch of normalized items into the store; return the count."""
     for item in items:
-        store.upsert_snapshot(
-            item.correlation_key, item.service, item.to_state(), title=item.title
-        )
+        store.upsert_snapshot(item.correlation_key, item.service, item.to_state(), title=item.title)
     return len(items)

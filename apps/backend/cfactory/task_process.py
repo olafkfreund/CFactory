@@ -267,6 +267,64 @@ def _build_test_graph(raw_subs: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"stage": "test", "nodes": nodes}
 
 
+def _extract_artifacts(*sources: dict[str, Any] | None) -> dict[str, str] | None:
+    """RFC-0015 §3.3: pull the human-readable spec/plan/tasks Markdown mirror a
+    producer (PFactory emit) may carry on a session/task object, so the cockpit
+    can render the plan as docs instead of stringified structures.
+
+    Tolerant of two shapes — top-level ``spec_md``/``plan_md``/``tasks_md`` or a
+    nested ``artifacts: {spec, plan, tasks}`` map — and picks the first non-empty
+    value across all sources. Returns ``None`` when nothing usable is present, so
+    the artifacts panel simply doesn't render (additive — a producer that doesn't
+    emit the mirror looks exactly as before).
+    """
+    out: dict[str, str] = {}
+    aliases = {
+        "spec": ("spec_md", "specMd", "spec_markdown"),
+        "plan": ("plan_md", "planMd", "plan_markdown"),
+        "tasks": ("tasks_md", "tasksMd", "tasks_markdown"),
+    }
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        nested = src.get("artifacts") if isinstance(src.get("artifacts"), dict) else {}
+        for key, keys in aliases.items():
+            if key in out:
+                continue
+            val: Any = None
+            for k in keys:
+                if isinstance(src.get(k), str) and src[k].strip():
+                    val = src[k]
+                    break
+            if val is None and isinstance(nested.get(key), str) and nested[key].strip():
+                val = nested[key]
+            if isinstance(val, str) and val.strip():
+                out[key] = val
+    return out or None
+
+
+def _extract_traceability(*sources: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """RFC-0015 §4 D2: pull the requirement->test traceability rows a verifier
+    (TFactory) may attach — either at the top level (``traceability``) or under a
+    gate-normalized ``verification`` block. Each row is {ac_id, ac_text?, tests[],
+    val_level?, status}. Returns ``None`` when absent so the matrix degrades to a
+    "not available" note rather than rendering an empty table.
+    """
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        candidates = [src.get("traceability")]
+        ver = src.get("verification")
+        if isinstance(ver, dict):
+            candidates.append(ver.get("traceability"))
+        for c in candidates:
+            if isinstance(c, list) and c:
+                rows = [r for r in c if isinstance(r, dict) and r.get("ac_id")]
+                if rows:
+                    return rows
+    return None
+
+
 def _normalize_test(correlation_key: str, d: dict[str, Any]) -> dict[str, Any] | None:
     """Test-stage process detail from a TFactory task — the lane pipeline diagram.
     ``None`` when there are no lane subtasks to aggregate."""
@@ -319,6 +377,30 @@ def _normalize(correlation_key: str, d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _rfc0015_extras(
+    tf: Any,
+    session_raw: dict[str, Any] | None,
+    tdetail_raw: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Mine the RFC-0015 cockpit extras — readable spec/plan/tasks Markdown (§3.3)
+    and the requirement->test traceability rows (§4 D2) — from the raw upstream
+    payloads, falling back to the tfactory slice's stored verification block for
+    traceability. Returns only the keys actually present, so the caller can splat
+    it onto a detail dict without adding empty fields (all additive)."""
+    tf_extra = getattr(tf, "extra", None)
+    tf_verification = tf_extra.get("verification") if isinstance(tf_extra, dict) else None
+    artifacts = _extract_artifacts(session_raw, tdetail_raw)
+    traceability = _extract_traceability(
+        tdetail_raw, {"verification": tf_verification} if tf_verification else None
+    )
+    extras: dict[str, Any] = {}
+    if artifacts:
+        extras["artifacts"] = artifacts
+    if traceability:
+        extras["traceability"] = traceability
+    return extras
+
+
 def build_process_detail(
     store: WorkItemStore,
     adapters: list[BaseHTTPAdapter],
@@ -345,6 +427,11 @@ def build_process_detail(
     pf_adapter = next((a for a in adapters if isinstance(a, PFactoryAdapter)), None)
 
     stages: dict[str, dict[str, Any]] = {}  # stage -> normalized process detail
+    # Raw upstream payloads, kept so we can mine RFC-0015 extras (readable
+    # spec/plan/tasks artifacts §3.3, requirement->test traceability §4 D2)
+    # without re-fetching. All best-effort + additive.
+    tdetail_raw: dict[str, Any] | None = None
+    session_raw: dict[str, Any] | None = None
 
     # Browser-lane evidence (screenshots + recordings) for the test stage — fetched
     # independently of the lane graph so the cockpit can show the captured proof
@@ -362,6 +449,7 @@ def build_process_detail(
             }
         tdetail = tf_adapter.get_test_detail(tf.task_id)
         if tdetail is not None:
+            tdetail_raw = tdetail
             test = _normalize_test(correlation_key, tdetail)
             if test is not None:
                 stages["test"] = test
@@ -375,9 +463,14 @@ def build_process_detail(
     if pf_adapter is not None and pf.task_id:
         session = pf_adapter.get_session_detail(pf.task_id)
         if session is not None:
+            session_raw = session
             plan = _normalize_plan(correlation_key, session, store)
             if plan is not None:
                 stages["plan"] = plan
+
+    # RFC-0015 cockpit extras (readable artifacts §3.3 + traceability §4 D2),
+    # mined from the raw upstream payloads. Best-effort + additive.
+    extras = _rfc0015_extras(tf, session_raw, tdetail_raw)
 
     if stages:
         # Primary = the furthest stage present (test > code > plan): its top-level
@@ -390,12 +483,13 @@ def build_process_detail(
             primary["graphs"] = graphs
         if tf_evidence:
             primary["evidence"] = tf_evidence
+        primary.update(extras)
         return primary
 
     # Nothing rich to show — hand back the slice state we already have so the
     # drawer can still show status/phase (+ any captured evidence).
     fallback = {
-        "available": bool(tf_evidence),
+        "available": bool(tf_evidence or extras),
         "correlation_key": correlation_key,
         "service": "aifactory",
         "task_id": ai.task_id,
@@ -403,6 +497,7 @@ def build_process_detail(
         "phase": ai.phase,
         "reason": "detail_unavailable",
     }
+    fallback.update(extras)
     if tf_evidence:
         fallback["evidence"] = tf_evidence
     return fallback

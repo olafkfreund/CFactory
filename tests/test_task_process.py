@@ -12,7 +12,11 @@ from cfactory.adapters.pfactory import PFactoryAdapter
 from cfactory.adapters.tfactory import TFactoryAdapter
 from cfactory.app import adapters_dep, create_app, store_dep
 from cfactory.models import CompletionEvent, Service
-from cfactory.task_process import build_process_detail
+from cfactory.task_process import (
+    _extract_artifacts,
+    _extract_traceability,
+    build_process_detail,
+)
 
 _DETAIL = {
     "id": "proj:spec-1",
@@ -59,12 +63,20 @@ def _detail_transport(payload=_DETAIL, status=200):
 
 
 def _seed(store):
-    store.upsert_from_event(CompletionEvent(
-        correlation_key="7", service=Service.AIFACTORY, task_id="proj:spec-1",
-        status="coding", phase="coding", updated_at=datetime.now(timezone.utc)))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="7",
+            service=Service.AIFACTORY,
+            task_id="proj:spec-1",
+            status="coding",
+            phase="coding",
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
 
 
 # --- unit ------------------------------------------------------------------
+
 
 def test_build_process_normalizes_detail(store):
     _seed(store)
@@ -132,9 +144,16 @@ def _plan_transport(payload=_PLAN_SESSION, status=200):
 
 
 def _seed_plan(store):
-    store.upsert_from_event(CompletionEvent(
-        correlation_key="9", service=Service.PFACTORY, task_id="sess-1",
-        status="human_review", phase="plan", updated_at=datetime.now(timezone.utc)))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="9",
+            service=Service.PFACTORY,
+            task_id="sess-1",
+            status="human_review",
+            phase="plan",
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
 
 
 def test_build_process_falls_back_to_plan_graph(store):
@@ -159,12 +178,26 @@ def test_plan_children_light_from_downstream_workitems(store):
     (green), C2's is mid-build (active), C3 has none yet (planned) (#94)."""
     _seed_plan(store)
     # C1 (issue 101) finished its code stage; C2 (issue 102) is coding; C3 (103) none.
-    store.upsert_from_event(CompletionEvent(
-        correlation_key="101", service=Service.AIFACTORY, task_id="t101",
-        status="done", phase="coding", updated_at=datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)))
-    store.upsert_from_event(CompletionEvent(
-        correlation_key="102", service=Service.AIFACTORY, task_id="t102",
-        status="in_progress", phase="coding", updated_at=datetime(2026, 6, 5, 12, 30, tzinfo=timezone.utc)))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="101",
+            service=Service.AIFACTORY,
+            task_id="t101",
+            status="done",
+            phase="coding",
+            updated_at=datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc),
+        )
+    )
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="102",
+            service=Service.AIFACTORY,
+            task_id="t102",
+            status="in_progress",
+            phase="coding",
+            updated_at=datetime(2026, 6, 5, 12, 30, tzinfo=timezone.utc),
+        )
+    )
     pf = PFactoryAdapter("http://pf", transport=_plan_transport())
     out = build_process_detail(store, [pf], "9")
     by_id = {n["id"]: n for n in out["graph"]["nodes"]}
@@ -183,12 +216,26 @@ _TEST_DETAIL = {
     "status": "in_progress",
     "phase": "browser",
     "subtasks": [
-        {"id": "u1", "lane": "unit", "status": "completed",
-         "started_at": "2026-06-05T12:00:00Z", "completed_at": "2026-06-05T12:02:00Z"},
-        {"id": "u2", "lane": "unit", "status": "completed",
-         "started_at": "2026-06-05T12:01:00Z", "completed_at": "2026-06-05T12:03:00Z"},
-        {"id": "b1", "lane": "browser", "status": "in_progress",
-         "started_at": "2026-06-05T12:03:30Z"},
+        {
+            "id": "u1",
+            "lane": "unit",
+            "status": "completed",
+            "started_at": "2026-06-05T12:00:00Z",
+            "completed_at": "2026-06-05T12:02:00Z",
+        },
+        {
+            "id": "u2",
+            "lane": "unit",
+            "status": "completed",
+            "started_at": "2026-06-05T12:01:00Z",
+            "completed_at": "2026-06-05T12:03:00Z",
+        },
+        {
+            "id": "b1",
+            "lane": "browser",
+            "status": "in_progress",
+            "started_at": "2026-06-05T12:03:30Z",
+        },
         {"id": "m1", "lane": "mutation", "status": "stuck"},
     ],
 }
@@ -204,9 +251,16 @@ def _test_transport(payload=_TEST_DETAIL, status=200):
 
 
 def _seed_test(store):
-    store.upsert_from_event(CompletionEvent(
-        correlation_key="11", service=Service.TFACTORY, task_id="tspec-1",
-        status="in_progress", phase="browser", updated_at=datetime.now(timezone.utc)))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="11",
+            service=Service.TFACTORY,
+            task_id="tspec-1",
+            status="in_progress",
+            phase="browser",
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
 
 
 def test_build_process_emits_test_lane_graph(store):
@@ -233,16 +287,23 @@ def test_build_process_emits_test_lane_graph(store):
 
 def _evidence_transport():
     """Mock that also answers the evidence manifest GET with screenshots + videos."""
+
     def handle(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/api/tfactory/tasks/tspec-1":
-            return httpx.Response(200, json={"artefacts": {
-                "screenshots": {"exists": True, "files": ["root.png", "ping.png"]},
-                "videos": {"exists": True, "files": ["ping.webm"]},
-            }})
+            return httpx.Response(
+                200,
+                json={
+                    "artefacts": {
+                        "screenshots": {"exists": True, "files": ["root.png", "ping.png"]},
+                        "videos": {"exists": True, "files": ["ping.webm"]},
+                    }
+                },
+            )
         if path.startswith("/api/tasks/"):
             return httpx.Response(200, json=_TEST_DETAIL)
         return httpx.Response(404, json={})
+
     return httpx.MockTransport(handle)
 
 
@@ -270,9 +331,16 @@ def test_test_stage_wins_over_code(store):
     """When both a TFactory and AIFactory task exist, the furthest stage (test)
     is shown — its lane graph, not the code DAG."""
     _seed_test(store)
-    store.upsert_from_event(CompletionEvent(
-        correlation_key="11", service=Service.AIFACTORY, task_id="proj:spec-1",
-        status="done", phase="coding", updated_at=datetime.now(timezone.utc)))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="11",
+            service=Service.AIFACTORY,
+            task_id="proj:spec-1",
+            status="done",
+            phase="coding",
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
     tf = TFactoryAdapter("http://tf", transport=_test_transport())
     ai = AIFactoryAdapter("http://ai", transport=_detail_transport())
     out = build_process_detail(store, [tf, ai], "11")
@@ -283,12 +351,26 @@ def test_build_process_emits_all_stage_graphs(store):
     """A work item with both a plan session and a code task exposes BOTH graphs in
     `graphs` (so the modal can switch stages), with `graph` = the furthest (code)."""
     # Plan session + code task under the same correlation_key.
-    store.upsert_from_event(CompletionEvent(
-        correlation_key="20", service=Service.PFACTORY, task_id="sess-1",
-        status="human_review", phase="plan", updated_at=datetime.now(timezone.utc)))
-    store.upsert_from_event(CompletionEvent(
-        correlation_key="20", service=Service.AIFACTORY, task_id="proj:spec-1",
-        status="in_progress", phase="coding", updated_at=datetime.now(timezone.utc)))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="20",
+            service=Service.PFACTORY,
+            task_id="sess-1",
+            status="human_review",
+            phase="plan",
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="20",
+            service=Service.AIFACTORY,
+            task_id="proj:spec-1",
+            status="in_progress",
+            phase="coding",
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
     pf = PFactoryAdapter("http://pf", transport=_plan_transport())
     ai = AIFactoryAdapter("http://ai", transport=_detail_transport())
     out = build_process_detail(store, [pf, ai], "20")
@@ -315,6 +397,7 @@ def test_build_process_service_down_falls_back_to_slice(store):
 
 # --- route -----------------------------------------------------------------
 
+
 def test_route_returns_process(store):
     _seed(store)
     ai = AIFactoryAdapter("http://ai", transport=_detail_transport())
@@ -324,3 +407,38 @@ def test_route_returns_process(store):
     body = TestClient(app).get("/api/workitems/7/process").json()
     assert body["available"] is True
     assert body["progress"]["phase_percent"] == 40
+
+
+# --- RFC-0015: readable artifacts (§3.3) + traceability matrix (§4 D2) -------
+
+
+def test_extract_artifacts_top_level_and_nested():
+    # Top-level *_md fields.
+    out = _extract_artifacts({"spec_md": "# Spec", "plan_md": "# Plan"})
+    assert out == {"spec": "# Spec", "plan": "# Plan"}
+
+    # Nested artifacts map, and first-non-empty across sources.
+    out = _extract_artifacts(
+        {"artifacts": {"tasks": "- [ ] a"}},
+        {"spec_md": "# Spec", "tasks_md": "ignored — already filled"},
+    )
+    assert out == {"tasks": "- [ ] a", "spec": "# Spec"}
+
+
+def test_extract_artifacts_absent_or_blank_returns_none():
+    assert _extract_artifacts(None) is None
+    assert _extract_artifacts({}) is None
+    assert _extract_artifacts({"spec_md": "   "}) is None  # blank treated as absent
+
+
+def test_extract_traceability_top_level_and_verification_block():
+    rows = [{"ac_id": "AC-1", "tests": ["t::ok"], "val_level": "VAL-2", "status": "passed"}]
+    assert _extract_traceability({"traceability": rows}) == rows
+    # Under a gate-normalized verification block.
+    assert _extract_traceability({"verification": {"traceability": rows}}) == rows
+
+
+def test_extract_traceability_drops_rows_without_ac_id_and_handles_absent():
+    assert _extract_traceability(None) is None
+    assert _extract_traceability({"traceability": []}) is None
+    assert _extract_traceability({"traceability": [{"status": "passed"}]}) is None  # no ac_id

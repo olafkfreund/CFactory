@@ -776,6 +776,28 @@ body {
 .crp-models td { padding: 0.15rem 0.4rem; border-bottom: 1px solid var(--border-soft); font-family: var(--font-mono); color: var(--muted); }
 .crp-models td:first-child { color: var(--fg, #ebdbb2); }
 .crp-rationale { font-size: 0.73rem; color: var(--muted); line-height: 1.45; margin: 0.2rem 0 0; }
+/* RFC-0015 §4 D2: requirement->test traceability matrix (AC x test x VAL x verdict). */
+.trace-matrix { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+.trace-matrix th { text-align: left; font: 600 0.62rem var(--font-mono); text-transform: uppercase; letter-spacing: 0.05em; color: var(--faint, var(--muted)); padding: 0.2rem 0.45rem; border-bottom: 1px solid var(--border-soft); }
+.trace-matrix td { padding: 0.3rem 0.45rem; border-bottom: 1px solid var(--border-soft); vertical-align: top; color: var(--muted); }
+.trace-ac { display: flex; flex-direction: column; gap: 0.12rem; max-width: 16rem; }
+.trace-ac-id { color: var(--text); font: 600 0.74rem var(--font-mono); }
+.trace-ac-text { color: var(--muted); font-size: 0.7rem; line-height: 1.35; }
+.trace-test-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.12rem; }
+.trace-test-list code { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text); overflow-wrap: anywhere; }
+.trace-gap { color: var(--yellow); font-size: 0.7rem; }
+.trace-val { font-family: var(--font-mono); color: var(--text); white-space: nowrap; }
+.trace-verdict { display: inline-block; font: 600 0.64rem var(--font-mono); text-transform: uppercase; letter-spacing: 0.04em; padding: 0.08rem 0.4rem; border-radius: 6px; border: 1px solid var(--border); }
+.trace-verdict--passed { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.trace-verdict--failed { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.trace-verdict--notrun { color: var(--muted); }
+.trace-verdict--skipped { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 40%, transparent); }
+/* RFC-0015 §3.3: readable spec/plan/tasks artifact tabs. */
+.artifacts-tabs { display: flex; gap: 0.35rem; margin-bottom: 0.5rem; }
+.artifacts-tab { font: 600 0.66rem var(--font-mono); text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 0.15rem 0.6rem; cursor: pointer; }
+.artifacts-tab:hover { color: var(--text); border-color: var(--cyan); }
+.artifacts-tab--active { color: var(--text); border-color: var(--cyan); box-shadow: inset 0 -2px 0 var(--cyan); }
+.artifacts-body { max-height: 24rem; overflow: auto; border: 1px solid var(--border-soft); border-radius: 8px; padding: 0.6rem 0.8rem; background: var(--panel-2); }
 .td-proc-meta { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.78rem; margin-bottom: 0.5rem; }
 /* Test-evidence gallery (screenshots + recordings proxied from TFactory). */
 .td-evidence-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.6rem; margin: 0.3rem 0 0.8rem; }

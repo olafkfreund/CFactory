@@ -642,6 +642,34 @@ export const ProcessGraphSchema = z.object({
 });
 export type ProcessGraph = z.infer<typeof ProcessGraphSchema>;
 
+// RFC-0015 §4 D2: one requirement->test traceability row — an acceptance
+// criterion mapped to its covering test(s), the VAL level reached, and the
+// verdict. `tests` empty => the AC has no covering test (a traceability gap).
+// `.passthrough()` keeps the row forward-compatible (the contract marks the item
+// `additionalProperties: true`).
+export const TraceabilityRowSchema = z
+  .object({
+    ac_id: z.string(),
+    ac_text: z.string().nullable().optional(),
+    tests: z.array(z.string()).optional(),
+    val_level: z.string().nullable().optional(),
+    status: z.enum(["passed", "failed", "not_run", "skipped"]),
+  })
+  .passthrough();
+export type TraceabilityRow = z.infer<typeof TraceabilityRowSchema>;
+
+// RFC-0015 §3.3: the human-readable spec/plan/tasks Markdown mirror PFactory
+// emits from the contract — rendered in the cockpit so reviewers read the plan as
+// docs, not stringified structures. Each field optional; absent => not rendered.
+export const ArtifactsSchema = z
+  .object({
+    spec: z.string().optional(),
+    plan: z.string().optional(),
+    tasks: z.string().optional(),
+  })
+  .passthrough();
+export type Artifacts = z.infer<typeof ArtifactsSchema>;
+
 export const ProcessDetailSchema = z.object({
   available: z.boolean(),
   correlation_key: z.string(),
@@ -680,6 +708,13 @@ export const ProcessDetailSchema = z.object({
     })
     .nullable()
     .optional(),
+  // RFC-0015 §3.3: readable spec/plan/tasks Markdown. Absent on tasks whose
+  // producer didn't emit the mirror — the artifacts panel then doesn't render.
+  artifacts: ArtifactsSchema.nullable().optional(),
+  // RFC-0015 §4 D2: requirement->test traceability rows (AC x test x VAL x
+  // verdict). Absent => the matrix shows a "not available" note, never an empty
+  // table or a crash.
+  traceability: z.array(TraceabilityRowSchema).nullable().optional(),
 });
 export type ProcessDetail = z.infer<typeof ProcessDetailSchema>;
 

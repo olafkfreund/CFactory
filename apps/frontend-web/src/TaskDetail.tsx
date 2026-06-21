@@ -19,6 +19,8 @@ import {
 import { AgentTerminal } from "./LiveAgents";
 import TaskActions from "./TaskActions";
 import CostRoutingPanel from "./CostRoutingPanel";
+import TraceabilityPanel from "./TraceabilityPanel";
+import ArtifactsPanel from "./ArtifactsPanel";
 import LiveTaskStamp from "./LiveTaskStamp";
 import { StageFlow } from "./TaskFlow";
 import { displayTitle, keySlug } from "./correlationKey";
@@ -232,6 +234,15 @@ export default function TaskDetail({
 
   const procAvailable = proc != null && proc.available !== false;
 
+  // RFC-0015 §4 D2: show the traceability matrix once we have rows, OR — so a
+  // reviewer of a verified task isn't left guessing — a "not available" note once
+  // the test stage has engaged. A plan/code-only task that never reached verify
+  // shows nothing, keeping the drawer uncluttered.
+  const traceRows = proc?.traceability ?? null;
+  const hasTraceRows = traceRows != null && traceRows.length > 0;
+  const testEngaged = stageState(wi.tfactory.status) !== "idle";
+  const showTraceability = hasTraceRows || testEngaged;
+
   return (
     <motion.div
       className="mc-term-overlay"
@@ -323,6 +334,11 @@ export default function TaskDetail({
               autonomy verdict + budget mode. Renders nothing without data. */}
           <CostRoutingPanel data={costRouting ?? undefined} />
 
+          {/* RFC-0015 §3.3: readable spec/plan/tasks Markdown (the human-readable
+              mirror PFactory emits) — rendered as docs, not raw structures.
+              Renders nothing when the producer didn't emit the mirror. */}
+          <ArtifactsPanel artifacts={proc?.artifacts ?? undefined} />
+
           {/* Live execution diagram — animated DAG with a plan/code/test stage
               switcher; defaults to the furthest stage (#94). */}
           <StageFlow graphs={proc?.graphs} fallback={proc?.graph} />
@@ -372,6 +388,12 @@ export default function TaskDetail({
               )}
             </section>
           )}
+
+          {/* RFC-0015 §4 D2: requirement->test traceability matrix — AC x test x
+              VAL x verdict. Shows the matrix when TFactory surfaced rows, else a
+              "not available" note once the test stage has engaged; nothing on a
+              task that never reached verify. */}
+          {showTraceability && <TraceabilityPanel rows={traceRows} />}
 
           {/* Actions — approve / reject / unstick / remove */}
           <TaskActions

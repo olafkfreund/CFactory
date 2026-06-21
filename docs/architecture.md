@@ -98,9 +98,9 @@ than inside a long-lived worker; RFC-0017 (#680) makes the build itself
 Job-native, which brings the task's logs with it. The task-detail **live terminal**
 panel is the consumer: when a task runs as a Job, its log stream surfaces there
 instead of "no active session". As of this writing the cockpit surface is in
-place and the verify and multi-replica flips are live, but the build-default flip
-was reverted after Job-native build validation failed — so **across the fleet the
-factory is still on safe defaults** while that is fixed and re-validated. The
+place and the multi-replica flip is live, but the build and verify default flips
+were both reverted to safe in-pod defaults pending re-validation — so **across the
+fleet the factory is still on safe defaults** while those are fixed and re-validated. The
 panel stays honest: with no session it says so rather than implying a stream.
 
 ## Live execution diagram

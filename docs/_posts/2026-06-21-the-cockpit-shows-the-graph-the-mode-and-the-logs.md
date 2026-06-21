@@ -107,9 +107,9 @@ inside a long-lived worker) brings its logs with it. The cockpit's live terminal
 panel in the task detail is the consumer: when a task runs as a Job, its log
 stream surfaces there instead of "no active session". The plumbing landed
 ([the Job-native execution change, #680](https://github.com/olafkfreund/AIFactory/pull/680)),
-and the verify and multi-replica flips are live, but the build-default flip was
-reverted after Job-native build validation failed -- so across the fleet this is
-**still on safe defaults** while that is fixed and re-validated. The panel is
+and the multi-replica flip is live, but the build and verify default flips were
+both reverted to safe in-pod defaults pending re-validation -- so across the fleet
+this is **still on safe defaults** while those are fixed and re-validated. The panel is
 honest about it: when there is no session it says so.
 
 ## Everything else is still where you left it

@@ -69,6 +69,8 @@ agentic SDLC needs.
 
 [See the architecture →](/architecture/) &nbsp; · &nbsp; [See the roadmap →](/roadmap/) &nbsp; · &nbsp; [Meet the family →](/family/)
 
+**See the cockpit:** the [Cockpit gallery](guides/cockpit-gallery.md) — a captioned tour of every view, captured against the live cluster, including the live execution graph across all three PARR stages.
+
 **Connect your editor:** see [Connecting editors & external clients](guides/token-gated-api.md) — how to point VS Code (and other clients) at CFactory in any deployment.
 
 **Design system:** the [Factory Design System](guides/factory-design-system.md) — the shared brand & UI rules every Factory service follows so the suite looks like one product.

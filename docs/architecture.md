@@ -91,6 +91,18 @@ attaches or forwards keystrokes, and the AIFactory URL and token never leave the
 backend — the browser only ever talks to CFactory. It degrades cleanly when
 rmux is disabled or no agents are running.
 
+### Job-native log streaming (RFC-0017, mid-rollout)
+
+The RFC-0016 concurrency model runs each task as its own Kubernetes Job rather
+than inside a long-lived worker; RFC-0017 (#680) makes the build itself
+Job-native, which brings the task's logs with it. The task-detail **live terminal**
+panel is the consumer: when a task runs as a Job, its log stream surfaces there
+instead of "no active session". As of this writing the cockpit surface is in
+place and the verify and multi-replica flips are live, but the build-default flip
+was reverted after Job-native build validation failed — so **across the fleet the
+factory is still on safe defaults** while that is fixed and re-validated. The
+panel stays honest: with no session it says so rather than implying a stream.
+
 ## Live execution diagram
 
 The task-detail drawer renders the work item as a **live dependency-graph (DAG)**
@@ -208,6 +220,9 @@ The UI is organised as seven views over the same correlated state:
 - **Services** — per-service health with **editable upstream endpoints**, so the
   cockpit can be repointed at a different PFactory/AIFactory/TFactory without a
   redeploy.
+
+For a captioned, screenshot-by-screenshot tour of every view against live data,
+see the [Cockpit gallery](/guides/cockpit-gallery/).
 
 ## Deployment
 

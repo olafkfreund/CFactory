@@ -117,6 +117,25 @@ def test_legacy_event_without_id_keeps_status_dedup(store):
     assert len(store.get("142").timeline) == 1
 
 
+def test_legacy_fallback_logs_soak_warning(store, caplog):
+    """#471 soak: an event without a CloudEvents id that reaches the dedup check
+    logs the legacy-fallback warning so falls-through can be measured."""
+    store.upsert_from_event(_event(Service.PFACTORY, "emitted"))  # creates the row
+    with caplog.at_level("WARNING", logger="cfactory.store"):
+        store.upsert_from_event(_event(Service.PFACTORY, "emitted"))  # hits fallback
+    assert any("legacy dedup fallback" in r.message for r in caplog.records)
+
+
+def test_id_present_does_not_log_soak_warning(store, caplog):
+    """#471 soak: an event WITH a CloudEvents id dedups on the id branch and must
+    NOT touch the legacy fallback (no warning)."""
+    eid = "22222222-2222-4222-8222-222222222222"
+    store.upsert_from_event(_event(Service.PFACTORY, "emitted", event_id=eid))
+    with caplog.at_level("WARNING", logger="cfactory.store"):
+        store.upsert_from_event(_event(Service.PFACTORY, "emitted", event_id=eid))
+    assert not any("legacy dedup fallback" in r.message for r in caplog.records)
+
+
 def test_id_redelivery_via_http_reports_duplicate(client):
     p = _payload("tfactory", "triaged", event_id="abc-123")
     first = client.post("/api/events/completion", json=p)

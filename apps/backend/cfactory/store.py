@@ -7,6 +7,7 @@ events upsert the matching slice and append to the timeline.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Integer, String, select
@@ -19,6 +20,8 @@ from .db import Base, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem
 from .status_taxonomy import is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -189,6 +192,19 @@ def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
             and (e.get("worker") or {}).get("worker_id") == wid
             for e in entries
         )
+    # #471 soak instrumentation: every current producer stamps a CloudEvents
+    # ``id`` (AIFactory completion.py, TFactory triager.py), and the ``id`` branch
+    # above handles those — so this legacy ``(service, correlation_key, status)``
+    # fallback should be UNREACHABLE on live traffic. Log when it IS hit so the
+    # cutover (#471) can confirm "zero falls-through to the legacy key" before the
+    # fallback is removed. Grep marker: "legacy dedup fallback".
+    logger.warning(
+        "[#471] legacy dedup fallback hit (event has no CloudEvents id) — "
+        "service=%s correlation_key=%s status=%s",
+        event.service.value,
+        event.correlation_key,
+        event.status,
+    )
     return any(
         e.get("service") == event.service.value and e.get("status") == event.status for e in entries
     )

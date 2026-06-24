@@ -42,6 +42,7 @@ async def propose_action(
 @router.post("/api/actions/execute")
 async def execute_prepared_action(
     action: PreparedAction,
+    store: Annotated[WorkItemStore, Depends(store_dep)],
     transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
     audit: Annotated[AuditStore, Depends(audit_dep)],
     _scope: Annotated[str | None, Depends(require_scope("write"))],
@@ -59,6 +60,13 @@ async def execute_prepared_action(
     single-user mode (no keys) it is open."""
     settings = get_settings()
     result = await run_in_threadpool(execute_action, action, settings=settings, transport=transport)
+    # Remove also prunes the card from CFactory's own board, not just the
+    # upstream factory. The upstream DELETE is best-effort: an orphaned/failed
+    # task whose upstream is already gone (404) must STILL leave the cockpit, so
+    # prune the local work item regardless of the upstream result.
+    if action.kind == "delete_task":
+        removed = await run_in_threadpool(store.delete, action.correlation_key)
+        result["work_item_removed"] = bool(removed)
     await run_in_threadpool(
         audit.record,
         actor=actor,

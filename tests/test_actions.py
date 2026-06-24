@@ -120,6 +120,25 @@ def test_propose_delete_task_uses_delete_verb(store):
     assert action.endpoint == "/api/tasks/ai-7"
 
 
+def test_propose_delete_task_works_on_failed_terminal_task(store):
+    # Regression: a FAILED task has only terminal stages, so _review_target
+    # returned None and Remove was a no-op ("no actionable task for this item").
+    # delete_task must still resolve the failed stage's task_id.
+    _seed(
+        store,
+        service=Service.TFACTORY,
+        correlation_key="bench-go-hello-1",
+        task_id="bench-go-hello-1",
+        status="planner_failed",
+        phase="planner_initial_exception",
+    )
+    action = propose_delete_task(store, "bench-go-hello-1")
+    assert action is not None
+    assert action.method == "DELETE"
+    assert action.target_service == "tfactory"
+    assert action.endpoint == "/api/tasks/bench-go-hello-1"
+
+
 # --------------------------------------------------------------------------
 # PFactory plan-stage routing (#bug: plan sessions use /api/plan/sessions/{id}/*,
 # not the AIFactory-style /api/tasks/{id} surface — and have no delete)
@@ -329,6 +348,45 @@ def test_execute_endpoint_runs_confirmed_action(client_with_transport):
     assert len(recorder.requests) == 1
     assert recorder.requests[0].method == "DELETE"
     assert str(recorder.requests[0].url) == "http://localhost:3101/api/tasks/ai-7"
+
+
+def test_execute_delete_task_prunes_local_card(client_with_transport, store):
+    # Remove must also clear CFactory's own board, not just the upstream task.
+    api, _recorder = client_with_transport
+    _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7")
+    assert store.get("42") is not None
+    body = {
+        "kind": "delete_task", "correlation_key": "42", "target_service": "aifactory",
+        "method": "DELETE", "endpoint": "/api/tasks/ai-7", "payload": {}, "rationale": "remove",
+    }
+    resp = api.post("/api/actions/execute", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["work_item_removed"] is True
+    assert store.get("42") is None  # card gone from the cockpit
+
+
+def test_execute_delete_task_prunes_card_even_when_upstream_fails(store, tmp_path):
+    # Orphan case: a failed task whose upstream is already gone (404). The
+    # upstream DELETE fails but the card MUST still leave the cockpit.
+    recorder = _RecordingTransport(httpx.Response(404, json={"detail": "not found"}))
+    app = create_app()
+    app.dependency_overrides[store_dep] = lambda: store
+    app.dependency_overrides[action_transport_dep] = lambda: recorder
+    app.dependency_overrides[audit_dep] = lambda: AuditStore(f"sqlite:///{tmp_path / 'a.db'}")
+    api = TestClient(app)
+    _seed(
+        store, service=Service.TFACTORY, correlation_key="bench-1",
+        task_id="bench-1", status="planner_failed",
+    )
+    body = {
+        "kind": "delete_task", "correlation_key": "bench-1", "target_service": "tfactory",
+        "method": "DELETE", "endpoint": "/api/tasks/bench-1", "payload": {}, "rationale": "remove",
+    }
+    resp = api.post("/api/actions/execute", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False          # upstream 404
+    assert resp.json()["work_item_removed"] is True  # local card removed anyway
+    assert store.get("bench-1") is None
 
 
 # --------------------------------------------------------------------------

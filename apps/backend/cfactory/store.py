@@ -516,6 +516,22 @@ class WorkItemStore:
             rows = session.scalars(select(WorkItemRow).order_by(WorkItemRow.updated_at.desc()))
             return [r.to_model() for r in rows]
 
+    def delete(self, correlation_key: str) -> bool:
+        """Remove a work item entirely from the cockpit store.
+
+        Returns True if a row was deleted, False if none matched. Backs the HITL
+        ``delete_task`` ("Remove") action so a finished/failed task can be cleared
+        from the board. The upstream-factory delete is best-effort and separate:
+        an orphaned card whose upstream task is already gone (e.g. a planner that
+        failed before the task ever materialized) must still be removable here.
+        """
+        with self._session.begin() as session:
+            row = self._get_row(session, correlation_key)
+            if row is None:
+                return False
+            session.delete(row)
+            return True
+
     @staticmethod
     def _get_row(session: Session, correlation_key: str) -> WorkItemRow | None:
         return session.scalars(

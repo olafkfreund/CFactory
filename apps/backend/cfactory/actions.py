@@ -146,6 +146,27 @@ def _review_target(wi: WorkItem) -> tuple[str, str] | None:
     return None
 
 
+def _delete_target(wi: WorkItem) -> tuple[str, str] | None:
+    """The (service, task_id) of the furthest stage holding a task — INCLUDING
+    terminal (failed/done) stages.
+
+    Unlike :func:`_review_target` (which only finds an *in-flight* stage for
+    approve/reject/recover), Remove must work on a FAILED task: its stages are
+    all terminal, so the review target is None and the task would be unremovable.
+    A failed task's task_id lives on whichever stage failed, so resolve the
+    furthest downstream stage that carries one regardless of status.
+    """
+    for attr, svc in (
+        ("tfactory", Service.TFACTORY),
+        ("aifactory", Service.AIFACTORY),
+        ("pfactory", Service.PFACTORY),
+    ):
+        slice_ = getattr(wi, attr)
+        if slice_.task_id:
+            return svc.value, slice_.task_id
+    return None
+
+
 def propose_approve_plan(store: WorkItemStore, correlation_key: str, note: str | None = None):
     wi = store.get(correlation_key)
     if wi is None or not wi.pfactory.task_id:
@@ -260,7 +281,10 @@ def propose_delete_task(store: WorkItemStore, correlation_key: str, note: str | 
     wi = store.get(correlation_key)
     if wi is None:
         return None
-    target = _review_target(wi)
+    # Remove must work on a FAILED task too, so resolve the target even on a
+    # terminal stage (see _delete_target) — _review_target would return None
+    # for a failed task and the item would be permanently unremovable.
+    target = _delete_target(wi)
     if target is None:
         return None
     service, task_id = target

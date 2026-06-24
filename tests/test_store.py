@@ -28,6 +28,19 @@ def test_create_then_get(store):
     assert len(wi.timeline) == 1
 
 
+def test_delete_removes_work_item(store):
+    store.upsert_from_event(_event(Service.TFACTORY, "planner_failed", key="bench-1"))
+    assert store.get("bench-1") is not None
+    assert store.delete("bench-1") is True
+    assert store.get("bench-1") is None
+    # Idempotent: deleting an already-gone item is a no-op that reports False.
+    assert store.delete("bench-1") is False
+
+
+def test_delete_missing_work_item_returns_false(store):
+    assert store.delete("never-existed") is False
+
+
 def test_events_across_services_thread_one_workitem(store):
     store.upsert_from_event(_event(Service.PFACTORY, "planned"))
     store.upsert_from_event(_event(Service.AIFACTORY, "coding"))

@@ -4,6 +4,7 @@ audit trail and the live activity feed.
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Annotated
 
 import httpx
@@ -67,6 +68,14 @@ async def execute_prepared_action(
     if action.kind == "delete_task":
         removed = await run_in_threadpool(store.delete, action.correlation_key)
         result["work_item_removed"] = bool(removed)
+        # A 404 from the upstream means the task is ALREADY gone (e.g. an orphaned
+        # duplicate keyed by a bare spec_id with no live factory task). Combined
+        # with the local prune, the Remove goal — card off the board — is achieved,
+        # so report success instead of surfacing a confusing "Failed (404)" for a
+        # task that has, in fact, been removed.
+        if removed and int(result.get("status_code", 0)) == HTTPStatus.NOT_FOUND:
+            result["ok"] = True
+            result["status_code"] = int(HTTPStatus.OK)
     await run_in_threadpool(
         audit.record,
         actor=actor,

@@ -384,8 +384,12 @@ def test_execute_delete_task_prunes_card_even_when_upstream_fails(store, tmp_pat
     }
     resp = api.post("/api/actions/execute", json=body)
     assert resp.status_code == 200
-    assert resp.json()["ok"] is False          # upstream 404
-    assert resp.json()["work_item_removed"] is True  # local card removed anyway
+    # Upstream 404 = task ALREADY gone; combined with the local prune the Remove
+    # goal is achieved, so the action reports SUCCESS — the cockpit no longer
+    # shows a confusing "Failed (404)" for a task it actually removed.
+    assert resp.json()["ok"] is True
+    assert resp.json()["status_code"] == 200
+    assert resp.json()["work_item_removed"] is True  # local card removed
     assert store.get("bench-1") is None
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from cfactory.models import CompletionEvent, Service
+from cfactory.models import CompletionEvent, Service, ServiceState
 from cfactory.store import _apply_terminal_or_scalar, _attach_access_verification
 
 
@@ -39,6 +39,21 @@ def test_delete_removes_work_item(store):
 
 def test_delete_missing_work_item_returns_false(store):
     assert store.delete("never-existed") is False
+
+
+def test_repeated_snapshot_same_status_preserves_updated_at(store):
+    # A poll re-reporting the SAME non-terminal status must NOT bump updated_at,
+    # else a hung stage (gen_functional_initial_started for hours) keeps looking
+    # freshly "running" and never trips `stalled` — the cockpit then shows a dead
+    # task as running forever (#105).
+    s = ServiceState(status="generating", phase="gen_functional_initial_started")
+    store.upsert_snapshot("hung", Service.TFACTORY, s)
+    first = store.get("hung").updated_at
+    store.upsert_snapshot("hung", Service.TFACTORY, s)  # identical re-poll → no-op
+    assert store.get("hung").updated_at == first
+    # A REAL status change still applies (and advances the slice).
+    store.upsert_snapshot("hung", Service.TFACTORY, ServiceState(status="triaged"))
+    assert store.get("hung").tfactory.status == "triaged"
 
 
 def test_events_across_services_thread_one_workitem(store):

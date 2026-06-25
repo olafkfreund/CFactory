@@ -444,10 +444,35 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, correlation_key)
+                    new_slice = state.model_dump()
+                    existing = (
+                        getattr(row, service.value) if row is not None else None
+                    ) or {}
+                    # A poll that re-reports the SAME status/phase must NOT reset
+                    # the liveness clock (#105). updated_at (onupdate=_now) drives
+                    # the stall age, so re-stamping it on every no-op poll makes a
+                    # hung stage (e.g. gen_functional_initial_started for hours)
+                    # look perpetually fresh and never trip `stalled` — the
+                    # cockpit then shows a dead task as "running" indefinitely.
+                    # Skip the write entirely when nothing material changed so
+                    # updated_at keeps the timestamp of the last REAL transition.
+                    title_needed = bool(title) and not (
+                        row.title if row is not None else None
+                    )
+                    unchanged = (
+                        row is not None
+                        and not title_needed
+                        and existing.get("status") == new_slice.get("status")
+                        and existing.get("phase") == new_slice.get("phase")
+                        and (existing.get("usage") or None)
+                        == (new_slice.get("usage") or None)
+                    )
+                    if unchanged:
+                        return row.to_model()
                     if row is None:
                         row = WorkItemRow(correlation_key=correlation_key, timeline=[])
                         session.add(row)
-                    setattr(row, service.value, state.model_dump())
+                    setattr(row, service.value, new_slice)
                     if title and not row.title:
                         row.title = title
                     row.updated_at = _now()

@@ -274,6 +274,12 @@ def _apply_terminal_or_scalar(prev: dict, event: CompletionEvent) -> dict:
         phase=event.phase,
         usage=event.usage,
     ).model_dump()
+    # Cost is last-known-good: a plain status/phase event (no usage of its own —
+    # e.g. a human_review or failed transition) must NOT clobber the usage already
+    # recorded from a live snapshot, else the cockpit drops a real figure back to
+    # zero. Carry the previous slice's usage forward when this event omits it.
+    if event.usage is None and prev.get("usage"):
+        slice_dict["usage"] = prev["usage"]
     workers = dict(prev.get("workers") or {})
     if event.usage and event.usage.workers:
         for w in event.usage.workers:

@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cfactory.copilot.tools import token_totals
 from cfactory.models import CompletionEvent, Service, TokenUsage
 
 
 def _ev(store, key, service, status, usage=None):
-    store.upsert_from_event(CompletionEvent(
-        correlation_key=key, service=service, task_id=f"{service.value}-t", status=status,
-        phase=service.value, updated_at=datetime.now(timezone.utc), usage=usage))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key=key,
+            service=service,
+            task_id=f"{service.value}-t",
+            status=status,
+            phase=service.value,
+            updated_at=datetime.now(UTC),
+            usage=usage,
+        )
+    )
 
 
 def _u(i, o, cost):
@@ -27,17 +35,42 @@ def test_usage_persists_on_slice_and_timeline(store):
     assert wi.timeline[-1].usage is not None  # rides the event too
 
 
+def test_no_usage_event_does_not_clobber_recorded_usage(store):
+    # A live snapshot records usage; a later plain status event (no usage of its
+    # own — e.g. human_review / failed) must NOT zero it out. Cost is
+    # last-known-good (was: cockpit dropped real tokens back to 0).
+    _ev(store, "99", Service.AIFACTORY, "running", _u(1000, 500, 1.5))
+    _ev(store, "99", Service.AIFACTORY, "human_review", usage=None)
+    wi = store.get("99")
+    assert wi is not None and wi.aifactory.usage is not None
+    assert wi.aifactory.usage.total_tokens == 1500
+    assert wi.aifactory.usage.cost_usd == 1.5
+
+
 def test_billing_summary_splits_metered_from_subscription(store):
     """A task that ran on a Claude subscription + a metered API provider: the row
     reports tokens for the subscription work and dollars only for the metered
     provider, plus the modes present and a wall-time elapsed (#96)."""
     usage = TokenUsage(
-        input_tokens=1200, output_tokens=600, total_tokens=1800, cost_usd=0.4,
+        input_tokens=1200,
+        output_tokens=600,
+        total_tokens=1800,
+        cost_usd=0.4,
         by_provider={
-            "claude": {"total_tokens": 1500, "cost_usd": 0.0, "workers": 2,
-                       "duration_ms": 12000, "billing_mode": "subscription"},
-            "openai-compatible": {"total_tokens": 300, "cost_usd": 0.4, "workers": 1,
-                                  "duration_ms": 4000, "billing_mode": "api"},
+            "claude": {
+                "total_tokens": 1500,
+                "cost_usd": 0.0,
+                "workers": 2,
+                "duration_ms": 12000,
+                "billing_mode": "subscription",
+            },
+            "openai-compatible": {
+                "total_tokens": 300,
+                "cost_usd": 0.4,
+                "workers": 1,
+                "duration_ms": 4000,
+                "billing_mode": "api",
+            },
         },
     )
     _ev(store, "77", Service.AIFACTORY, "done", usage)
@@ -58,9 +91,18 @@ def test_billing_summary_all_subscription_has_no_metered_cost(store):
     """Subscription-only task: no metered dollars; the fleet headline is 0 so the
     cockpit can hide the Cost (USD) stat (#96)."""
     usage = TokenUsage(
-        input_tokens=800, output_tokens=400, total_tokens=1200, cost_usd=0.0,
-        by_provider={"claude": {"total_tokens": 1200, "cost_usd": 0.0, "workers": 1,
-                                "billing_mode": "subscription"}},
+        input_tokens=800,
+        output_tokens=400,
+        total_tokens=1200,
+        cost_usd=0.0,
+        by_provider={
+            "claude": {
+                "total_tokens": 1200,
+                "cost_usd": 0.0,
+                "workers": 1,
+                "billing_mode": "subscription",
+            }
+        },
     )
     _ev(store, "78", Service.AIFACTORY, "done", usage)
     out = token_totals(store)
@@ -109,11 +151,22 @@ def test_usage_not_double_counted_on_duplicate(store):
 
 
 def test_tokens_endpoint(client):
-    client.post("/api/events", json={
-        "correlation_key": "7", "service": "aifactory", "task_id": "t", "status": "done",
-        "updated_at": "2026-06-05T12:00:00Z",
-        "usage": {"input_tokens": 80, "output_tokens": 20, "total_tokens": 100, "cost_usd": 0.10},
-    })
+    client.post(
+        "/api/events",
+        json={
+            "correlation_key": "7",
+            "service": "aifactory",
+            "task_id": "t",
+            "status": "done",
+            "updated_at": "2026-06-05T12:00:00Z",
+            "usage": {
+                "input_tokens": 80,
+                "output_tokens": 20,
+                "total_tokens": 100,
+                "cost_usd": 0.10,
+            },
+        },
+    )
     body = client.get("/api/tokens").json()
     assert body["total"]["total_tokens"] == 100
     assert body["by_service"]["aifactory"]["instrumented"] is True

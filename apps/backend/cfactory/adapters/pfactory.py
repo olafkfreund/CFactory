@@ -41,4 +41,5 @@ class PFactoryAdapter(BaseHTTPAdapter):
             status=first(row, "board_state", "status"),
             phase="plan",
             title=first(row, "title", "name"),
+            repo=first(row, "repo"),  # W5 (#218): target repo owner/name
         )

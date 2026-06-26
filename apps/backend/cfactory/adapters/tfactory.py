@@ -81,4 +81,5 @@ class TFactoryAdapter(BaseHTTPAdapter):
             status=first(row, "status"),
             phase=first(row, "phase"),
             title=first(row, "title", "name"),
+            repo=first(row, "repo"),  # W5 (#218): target repo owner/name
         )

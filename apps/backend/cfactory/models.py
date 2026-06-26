@@ -245,6 +245,7 @@ class ServiceState(BaseModel):
     task_id: str | None = None
     status: str | None = None
     phase: str | None = None
+    repo: str | None = None  # target repo owner/name (W5, Factory #218)
     usage: TokenUsage | None = None
     workers: dict[str, WorkerUsage] = Field(default_factory=dict)
     worker_progress: dict[str, list[ProgressPoint]] = Field(default_factory=dict)

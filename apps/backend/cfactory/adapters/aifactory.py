@@ -53,4 +53,5 @@ class AIFactoryAdapter(BaseHTTPAdapter):
             status=first(row, "status"),
             phase=first(row, "phase", "current_phase"),
             title=first(row, "title", "name", "description"),
+            repo=first(row, "repo"),  # W5 (#218): target repo owner/name
         )

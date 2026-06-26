@@ -24,9 +24,12 @@ class AdapterItem(BaseModel):
     status: str | None = None
     phase: str | None = None
     title: str | None = None
+    repo: str | None = None  # target repo owner/name (W5, Factory #218)
 
     def to_state(self) -> ServiceState:
-        return ServiceState(task_id=self.task_id, status=self.status, phase=self.phase)
+        return ServiceState(
+            task_id=self.task_id, status=self.status, phase=self.phase, repo=self.repo
+        )
 
 
 class ServiceProbe(BaseModel):

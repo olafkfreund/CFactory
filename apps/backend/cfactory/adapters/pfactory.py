@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import Service
-from .base import AdapterError, AdapterItem, BaseHTTPAdapter, first
+from .base import AdapterItem, BaseHTTPAdapter, first
 
 
 class PFactoryAdapter(BaseHTTPAdapter):
@@ -21,11 +21,7 @@ class PFactoryAdapter(BaseHTTPAdapter):
         plan-stage execution diagram (#94) — or ``None`` when unavailable.
         Best-effort so the cockpit's detail drawer degrades rather than errors.
         """
-        try:
-            data = self._get_json(f"/api/plan/sessions/{session_id}")
-        except AdapterError:
-            return None
-        return data if isinstance(data, dict) else None
+        return self._get_detail(f"/api/plan/sessions/{session_id}")
 
     def _normalize(self, row: dict[str, Any]) -> AdapterItem | None:
         task_id = first(row, "session_id", "id")

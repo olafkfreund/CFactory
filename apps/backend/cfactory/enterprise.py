@@ -30,7 +30,7 @@ from typing import Protocol, runtime_checkable
 
 from fastapi import Depends, Header, Request
 
-from .auth import KeyStore, keystore_dep
+from .auth import KeyStore, extract_key, keystore_dep
 from .config import get_settings
 
 # Identity used in local single-user mode (no IdP, no per-request identity).
@@ -93,21 +93,6 @@ class LocalAuthProvider:
         return self._keystore.scopes_for(identity) or set()
 
 
-def _extract_key(authorization: str | None, x_api_key: str | None) -> str | None:
-    """Pull the API key from ``Authorization: Bearer`` or ``X-API-Key``.
-
-    Mirrors :func:`cfactory.auth._extract_key`; duplicated here to keep the
-    enterprise seam self-contained without reaching into auth internals.
-    """
-    if authorization:
-        scheme, _, token = authorization.partition(" ")
-        if scheme.lower() == "bearer" and token.strip():
-            return token.strip()
-    if x_api_key and x_api_key.strip():
-        return x_api_key.strip()
-    return None
-
-
 def identity_from_keystore(keystore: KeyStore, request: Request) -> str:
     """Derive the caller identity from the request's API key, else ``local``.
 
@@ -117,7 +102,7 @@ def identity_from_keystore(keystore: KeyStore, request: Request) -> str:
     """
     if not keystore.configured:
         return LOCAL_IDENTITY
-    key = _extract_key(request.headers.get("authorization"), request.headers.get("x-api-key"))
+    key = extract_key(request.headers.get("authorization"), request.headers.get("x-api-key"))
     if key is not None and keystore.scopes_for(key) is not None:
         return key
     return LOCAL_IDENTITY
@@ -160,7 +145,7 @@ def identity_dep(
     :data:`LOCAL_IDENTITY`. Overridable in tests, and the hook a hosted
     :class:`AuthProvider` replaces. Used to stamp the audit ``actor``.
     """
-    key = _extract_key(authorization, x_api_key)
+    key = extract_key(authorization, x_api_key)
     if keystore.configured and key is not None and keystore.scopes_for(key) is not None:
         return key
     return LOCAL_IDENTITY

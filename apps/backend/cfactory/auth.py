@@ -161,7 +161,7 @@ def keystore_dep() -> KeyStore:
     return get_keystore()
 
 
-def _extract_key(authorization: str | None, x_api_key: str | None) -> str | None:
+def extract_key(authorization: str | None, x_api_key: str | None) -> str | None:
     """Pull the API key from an ``Authorization: Bearer`` header or ``X-API-Key``."""
     if authorization:
         scheme, _, token = authorization.partition(" ")
@@ -187,7 +187,7 @@ def authorize_headers(
     """
     if not keystore.configured:
         return
-    key = _extract_key(authorization, x_api_key)
+    key = extract_key(authorization, x_api_key)
     keystore.authorize(key, scope)
 
 
@@ -205,7 +205,7 @@ def require_scope(scope: str):
     ) -> str | None:
         if not keystore.configured:
             return None
-        key = _extract_key(authorization, x_api_key)
+        key = extract_key(authorization, x_api_key)
         keystore.authorize(key, scope)
         return key
 

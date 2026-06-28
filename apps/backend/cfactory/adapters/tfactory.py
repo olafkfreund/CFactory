@@ -28,11 +28,7 @@ class TFactoryAdapter(BaseHTTPAdapter):
         timing the cockpit aggregates into the test-stage lane pipeline (#94) — or
         ``None`` when unavailable. Best-effort so the drawer degrades, not errors.
         """
-        try:
-            data = self._get_json(f"/api/tasks/{task_id}")
-        except AdapterError:
-            return None
-        return data if isinstance(data, dict) else None
+        return self._get_detail(f"/api/tasks/{task_id}")
 
     def get_evidence_manifest(self, spec_id: str) -> dict[str, list[str]]:
         """Browser-lane media captured for a spec: screenshot + recording file

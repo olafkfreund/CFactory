@@ -107,6 +107,18 @@ class BaseHTTPAdapter:
         except httpx.HTTPError as exc:
             raise AdapterError(f"{self.service.value}: GET {path} failed: {exc}") from exc
 
+    def _get_detail(self, path: str) -> dict[str, Any] | None:
+        """Best-effort GET returning the JSON object, or ``None`` on error / non-dict.
+
+        Shared by the per-service detail wrappers (session/task/test) so the
+        cockpit's detail drawer degrades rather than errors.
+        """
+        try:
+            data = self._get_json(path)
+        except AdapterError:
+            return None
+        return data if isinstance(data, dict) else None
+
     @staticmethod
     def _rows(payload: Any) -> list[dict[str, Any]]:
         """Accept either a bare list or {items|tasks|plans|sessions|results|data: [...]}."""

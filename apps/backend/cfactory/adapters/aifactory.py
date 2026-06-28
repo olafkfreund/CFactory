@@ -33,11 +33,7 @@ class AIFactoryAdapter(BaseHTTPAdapter):
         ``subtasks``, …) or ``None`` when the task/service is unavailable —
         best-effort so the cockpit's detail drawer degrades rather than errors.
         """
-        try:
-            data = self._get_json(f"/api/tasks/{task_id}")
-        except AdapterError:
-            return None
-        return data if isinstance(data, dict) else None
+        return self._get_detail(f"/api/tasks/{task_id}")
 
     def _normalize(self, row: dict[str, Any]) -> AdapterItem | None:
         task_id = first(row, "id", "task_id")

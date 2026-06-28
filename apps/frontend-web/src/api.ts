@@ -17,11 +17,7 @@ import { z } from "zod";
 // then validate the body against `schema` (returning the inferred type). The
 // thrown message is identical to the previous hand-rolled calls
 // (`<label> error: HTTP <status>`), so callers behave exactly as before.
-async function getJson<S extends z.ZodTypeAny>(
-  path: string,
-  schema: S,
-  label: string,
-): Promise<z.infer<S>> {
+async function getJson<T>(path: string, schema: z.ZodType<T>, label: string): Promise<T> {
   const resp = await fetch(path);
   if (!resp.ok) throw new Error(`${label} error: HTTP ${resp.status}`);
   return schema.parse(await resp.json());

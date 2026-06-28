@@ -13,6 +13,20 @@
 
 import { z } from "zod";
 
+// Shared GET helper: fetch a path, throw on non-2xx with a labelled message,
+// then validate the body against `schema` (returning the inferred type). The
+// thrown message is identical to the previous hand-rolled calls
+// (`<label> error: HTTP <status>`), so callers behave exactly as before.
+async function getJson<S extends z.ZodTypeAny>(
+  path: string,
+  schema: S,
+  label: string,
+): Promise<z.infer<S>> {
+  const resp = await fetch(path);
+  if (!resp.ok) throw new Error(`${label} error: HTTP ${resp.status}`);
+  return schema.parse(await resp.json());
+}
+
 // --- Health ---------------------------------------------------------------
 
 export const HealthSchema = z
@@ -179,9 +193,7 @@ export const TokenTotalsSchema = z.object({
 export type TokenTotals = z.infer<typeof TokenTotalsSchema>;
 
 export async function fetchTokens(): Promise<TokenTotals> {
-  const resp = await fetch("/api/tokens");
-  if (!resp.ok) throw new Error(`tokens error: HTTP ${resp.status}`);
-  return TokenTotalsSchema.parse(await resp.json());
+  return getJson("/api/tokens", TokenTotalsSchema, "tokens");
 }
 
 // Per-worker / per-provider breakdown (RFC-0001 v1.3). Additive to /api/tokens.
@@ -223,9 +235,7 @@ export const TokensByWorkerSchema = z.object({
 export type TokensByWorker = z.infer<typeof TokensByWorkerSchema>;
 
 export async function fetchTokensByWorker(): Promise<TokensByWorker> {
-  const resp = await fetch("/api/tokens/by_worker");
-  if (!resp.ok) throw new Error(`tokens by_worker error: HTTP ${resp.status}`);
-  return TokensByWorkerSchema.parse(await resp.json());
+  return getJson("/api/tokens/by_worker", TokensByWorkerSchema, "tokens by_worker");
 }
 
 // --- RFC-0014: cost-aware routing — estimate vs actual --------------------
@@ -288,9 +298,11 @@ export type WorkerProgress = z.infer<typeof WorkerProgressSchema>;
 // Best-effort: the caller swallows failures and keeps the last-good render, so a
 // transient error never blanks a running card.
 export async function fetchWorkerProgress(correlationKey: string): Promise<WorkerProgress> {
-  const resp = await fetch(`/api/tasks/${encodeURIComponent(correlationKey)}/worker-progress`);
-  if (!resp.ok) throw new Error(`worker-progress error: HTTP ${resp.status}`);
-  return WorkerProgressSchema.parse(await resp.json());
+  return getJson(
+    `/api/tasks/${encodeURIComponent(correlationKey)}/worker-progress`,
+    WorkerProgressSchema,
+    "worker-progress",
+  );
 }
 
 export const TimelineEventSchema = z.object({
@@ -361,9 +373,7 @@ export const ProviderHealthSchema = z.object({
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 
 export async function fetchProviderHealth(): Promise<ProviderHealth> {
-  const resp = await fetch("/api/provider-health");
-  if (!resp.ok) throw new Error(`provider-health error: HTTP ${resp.status}`);
-  return ProviderHealthSchema.parse(await resp.json());
+  return getJson("/api/provider-health", ProviderHealthSchema, "provider-health");
 }
 
 export const CopilotSettingsSchema = z.object({
@@ -583,9 +593,7 @@ export const LiveAgentsResponseSchema = z.object({
 export type LiveAgentsResponse = z.infer<typeof LiveAgentsResponseSchema>;
 
 export async function fetchLiveAgents(): Promise<LiveAgentsResponse> {
-  const resp = await fetch("/api/live-agents");
-  if (!resp.ok) throw new Error(`live-agents error: HTTP ${resp.status}`);
-  return LiveAgentsResponseSchema.parse(await resp.json());
+  return getJson("/api/live-agents", LiveAgentsResponseSchema, "live-agents");
 }
 
 // Open one agent's console stream (read-only ANSI bytes for xterm.js). The
@@ -719,9 +727,11 @@ export const ProcessDetailSchema = z.object({
 export type ProcessDetail = z.infer<typeof ProcessDetailSchema>;
 
 export async function fetchProcess(correlationKey: string): Promise<ProcessDetail> {
-  const resp = await fetch(`/api/workitems/${encodeURIComponent(correlationKey)}/process`);
-  if (!resp.ok) throw new Error(`process error: HTTP ${resp.status}`);
-  return ProcessDetailSchema.parse(await resp.json());
+  return getJson(
+    `/api/workitems/${encodeURIComponent(correlationKey)}/process`,
+    ProcessDetailSchema,
+    "process",
+  );
 }
 
 /**
@@ -772,9 +782,7 @@ export async function fetchAnomalies(): Promise<Anomaly[]> {
 }
 
 export async function fetchRollups(): Promise<Rollups> {
-  const resp = await fetch("/api/rollups");
-  if (!resp.ok) throw new Error(`rollups error: HTTP ${resp.status}`);
-  return RollupsSchema.parse(await resp.json());
+  return getJson("/api/rollups", RollupsSchema, "rollups");
 }
 
 export const ActionStepSchema = z.object({
@@ -876,9 +884,7 @@ export type ConnectToken = z.infer<typeof ConnectTokenSchema>;
 // The API token shown on the /settings/token copy page (#73). Guarded behind the
 // same gate as the rest of the cockpit UI.
 export async function fetchConnectToken(): Promise<ConnectToken> {
-  const resp = await fetch("/api/settings/token");
-  if (!resp.ok) throw new Error(`token error: HTTP ${resp.status}`);
-  return ConnectTokenSchema.parse(await resp.json());
+  return getJson("/api/settings/token", ConnectTokenSchema, "token");
 }
 
 // Best-effort poll of all upstream services; returns the per-service summary.

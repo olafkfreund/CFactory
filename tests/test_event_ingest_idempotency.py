@@ -137,6 +137,22 @@ def test_event_without_id_logs_ingest_anomaly(store, caplog):
     assert any("missing CloudEvents id" in r.message for r in caplog.records)
 
 
+def test_event_with_only_time_ingests_and_backfills_updated_at(store):
+    """#471: a producer sending CloudEvents `time` (no legacy `updated_at`) still
+    ingests, and `updated_at` is backfilled so existing readers keep working."""
+    e = CompletionEvent(
+        id="time-only-1",
+        correlation_key="142",
+        service=Service.PFACTORY,
+        task_id="pfactory-task",
+        status="emitted",
+        time=datetime(2026, 6, 4, 15, 0, tzinfo=timezone.utc),
+    )
+    _, applied = store.upsert_from_event(e)
+    assert applied is True
+    assert e.updated_at == e.time  # backfilled from CloudEvents time
+
+
 def test_id_present_does_not_log_anomaly(store, caplog):
     """An event WITH a CloudEvents id dedups on the id branch and must NOT trip
     the missing-id ingest anomaly."""

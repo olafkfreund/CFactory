@@ -46,8 +46,14 @@ def _payload(
 
 
 def test_duplicate_event_is_a_noop(store):
-    wi1, applied1 = store.upsert_from_event(_event(Service.PFACTORY, "emitted"))
-    wi2, applied2 = store.upsert_from_event(_event(Service.PFACTORY, "emitted"))
+    # #471 cutover: dedup is on the CloudEvents id; a re-delivered event (same id)
+    # is the no-op case.
+    wi1, applied1 = store.upsert_from_event(
+        _event(Service.PFACTORY, "emitted", event_id="dup-1")
+    )
+    wi2, applied2 = store.upsert_from_event(
+        _event(Service.PFACTORY, "emitted", event_id="dup-1")
+    )
 
     assert applied1 is True
     assert applied2 is False  # the retry is a no-op
@@ -109,31 +115,36 @@ def test_same_status_new_id_is_applied_after_handback(store):
     assert len(store.get("142").timeline) == 2
 
 
-def test_legacy_event_without_id_keeps_status_dedup(store):
-    """Producers that don't emit an id still dedup on (service, status)."""
+def test_event_without_id_is_recorded_not_deduped(store):
+    """#471 cutover: the legacy (service, status) fallback is gone. An id-less
+    event is no longer deduped on that key — it is recorded (better to keep a real
+    event than swallow it onto a removed key)."""
     _, a1 = store.upsert_from_event(_event(Service.PFACTORY, "emitted"))
     _, a2 = store.upsert_from_event(_event(Service.PFACTORY, "emitted"))
-    assert a1 is True and a2 is False
-    assert len(store.get("142").timeline) == 1
+    assert a1 is True and a2 is True  # NOT deduped — both recorded
+    assert len(store.get("142").timeline) == 2
 
 
-def test_legacy_fallback_logs_soak_warning(store, caplog):
-    """#471 soak: an event without a CloudEvents id that reaches the dedup check
-    logs the legacy-fallback warning so falls-through can be measured."""
-    store.upsert_from_event(_event(Service.PFACTORY, "emitted"))  # creates the row
-    with caplog.at_level("WARNING", logger="cfactory.store"):
-        store.upsert_from_event(_event(Service.PFACTORY, "emitted"))  # hits fallback
-    assert any("legacy dedup fallback" in r.message for r in caplog.records)
+def test_event_without_id_logs_ingest_anomaly(store, caplog):
+    """#471 cutover: an event without a CloudEvents id is an ingest anomaly
+    (every producer stamps one) — surfaced as an error, never a silent fallback.
+
+    The anomaly check runs against an existing timeline, so seed the row first.
+    """
+    store.upsert_from_event(_event(Service.PFACTORY, "emitted"))  # seed the row
+    with caplog.at_level("ERROR", logger="cfactory.store"):
+        store.upsert_from_event(_event(Service.PFACTORY, "emitted"))  # hits anomaly
+    assert any("missing CloudEvents id" in r.message for r in caplog.records)
 
 
-def test_id_present_does_not_log_soak_warning(store, caplog):
-    """#471 soak: an event WITH a CloudEvents id dedups on the id branch and must
-    NOT touch the legacy fallback (no warning)."""
+def test_id_present_does_not_log_anomaly(store, caplog):
+    """An event WITH a CloudEvents id dedups on the id branch and must NOT trip
+    the missing-id ingest anomaly."""
     eid = "22222222-2222-4222-8222-222222222222"
     store.upsert_from_event(_event(Service.PFACTORY, "emitted", event_id=eid))
-    with caplog.at_level("WARNING", logger="cfactory.store"):
+    with caplog.at_level("ERROR", logger="cfactory.store"):
         store.upsert_from_event(_event(Service.PFACTORY, "emitted", event_id=eid))
-    assert not any("legacy dedup fallback" in r.message for r in caplog.records)
+    assert not any("missing CloudEvents id" in r.message for r in caplog.records)
 
 
 def test_id_redelivery_via_http_reports_duplicate(client):
@@ -161,8 +172,10 @@ def test_completion_path_accepts_and_threads(client):
 
 
 def test_duplicate_post_reports_duplicate(client):
-    first = client.post("/api/events/completion", json=_payload("pfactory", "emitted"))
-    dup = client.post("/api/events/completion", json=_payload("pfactory", "emitted"))
+    # #471 cutover: a duplicate POST is detected by the CloudEvents id.
+    p = _payload("pfactory", "emitted", event_id="post-dup-1")
+    first = client.post("/api/events/completion", json=p)
+    dup = client.post("/api/events/completion", json=p)
     assert first.json()["status"] == "accepted"
     assert dup.json()["status"] == "duplicate"
 

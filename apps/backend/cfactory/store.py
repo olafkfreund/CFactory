@@ -169,12 +169,14 @@ def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
     count). When the producer also stamps a per-event ``id`` we honour it first
     (re-delivery → no-op).
 
-    For non-worker events: prefers the per-event envelope ``id`` (#468 —
-    AIFactory #466 / TFactory #282): exactly-once on the ``id`` makes the outbox
-    relay's re-delivery a no-op *and* lets a legitimate re-run after handback
-    through (same service + status but a new ``id`` — the old ``(service,
-    status)`` key collided on those). Falls back to the legacy
-    ``(service, correlation_key, status)`` key for producers without an ``id``.
+    For non-worker events the per-event envelope ``id`` (#468 — AIFactory #466 /
+    TFactory #282) is the SOLE dedup key (#471 cutover): exactly-once on the ``id``
+    makes the outbox relay's re-delivery a no-op *and* lets a legitimate re-run
+    after handback through (same service + status but a new ``id``). The legacy
+    ``(service, correlation_key, status)`` fallback was removed — every producer
+    now stamps an ``id``, and that key wrongly collided on legitimate re-runs. A
+    non-worker event WITHOUT an ``id`` is an ingest anomaly (logged), recorded
+    without id-dedup rather than silently collapsed onto the removed legacy key.
     """
     entries = timeline or []
     # Heartbeat samples (``phase:"worker_progress"``) are a high-frequency STREAM:
@@ -192,22 +194,20 @@ def _already_recorded(timeline: list | None, event: CompletionEvent) -> bool:
             and (e.get("worker") or {}).get("worker_id") == wid
             for e in entries
         )
-    # #471 soak instrumentation: every current producer stamps a CloudEvents
-    # ``id`` (AIFactory completion.py, TFactory triager.py), and the ``id`` branch
-    # above handles those — so this legacy ``(service, correlation_key, status)``
-    # fallback should be UNREACHABLE on live traffic. Log when it IS hit so the
-    # cutover (#471) can confirm "zero falls-through to the legacy key" before the
-    # fallback is removed. Grep marker: "legacy dedup fallback".
-    logger.warning(
-        "[#471] legacy dedup fallback hit (event has no CloudEvents id) — "
-        "service=%s correlation_key=%s status=%s",
+    # #471 cutover: the CloudEvents ``id`` is the only dedup key now. A non-worker
+    # event without one is an ingest anomaly — every producer stamps an ``id``, so
+    # this means a producer regressed or a malformed event slipped through. Surface
+    # it (don't silently fall back to the removed legacy key) and record it anyway
+    # (return False) — dropping a real terminal event is worse than a missed dedup.
+    # Grep marker: "missing CloudEvents id".
+    logger.error(
+        "[#471] ingest anomaly: completion event missing CloudEvents id — "
+        "service=%s correlation_key=%s status=%s; recording without id-dedup",
         event.service.value,
         event.correlation_key,
         event.status,
     )
-    return any(
-        e.get("service") == event.service.value and e.get("status") == event.status for e in entries
-    )
+    return False
 
 
 def _apply_worker_progress(prev: dict, event: CompletionEvent) -> dict:
@@ -445,9 +445,7 @@ class WorkItemStore:
                 with self._session.begin() as session:
                     row = self._get_row(session, correlation_key)
                     new_slice = state.model_dump()
-                    existing = (
-                        getattr(row, service.value) if row is not None else None
-                    ) or {}
+                    existing = (getattr(row, service.value) if row is not None else None) or {}
                     # A poll that re-reports the SAME status/phase must NOT reset
                     # the liveness clock (#105). updated_at (onupdate=_now) drives
                     # the stall age, so re-stamping it on every no-op poll makes a
@@ -456,16 +454,13 @@ class WorkItemStore:
                     # cockpit then shows a dead task as "running" indefinitely.
                     # Skip the write entirely when nothing material changed so
                     # updated_at keeps the timestamp of the last REAL transition.
-                    title_needed = bool(title) and not (
-                        row.title if row is not None else None
-                    )
+                    title_needed = bool(title) and not (row.title if row is not None else None)
                     unchanged = (
                         row is not None
                         and not title_needed
                         and existing.get("status") == new_slice.get("status")
                         and existing.get("phase") == new_slice.get("phase")
-                        and (existing.get("usage") or None)
-                        == (new_slice.get("usage") or None)
+                        and (existing.get("usage") or None) == (new_slice.get("usage") or None)
                     )
                     if unchanged:
                         return row.to_model()

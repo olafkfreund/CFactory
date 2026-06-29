@@ -9,11 +9,11 @@ These are skeleton shapes for #5. Persistence + the full field set land in #6
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # The base token-usage shape (RFC-0001 v1.1 `usage` block) is the Factory hub's
 # GENERATED single source of truth, vendored + pinned at
@@ -194,7 +194,12 @@ class CompletionEvent(BaseModel):
     task_id: str
     status: str
     phase: str | None = None
-    updated_at: datetime
+    # #471 cutover: CloudEvents ``time`` is the canonical event timestamp; the
+    # legacy ``updated_at`` is being retired from producers. Accept either —
+    # ``_reconcile_timestamps`` backfills both so existing ``updated_at`` readers
+    # and new ``time`` readers keep working through the cutover.
+    time: datetime | None = None
+    updated_at: datetime | None = None
     usage: TokenUsage | None = None
     # v1.3 live per-worker sub-event. The SAME ``worker`` payload carries two
     # event kinds, distinguished by ``phase``:
@@ -222,6 +227,22 @@ class CompletionEvent(BaseModel):
     # cockpit shows it next to actual rolled-up spend. Optional — absent on every
     # event that carries no routing block, so legacy events ingest unchanged.
     routing: RoutingInfo | None = None
+
+    @model_validator(mode="after")
+    def _reconcile_timestamps(self) -> CompletionEvent:
+        """Keep CloudEvents ``time`` and legacy ``updated_at`` in sync (#471).
+
+        Producers are migrating from ``updated_at`` to CloudEvents ``time``. Accept
+        whichever is present and backfill the other so every existing
+        ``event.updated_at`` reader and any new ``event.time`` reader both work. If
+        neither is present (malformed event) default to now so ingestion never
+        crashes on a timestamp.
+        """
+        if self.updated_at is None:
+            self.updated_at = self.time or datetime.now(UTC)
+        if self.time is None:
+            self.time = self.updated_at
+        return self
 
 
 class ServiceState(BaseModel):

@@ -26,9 +26,10 @@ async def ingest_event(
     event: CompletionEvent,
     store: Annotated[WorkItemStore, Depends(store_dep)],
 ) -> dict[str, str]:
-    """Ingest an RFC-0001 completion event. Idempotent by
-    (service, correlation_key, status): a duplicate is accepted but is a
-    no-op (no timeline append, no re-broadcast). Both ``/api/events`` and the
+    """Ingest an RFC-0001 completion event. Idempotent by the CloudEvents
+    ``id`` (#471 cutover): a re-delivery of the same ``id`` is accepted but is
+    a no-op (no timeline append, no re-broadcast), while a legitimate re-run
+    carries a new ``id`` and is recorded. Both ``/api/events`` and the
     RFC-documented ``/api/events/completion`` resolve here."""
     work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
     if applied:

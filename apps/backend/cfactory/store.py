@@ -375,12 +375,13 @@ class WorkItemStore:
     def upsert_from_event(self, event: CompletionEvent) -> tuple[WorkItem, bool]:
         """Thread a completion event into its WorkItem.
 
-        Idempotent by the envelope ``id`` when present, else the legacy
-        ``(service, correlation_key, status)`` key (see ``_already_recorded``):
-        a duplicate delivery is a no-op — the existing item is returned with
-        ``applied=False`` and the timeline is left untouched, so retried or
-        relay-replayed deliveries don't double-count. Returns
-        ``(work_item, applied)``.
+        Idempotent by the envelope ``id`` (#471 cutover; see
+        ``_already_recorded``): a duplicate delivery is a no-op — the existing
+        item is returned with ``applied=False`` and the timeline is left
+        untouched, so retried or relay-replayed deliveries don't double-count.
+        A non-worker event without an ``id`` is logged as an ingest anomaly and
+        recorded without id-dedup rather than collapsed onto the removed legacy
+        key. Returns ``(work_item, applied)``.
         """
         # Two writers (poll loop + event ingest) can both miss the row and race
         # to INSERT the same key. On the resulting IntegrityError, retry once —

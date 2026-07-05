@@ -8,6 +8,8 @@ import CommandPalette, { type PaletteCommand } from "./CommandPalette";
 import TaskDetail from "./TaskDetail";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
+import NeedsYouView from "./NeedsYouView";
+import { attentionList } from "./needsYou";
 import ServicesView from "./ServicesView";
 import SettingsView from "./SettingsView";
 import RunningTasksView from "./RunningTasksView";
@@ -53,6 +55,7 @@ export default function App() {
   // it stays fresh across refreshes.
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [openTaskKey, setOpenTaskKey] = useState<string | null>(null);
+  const needsCount = useMemo(() => attentionList(items).length, [items]);
   const openTask = openTaskKey
     ? (items.find((w) => w.correlation_key === openTaskKey) ?? null)
     : null;
@@ -171,6 +174,11 @@ export default function App() {
             >
               <Icon size={18} />
               <span>{label}</span>
+              {id === "needs" && needsCount > 0 && (
+                <span className="nav-badge" aria-label={`${needsCount} need attention`}>
+                  {needsCount}
+                </span>
+              )}
             </button>
           ))}
           {OBSERVE_URL && (
@@ -232,6 +240,7 @@ export default function App() {
           <main className="content">
             {error && <div className="banner banner--error">{error}</div>}
             {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
+            {view === "needs" && <NeedsYouView items={items} progress={progress} />}
             {view === "pipeline" && (
               <Board
                 items={items}

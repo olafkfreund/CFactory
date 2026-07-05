@@ -5,6 +5,7 @@ import { overallState, stageState, type TaskState } from "./taskState";
 import type { Health, WorkItem } from "./api";
 import {
   IconAudit,
+  IconBell,
   IconInsights,
   IconPipeline,
   IconRunning,
@@ -15,6 +16,7 @@ import {
 
 export type View =
   | "overview"
+  | "needs"
   | "pipeline"
   | "running"
   | "tokens"
@@ -29,6 +31,7 @@ export type Backend =
 
 export const NAV: { id: View; label: string; Icon: typeof IconPipeline }[] = [
   { id: "overview", label: "Mission Control", Icon: IconInsights },
+  { id: "needs", label: "Needs you", Icon: IconBell },
   { id: "pipeline", label: "Pipeline", Icon: IconPipeline },
   { id: "running", label: "Active tasks", Icon: IconRunning },
   { id: "tokens", label: "Tokens", Icon: IconTokens },

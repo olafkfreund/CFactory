@@ -1609,6 +1609,46 @@ body {
 }
 .cost-stage-v { font: 700 0.78rem var(--font-mono); margin-left: auto; }
 
+/* --- Needs-you inbox (#148) -------------------------------------------- */
+.nav-badge {
+  margin-left: auto; min-width: 1.15rem; height: 1.15rem; padding: 0 0.32rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--amber); color: #1b1c1c;
+  font: 700 0.66rem var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.ny-head { margin-bottom: 1rem; }
+.ny-title { font: 800 1.5rem var(--font-display); margin: 0 0 0.25rem; }
+.ny-sub { color: var(--muted); font-size: 0.86rem; margin: 0; max-width: 64ch; }
+.ny-filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.ny-chip {
+  font-family: var(--font-mono); font-size: 0.72rem; padding: 0.3rem 0.75rem;
+  border-radius: 999px; border: 1px solid var(--border); background: transparent;
+  color: var(--muted); cursor: pointer;
+}
+.ny-chip:hover { color: var(--text); }
+.ny-chip.on { background: var(--panel-2); color: var(--text); }
+.ny-empty {
+  border: 1px dashed var(--border); border-radius: 12px; padding: 2rem 1rem;
+  text-align: center; color: var(--faint); font-size: 0.9rem;
+}
+.ny-list { display: flex; flex-direction: column; gap: 0.7rem; }
+.ny-item {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 0.9rem; align-items: center;
+  border: 1px solid var(--border); border-radius: 11px; background: var(--panel); padding: 0.85rem 1rem;
+}
+.ny-src { width: 10px; height: 10px; border-radius: 50%; flex: none; box-shadow: 0 0 8px currentColor; }
+.ny-item-title { margin: 0; font-size: 0.94rem; font-weight: 700; }
+.ny-why { margin: 0.15rem 0 0; font-size: 0.83rem; color: var(--muted); }
+.ny-meta { display: flex; gap: 0.8rem; align-items: center; margin-top: 0.3rem; font-family: var(--font-mono); font-size: 0.68rem; color: var(--faint); }
+.ny-tag { padding: 0.12rem 0.45rem; border-radius: 999px; border: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.06em; }
+.ny-item--stalled .ny-tag { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+.ny-key { color: var(--cyan); }
+.ny-open {
+  font-family: var(--font-mono); font-size: 0.76rem; padding: 0.38rem 0.85rem;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer;
+}
+.ny-open:hover { color: var(--text); border-color: var(--cyan); }
+
 /* --- Error boundary fallback (#146) ------------------------------------ */
 .eb { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 2rem; background: var(--bg); z-index: 200; }
 .eb-card { width: min(520px, 92vw); border: 1px solid var(--border); border-left: 3px solid var(--red); border-radius: 12px; background: var(--panel); padding: 1.4rem 1.5rem; }

@@ -209,6 +209,51 @@ def test_plan_children_light_from_downstream_workitems(store):
     assert by_id["C3"]["status"] is None  # no emitted WorkItem -> planned/waiting
 
 
+def test_plan_nodes_go_green_when_plan_done(store):
+    """A cleanly finished plan lights every unit green (planned & emitted), even
+    with no downstream build yet — so the plan DAG matches its 'stage complete'
+    frame instead of showing all-grey under a done plan."""
+    _seed_plan(store)
+    done_session = {**_PLAN_SESSION, "board_state": "emitted"}
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport(payload=done_session))
+    out = build_process_detail(store, [pf], "9")
+    nodes = out["graph"]["nodes"]
+    assert nodes and all(n["status"] == "completed" for n in nodes)  # every unit green
+
+
+def test_plan_done_does_not_mask_downstream_failure(store):
+    """The clean-plan default never overrides a real per-node signal: when the plan
+    is done but a child's build failed downstream, that node shows failed while the
+    untouched units stay green."""
+    _seed_plan(store)
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="102",  # C2's emitted issue
+            service=Service.AIFACTORY,
+            task_id="t102",
+            status="failed",
+            phase="coding",
+            updated_at=datetime.fromisoformat("2026-06-05T12:30:00+00:00"),
+        )
+    )
+    done_session = {**_PLAN_SESSION, "board_state": "emitted"}
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport(payload=done_session))
+    out = build_process_detail(store, [pf], "9")
+    by_id = {n["id"]: n for n in out["graph"]["nodes"]}
+    assert by_id["C2"]["status"] == "failed"  # downstream failure wins over clean-plan
+    assert by_id["C1"]["status"] == "completed"  # clean unit still green
+    assert by_id["C3"]["status"] == "completed"
+
+
+def test_plan_nodes_stay_pending_while_plan_in_review(store):
+    """An in-progress plan (human_review) is NOT done, so its units stay pending —
+    the green default only fires on a terminal-clean plan."""
+    _seed_plan(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())  # board_state=human_review
+    out = build_process_detail(store, [pf], "9")
+    assert all(n["status"] is None for n in out["graph"]["nodes"])
+
+
 _TEST_DETAIL = {
     "id": "tspec-1",
     "spec_id": "tspec-1",

@@ -125,6 +125,20 @@ def _plan_child_state(wi: Any) -> tuple[str | None, str | None, str | None]:
     return status, started_at, completed_at
 
 
+def _plan_stage_done(session: dict[str, Any]) -> bool:
+    """True when the plan session itself reached a clean terminal state — its
+    decomposition was reviewed, approved and emitted without failing. Lets the
+    plan-flow nodes light green as *planned cleanly* even before any downstream
+    build state exists, so a finished plan shows every unit that passed planning.
+    A failed or still-in-progress plan (e.g. ``human_review``) returns False, so
+    those nodes stay pending. This is a plan-stage claim (successfully planned),
+    never a verification claim — downstream state still overrides it per node."""
+    raw = str(session.get("board_state") or session.get("status") or "").lower()
+    if not raw or any(w in raw for w in _FAIL_WORDS):
+        return False
+    return any(w in raw for w in _DONE_WORDS)
+
+
 def _build_plan_graph(
     session: dict[str, Any], store: WorkItemStore | None = None
 ) -> dict[str, Any] | None:
@@ -142,6 +156,10 @@ def _build_plan_graph(
     children = epic.get("children") if epic and isinstance(epic.get("children"), list) else []
     emit = session.get("emit_result") if isinstance(session.get("emit_result"), dict) else {}
     child_numbers = emit.get("child_numbers") if isinstance(emit.get("child_numbers"), dict) else {}
+    # Whole-plan clean-completion signal: when set, every unit that has no richer
+    # downstream state is shown as done (it passed planning) so the plan DAG goes
+    # green, matching the "stage complete" frame.
+    plan_done = _plan_stage_done(session)
 
     nodes: list[dict[str, Any]] = []
     for i, c in enumerate(children):
@@ -159,6 +177,12 @@ def _build_plan_graph(
             wi = store.get(str(issue))
             if wi is not None:
                 status, started_at, completed_at = _plan_child_state(wi)
+
+        # No richer downstream state, but the plan finished cleanly → this unit
+        # was successfully planned & emitted: mark it done so the node goes green.
+        # Downstream failure/activity (resolved above) always takes precedence.
+        if status is None and plan_done:
+            status = "completed"
 
         nodes.append(
             {

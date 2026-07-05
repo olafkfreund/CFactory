@@ -55,6 +55,27 @@ export const OBSERVE_URL =
     ? "https://observe.freundcloud.org.uk"
     : import.meta.env.VITE_OBSERVE_URL;
 
+// Portal switcher (#149): the four Factory portals as one product. CFactory is
+// the current ("cockpit") entry; the others link out (build-time overridable via
+// VITE_*_URL, defaulting to the live hosts). First step toward the unified shell —
+// SSO handoff + a shared shell package + global search are tracked follow-up.
+// import.meta.env values are typed `any`; keep the URLs strictly `string`.
+const envUrl = (v: unknown, fallback: string): string => (typeof v === "string" && v ? v : fallback);
+
+export const PORTALS: {
+  key: string;
+  label: string;
+  svc: string;
+  accent: string;
+  url: string;
+  current: boolean;
+}[] = [
+  { key: "plan", label: "Plan", svc: "PFactory", accent: "var(--plan)", url: envUrl(import.meta.env.VITE_PFACTORY_URL, "https://pfactory.freundcloud.org.uk"), current: false },
+  { key: "build", label: "Build", svc: "AIFactory", accent: "var(--code)", url: envUrl(import.meta.env.VITE_AIFACTORY_URL, "https://aifactory.freundcloud.org.uk"), current: false },
+  { key: "test", label: "Test", svc: "TFactory", accent: "var(--test)", url: envUrl(import.meta.env.VITE_TFACTORY_URL, "https://tfactory.freundcloud.org.uk"), current: false },
+  { key: "cockpit", label: "Cockpit", svc: "CFactory", accent: "var(--cyan)", url: "", current: true },
+];
+
 export type StageKey = (typeof STAGES)[number]["key"];
 
 export const TICKER_PREF = "cfactory-ticker-open";

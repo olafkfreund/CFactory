@@ -7,6 +7,7 @@ import AuditView from "./AuditView";
 import CommandPalette, { type PaletteCommand } from "./CommandPalette";
 import TaskDetail from "./TaskDetail";
 import ThemeToggle from "./ThemeToggle";
+import PortalSwitcher from "./PortalSwitcher";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import NeedsYouView from "./NeedsYouView";
@@ -208,6 +209,7 @@ export default function App() {
 
       <div className="main">
         <header className="topbar">
+          <PortalSwitcher />
           <div className="tabs">
             <span className="tab active">{NAV.find((n) => n.id === view)?.label}</span>
           </div>

@@ -144,6 +144,17 @@ body {
   padding: 0.6rem 1.4rem; border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 60%, transparent); backdrop-filter: blur(6px);
 }
+/* Portal switcher (#149): the four portals as one product, in the topbar. */
+.portal-switch { display: inline-flex; align-items: center; gap: 0.2rem; padding: 0.2rem; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); }
+.portal-opt {
+  display: inline-flex; align-items: center; gap: 0.4rem; text-decoration: none;
+  font: 600 0.72rem var(--font-mono); padding: 0.28rem 0.6rem; border-radius: 6px;
+  color: var(--muted);
+}
+.portal-opt:hover { color: var(--text); background: var(--panel-2); }
+.portal-opt.on { color: var(--text); background: var(--panel-2); cursor: default; }
+.portal-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 6px currentColor; }
+
 /* Theme toggle (#150): compact Dark/Light/System segmented control in the topbar. */
 .theme-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .theme-opt {
@@ -1042,6 +1053,9 @@ body {
   .tabs { display: none; }
   .cmdk-trigger span, .cmdk-trigger kbd { display: none; }
   .cmdk-trigger { padding: 0.4rem; }
+  .topbar { flex-wrap: wrap; }
+  .portal-label { display: none; } /* dots-only switcher on phones */
+  .portal-opt { padding: 0.28rem 0.4rem; }
   .content { padding: 0.9rem 0.9rem 2rem; }
   .mc-grid, .rt-grid, .svc-grid, .mc-agents, .mc-stats, .td-stages,
   .board-finished-grid, .td-evidence-grid { grid-template-columns: 1fr; }

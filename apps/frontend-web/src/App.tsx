@@ -2,7 +2,10 @@
 // the pipeline strip, the routed views, the event ticker, the Copilot FAB and the
 // toast stack. The data/notification plumbing lives in useDashboard, the board in
 // Board.tsx, and the shared types/constants/helpers in dashboard.ts (#115).
+import { useEffect, useMemo, useState } from "react";
 import AuditView from "./AuditView";
+import CommandPalette, { type PaletteCommand } from "./CommandPalette";
+import TaskDetail from "./TaskDetail";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import ServicesView from "./ServicesView";
@@ -11,7 +14,7 @@ import RunningTasksView from "./RunningTasksView";
 import TokensView from "./TokensView";
 import PipelineStrip from "./PipelineStrip";
 import EventTicker from "./EventTicker";
-import { IconBrand, IconExternal, IconRobot, IconLogout, IconRefresh } from "./icons";
+import { IconBrand, IconExternal, IconRobot, IconLogout, IconRefresh, IconPipeline } from "./icons";
 import { NAV, OBSERVE_URL } from "./dashboard";
 import { useDashboard } from "./useDashboard";
 import { Board } from "./Board";
@@ -43,6 +46,108 @@ export default function App() {
     onSelectStage,
     onRefresh,
   } = useDashboard();
+
+  // Command palette (#147): ⌘K / Ctrl-K toggles it anywhere. Task-open is held at
+  // the shell so the palette can surface a task in TaskDetail without touching the
+  // Board/Running views; the item is re-derived from the live list each render so
+  // it stays fresh across refreshes.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [openTaskKey, setOpenTaskKey] = useState<string | null>(null);
+  const openTask = openTaskKey
+    ? (items.find((w) => w.correlation_key === openTaskKey) ?? null)
+    : null;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const commands: PaletteCommand[] = useMemo(() => {
+    const nav: PaletteCommand[] = NAV.map(({ id, label, Icon }) => ({
+      id: `nav-${id}`,
+      group: "Go to",
+      label,
+      keywords: label,
+      Icon,
+      run: () => {
+        setView(id);
+      },
+    }));
+    const actions: PaletteCommand[] = [
+      {
+        id: "act-refresh",
+        group: "Actions",
+        label: "Refresh data",
+        keywords: "reload sync",
+        Icon: IconRefresh,
+        run: () => {
+          void onRefresh();
+        },
+      },
+      {
+        id: "act-copilot",
+        group: "Actions",
+        label: "Toggle Copilot",
+        keywords: "assistant chat ask",
+        Icon: IconRobot,
+        run: () => {
+          setCopilotOpen((o) => !o);
+        },
+      },
+      {
+        id: "act-plan",
+        group: "Actions",
+        label: "Filter board · Plan stage",
+        hint: "1",
+        keywords: "pfactory pipeline plan",
+        Icon: IconPipeline,
+        run: () => {
+          onSelectStage("pfactory");
+        },
+      },
+      {
+        id: "act-code",
+        group: "Actions",
+        label: "Filter board · Code stage",
+        hint: "2",
+        keywords: "aifactory pipeline build code",
+        Icon: IconPipeline,
+        run: () => {
+          onSelectStage("aifactory");
+        },
+      },
+      {
+        id: "act-test",
+        group: "Actions",
+        label: "Filter board · Test stage",
+        hint: "3",
+        keywords: "tfactory pipeline verify test",
+        Icon: IconPipeline,
+        run: () => {
+          onSelectStage("tfactory");
+        },
+      },
+    ];
+    if (OBSERVE_URL) {
+      actions.push({
+        id: "act-observe",
+        group: "Actions",
+        label: "Open Observe (metrics)",
+        keywords: "openobserve otlp logs metrics",
+        Icon: IconExternal,
+        run: () => {
+          window.open(OBSERVE_URL, "_blank", "noopener,noreferrer");
+        },
+      });
+    }
+    return [...nav, ...actions];
+  }, [setView, onRefresh, setCopilotOpen, onSelectStage]);
 
   return (
     <div className="shell">
@@ -98,6 +203,18 @@ export default function App() {
             <span className="tab active">{NAV.find((n) => n.id === view)?.label}</span>
           </div>
           <div className="topbar-right">
+            <button
+              className="cmdk-trigger"
+              onClick={() => {
+                setPaletteOpen(true);
+              }}
+              title="Search or jump to anything"
+              aria-label="Open command palette"
+            >
+              <span className="cmdk-trigger-q" aria-hidden="true" />
+              <span>Search…</span>
+              <kbd>⌘K</kbd>
+            </button>
             <span className={`live ${live ? "live--on" : "live--off"}`}>
               {live ? "● live" : "○ offline"}
             </span>
@@ -170,6 +287,31 @@ export default function App() {
       </button>
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Command palette (⌘K) + the task it opens, held at the shell (#147) */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => {
+          setPaletteOpen(false);
+        }}
+        commands={commands}
+        items={items}
+        onOpenTask={(wi) => {
+          setOpenTaskKey(wi.correlation_key);
+        }}
+      />
+      {openTask && (
+        <TaskDetail
+          wi={openTask}
+          lp={progress[openTask.correlation_key]}
+          onClose={() => {
+            setOpenTaskKey(null);
+          }}
+          onActed={() => {
+            void onRefresh();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -232,6 +232,15 @@ export default function TaskDetail({
   const subFailed = subStates.filter((s) => s === "failed").length;
   const stageFailed = STAGES.some((s) => stageState(wi[s.key].status) === "failed");
 
+  // Stage-level completion, keyed by the DAG's stage vocabulary (plan/code/test)
+  // — the flow diagram tints its frame green when its stage is done, while its
+  // per-node states stay honest below (#planflow-green).
+  const stageDone = {
+    plan: stageState(wi.pfactory.status) === "done",
+    code: stageState(wi.aifactory.status) === "done",
+    test: stageState(wi.tfactory.status) === "done",
+  };
+
   const procAvailable = proc != null && proc.available !== false;
 
   // RFC-0015 §4 D2: show the traceability matrix once we have rows, OR — so a
@@ -285,13 +294,18 @@ export default function TaskDetail({
           <div className="td-stages">
             {STAGES.map((s) => {
               const st = wi[s.key];
+              // Color the status by lifecycle state so a clean "done" reads green
+              // at a glance (running=cyan, failed=red); planned/idle stay neutral.
+              const cardState = stageState(st.status);
               return (
                 <div className="td-stage" key={s.key}>
                   <div className="td-stage-h">
                     <span className="td-stage-label">{s.label}</span>
                     <span className="td-stage-svc">{s.svc}</span>
                   </div>
-                  <div className="td-stage-status">{st.status || "—"}</div>
+                  <div className={`td-stage-status td-stage-status--${cardState}`}>
+                    {st.status || "—"}
+                  </div>
                   {st.phase && <div className="td-stage-phase">{st.phase}</div>}
                   {st.extra?.access?.val3 === "not_run" && (
                     <div
@@ -341,7 +355,7 @@ export default function TaskDetail({
 
           {/* Live execution diagram — animated DAG with a plan/code/test stage
               switcher; defaults to the furthest stage (#94). */}
-          <StageFlow graphs={proc?.graphs} fallback={proc?.graph} />
+          <StageFlow graphs={proc?.graphs} fallback={proc?.graph} stageDone={stageDone} />
 
           {/* Test evidence — the browser-lane screenshots + recordings TFactory
               captured, proxied through CFactory so they render here on the

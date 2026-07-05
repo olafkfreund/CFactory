@@ -739,6 +739,11 @@ body {
 .td-stage-label { font-weight: 600; font-size: 0.78rem; }
 .td-stage-svc { color: var(--faint); font-size: 0.7rem; font-family: var(--font-mono); }
 .td-stage-status { color: var(--text); font-family: var(--font-mono); font-size: 0.8rem; margin-top: 0.25rem; }
+/* State-colored stage status: a clean "done" reads green at a glance; running is
+   cyan, failed red. Planned/queued/review/idle stay neutral (no false signal). */
+.td-stage-status--done { color: var(--green); }
+.td-stage-status--running { color: var(--cyan); }
+.td-stage-status--failed { color: var(--red); }
 .td-stage-phase { color: var(--code); font-size: 0.7rem; }
 /* RFC-0007 #88: honest credentialed-lane (VAL-3) gap on the test stage. */
 .td-stage-access { color: var(--warn, #d9822b); font-size: 0.7rem; margin-top: 0.2rem; }
@@ -850,6 +855,19 @@ body {
   font-family: var(--font-mono); font-weight: 700; font-size: 0.7rem; color: var(--muted);
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
   padding: 0.05rem 0.45rem; letter-spacing: 0.02em;
+}
+/* Stage complete: the stage itself finished cleanly. A green frame round the
+   whole diagram + a small flag — a stage-level cue, NOT a per-node claim (the
+   nodes keep their own honest states inside). */
+.tf-stage-done-flag {
+  font: 700 0.6rem var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--green); padding: 0.05rem 0.4rem; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--green) 40%, transparent);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+.tf--stage-done .tf-canvas {
+  border-color: color-mix(in srgb, var(--green) 45%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 18%, transparent);
 }
 .tf-legend { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
 .tf-leg {

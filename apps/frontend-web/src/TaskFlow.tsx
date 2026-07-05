@@ -163,9 +163,15 @@ const SWITCH_ORDER: Array<"plan" | "code" | "test"> = ["plan", "code", "test"];
 export function StageFlow({
   graphs,
   fallback,
+  stageDone,
 }: {
   graphs?: Partial<Record<"plan" | "code" | "test", ProcessGraph>>;
   fallback?: ProcessGraph | null;
+  // Per-stage "the stage itself is complete" flag, keyed by stage. Drives the
+  // green frame + "stage complete" cue on the DAG — a signal that lives at the
+  // stage level (the work-item status), distinct from the per-node states (which
+  // stay honest: a planned-but-unverified AC node is not painted done).
+  stageDone?: Partial<Record<"plan" | "code" | "test", boolean>>;
 }) {
   const available = SWITCH_ORDER.filter((s) => graphs?.[s]);
   const furthest = available.length ? available[available.length - 1] : null;
@@ -177,7 +183,10 @@ export function StageFlow({
   }, [furthest, graphs]);
 
   // No multi-stage map → render the single furthest graph (back-compat).
-  if (!available.length) return fallback ? <TaskFlow graph={fallback} /> : null;
+  if (!available.length)
+    return fallback ? (
+      <TaskFlow graph={fallback} stageDone={stageDone?.[fallback.stage]} />
+    ) : null;
 
   const cur = sel && graphs?.[sel] ? sel : furthest!;
   return (
@@ -197,12 +206,18 @@ export function StageFlow({
           ))}
         </div>
       )}
-      <TaskFlow graph={graphs![cur]} />
+      <TaskFlow graph={graphs![cur]} stageDone={stageDone?.[cur]} />
     </div>
   );
 }
 
-export default function TaskFlow({ graph }: { graph: ProcessGraph | null | undefined }) {
+export default function TaskFlow({
+  graph,
+  stageDone = false,
+}: {
+  graph: ProcessGraph | null | undefined;
+  stageDone?: boolean;
+}) {
   const reduced = useReducedMotion() ?? false;
 
   const layout = useMemo(() => (graph && graph.nodes?.length ? layoutGraph(graph) : null), [graph]);
@@ -289,7 +304,7 @@ export default function TaskFlow({ graph }: { graph: ProcessGraph | null | undef
   const hasLive = counts.active > 0 || counts.stalled > 0;
 
   return (
-    <section className="td-section tf">
+    <section className={`td-section tf${stageDone ? " tf--stage-done" : ""}`}>
       <div className="tf-head">
         <h3>
           <span className="tf-stage-dot" style={{ background: accent }} />
@@ -297,6 +312,14 @@ export default function TaskFlow({ graph }: { graph: ProcessGraph | null | undef
           <span className="tf-progress">
             {done}/{total}
           </span>
+          {/* Stage-level completion cue. Deliberately "stage complete", not
+              "all passed": the stage finished cleanly, but the per-node states
+              below stay honest about what was actually verified. */}
+          {stageDone && (
+            <span className="tf-stage-done-flag" title="This stage completed cleanly">
+              stage complete
+            </span>
+          )}
         </h3>
         <Legend counts={counts} />
       </div>

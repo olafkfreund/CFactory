@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import AuditView from "./AuditView";
 import CommandPalette, { type PaletteCommand } from "./CommandPalette";
 import TaskDetail from "./TaskDetail";
+import ThemeToggle from "./ThemeToggle";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import NeedsYouView from "./NeedsYouView";
@@ -211,6 +212,7 @@ export default function App() {
             <span className="tab active">{NAV.find((n) => n.id === view)?.label}</span>
           </div>
           <div className="topbar-right">
+            <ThemeToggle />
             <button
               className="cmdk-trigger"
               onClick={() => {

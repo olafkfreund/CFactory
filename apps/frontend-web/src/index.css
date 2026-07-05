@@ -34,6 +34,35 @@
   --font-ui: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
 }
 
+/* Light mode (#150): the whole stylesheet consumes var(--x), so re-defining the
+   tokens on :root.light flips the cockpit to the Gruvbox light palette with no
+   rule changes. Same family + per-service accents as the sibling portals; accents
+   darkened for AA contrast on the cream ground. Toggle in theme.ts / ThemeToggle. */
+:root.light {
+  --bg: #fbf1c7;          /* light bg0  */
+  --sidebar: #f2e5bc;     /* light bg0_s */
+  --panel: #f9f5d7;       /* light bg0_h / card */
+  --panel-2: #ebdbb2;     /* light bg1  */
+  --card: #f9f5d7;
+  --border: #d5c4a1;      /* light bg2  */
+  --border-soft: #ebdbb2;
+  --text: #3c3836;        /* light fg1  */
+  --muted: #665c54;       /* light fg3  */
+  --faint: #7c6f64;       /* darker gray for AA on cream */
+
+  --cyan: #427b58;        /* light aqua — CFactory accent */
+  --violet: #8f3f71;      /* light purple */
+  --brand: linear-gradient(135deg, #427b58, #689d6a);
+
+  --plan: #8f3f71;   /* PFactory — light purple */
+  --code: #b57614;   /* AIFactory — light yellow */
+  --test: #79740e;   /* TFactory — light green */
+  --green: #79740e;
+  --red: #9d0006;
+  --amber: #b57614;
+  --yellow: #b57614;
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
@@ -115,6 +144,16 @@ body {
   padding: 0.6rem 1.4rem; border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 60%, transparent); backdrop-filter: blur(6px);
 }
+/* Theme toggle (#150): compact Dark/Light/System segmented control in the topbar. */
+.theme-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.theme-opt {
+  font: 600 0.7rem var(--font-mono); padding: 0.32rem 0.55rem; border: 0; cursor: pointer;
+  background: transparent; color: var(--faint); border-left: 1px solid var(--border);
+}
+.theme-opt:first-child { border-left: 0; }
+.theme-opt:hover { color: var(--text); }
+.theme-opt.on { background: var(--panel-2); color: var(--text); }
+
 .tabs { display: flex; gap: 0.4rem; }
 .tab {
   font: 600 0.78rem var(--font-mono); padding: 0.35rem 0.8rem; border-radius: 8px;

@@ -6,6 +6,23 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="theme-color" content="#282828" />
     <title>CFactory — Cockpit</title>
+    <script>
+      // Pre-paint theme guard (#150): apply the stored light/dark/system choice
+      // before React mounts so there's no flash. Mirrors src/theme.ts.
+      (function () {
+        try {
+          var t = localStorage.getItem("cfactory-theme") || "dark";
+          var light =
+            t === "light" ||
+            (t === "system" &&
+              window.matchMedia("(prefers-color-scheme: light)").matches);
+          if (light) {
+            document.documentElement.classList.add("light");
+            document.documentElement.setAttribute("data-theme", "light");
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

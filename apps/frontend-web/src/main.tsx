@@ -3,8 +3,13 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import TokenPage from "./TokenPage";
 import ErrorBoundary from "./ErrorBoundary";
+import { applyTheme, storedTheme } from "./theme";
 import { startVersionWatch } from "./versionWatch";
 import "./index.css";
+
+// Apply the stored light/dark/system choice (the pre-paint guard in index.html
+// already did this to avoid a flash; this keeps class + data-theme consistent).
+applyTheme(storedTheme());
 
 const root = document.getElementById("root");
 if (!root) {

@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import TokenPage from "./TokenPage";
+import ErrorBoundary from "./ErrorBoundary";
 import { startVersionWatch } from "./versionWatch";
 import "./index.css";
 
@@ -18,5 +19,9 @@ startVersionWatch();
 const isTokenPage = window.location.pathname.replace(/\/+$/, "") === "/settings/token";
 
 createRoot(root).render(
-  <StrictMode>{isTokenPage ? <TokenPage /> : <App />}</StrictMode>,
+  <StrictMode>
+    <ErrorBoundary label={isTokenPage ? "token page" : "cockpit"}>
+      {isTokenPage ? <TokenPage /> : <App />}
+    </ErrorBoundary>
+  </StrictMode>,
 );

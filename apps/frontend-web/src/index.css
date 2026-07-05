@@ -1609,6 +1609,17 @@ body {
 }
 .cost-stage-v { font: 700 0.78rem var(--font-mono); margin-left: auto; }
 
+/* --- Error boundary fallback (#146) ------------------------------------ */
+.eb { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 2rem; background: var(--bg); z-index: 200; }
+.eb-card { width: min(520px, 92vw); border: 1px solid var(--border); border-left: 3px solid var(--red); border-radius: 12px; background: var(--panel); padding: 1.4rem 1.5rem; }
+.eb-title { font: 800 1.1rem var(--font-display); color: var(--text); margin-bottom: 0.5rem; }
+.eb-msg { color: var(--muted); font-size: 0.9rem; margin: 0 0 0.9rem; }
+.eb-detail { font-family: var(--font-mono); font-size: 0.76rem; color: var(--amber); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.7rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0 0 1rem; }
+.eb-actions { display: flex; gap: 0.6rem; }
+.eb-btn { font-family: var(--font-mono); font-size: 0.82rem; padding: 0.45rem 0.9rem; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; }
+.eb-btn:hover { color: var(--text); border-color: var(--cyan); }
+.eb-btn--primary { background: var(--cyan); border-color: var(--cyan); color: #0c0c0e; font-weight: 600; }
+
 /* --- Command palette (⌘K, #147) ---------------------------------------- */
 /* Topbar trigger — a quiet affordance that advertises the shortcut. */
 .cmdk-trigger {

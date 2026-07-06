@@ -308,9 +308,8 @@ export default function App() {
           setPaletteOpen(false);
         }}
         commands={commands}
-        items={items}
-        onOpenTask={(wi) => {
-          setOpenTaskKey(wi.correlation_key);
+        onOpenTask={(correlationKey) => {
+          setOpenTaskKey(correlationKey);
         }}
       />
       {openTask && (

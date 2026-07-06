@@ -56,7 +56,13 @@ export default function App() {
   // Board/Running views; the item is re-derived from the live list each render so
   // it stays fresh across refreshes.
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [openTaskKey, setOpenTaskKey] = useState<string | null>(null);
+  // Deep-link (#149): another portal can jump straight to a task's cross-portal
+  // view via /?task=<key>. Seed the open task from the URL on first render; the
+  // param is stripped just after (below) so it doesn't linger on refresh/close.
+  const [openTaskKey, setOpenTaskKey] = useState<string | null>(() => {
+    const t = new URLSearchParams(window.location.search).get("task");
+    return t && t.trim() ? t.trim() : null;
+  });
   const needsCount = useMemo(() => attentionList(items).length, [items]);
   const openTask = openTaskKey
     ? (items.find((w) => w.correlation_key === openTaskKey) ?? null)
@@ -71,6 +77,16 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Strip the ?task= deep-link param after it has seeded the open task, so a
+  // later refresh or close returns to the plain dashboard URL.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has("task")) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("task");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    }
   }, []);
 
   const commands: PaletteCommand[] = useMemo(() => {

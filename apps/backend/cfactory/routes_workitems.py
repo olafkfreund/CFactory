@@ -22,6 +22,7 @@ from .copilot.tools import (
     worker_progress,
 )
 from .copilot.tools import rollups as compute_rollups
+from .needs_you import needs_you_count
 from .progress import LiveProgressHub
 from .search import search_workitems
 from .store import WorkItemStore, compute_liveness
@@ -62,6 +63,16 @@ def search(
     """
     results = search_workitems(store.list(), q, max(1, min(limit, 50)))
     return {"query": q, "count": len(results), "results": results}
+
+
+@router.get("/api/needs-you/count")
+def needs_you(store: Annotated[WorkItemStore, Depends(store_dep)]) -> dict[str, int]:
+    """Fleet count of work items blocked on a human (review gates + stalls, #148).
+
+    Surfaced as a badge in every portal's shared top bar; the forks proxy this so
+    the "N need you" number is consistent across the family.
+    """
+    return {"count": needs_you_count(store.list())}
 
 
 @router.get("/api/rollups")

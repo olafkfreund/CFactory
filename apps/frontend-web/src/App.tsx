@@ -225,7 +225,7 @@ export default function App() {
 
       <div className="main">
         <header className="topbar">
-          <PortalSwitcher />
+          <PortalSwitcher needsCount={needsCount} />
           <div className="tabs">
             <span className="tab active">{NAV.find((n) => n.id === view)?.label}</span>
           </div>

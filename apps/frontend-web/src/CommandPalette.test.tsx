@@ -2,21 +2,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import CommandPalette, { type PaletteCommand } from "./CommandPalette";
-import type { WorkItem } from "./api";
 
 // Command palette (#147). Rendered to static markup (react-dom/server, no jsdom —
-// matches the other frontend tests). We assert the closed/open contract, that
-// commands render grouped, and that tasks only surface once there's a query — the
-// bare palette must not dump every work item.
+// matches the other frontend tests). We assert the closed/open contract and that
+// commands render grouped. Federated task results (#149) arrive via a debounced
+// /api/search effect, which react-dom/server does not run, so the task lane is
+// covered by the backend search tests rather than here.
 const cmds: PaletteCommand[] = [
   { id: "nav-overview", group: "Go to", label: "Mission Control", run: () => {} },
   { id: "act-refresh", group: "Actions", label: "Refresh data", hint: "R", run: () => {} },
 ];
-
-const items = [
-  { correlation_key: "006", title: "Orders Total API" },
-  { correlation_key: "004", title: "Orders webhook consumer" },
-] as unknown as WorkItem[];
 
 describe("CommandPalette", () => {
   it("renders nothing when closed", () => {
@@ -25,7 +20,6 @@ describe("CommandPalette", () => {
         open={false}
         onClose={() => {}}
         commands={cmds}
-        items={items}
         onOpenTask={() => {}}
       />,
     );
@@ -38,7 +32,6 @@ describe("CommandPalette", () => {
         open
         onClose={() => {}}
         commands={cmds}
-        items={items}
         onOpenTask={() => {}}
       />,
     );
@@ -46,8 +39,8 @@ describe("CommandPalette", () => {
     expect(html).toContain("Mission Control");
     expect(html).toContain("Go to");
     expect(html).toContain("Actions");
-    // tasks are query-gated → the work-item titles must not appear on a bare open
-    expect(html).not.toContain("Orders Total API");
+    // tasks are query-gated → the Tasks group must not appear on a bare open
+    expect(html).not.toContain("Tasks");
     // the first row is selected by default
     expect(html).toContain('aria-selected="true"');
   });

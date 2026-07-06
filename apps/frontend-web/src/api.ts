@@ -892,3 +892,34 @@ export async function refresh(): Promise<Record<string, unknown>> {
   const body = z.object({ refreshed: z.record(z.unknown()) }).parse(await resp.json());
   return body.refreshed;
 }
+
+// --- Federated search (#149) ----------------------------------------------
+
+// One ranked hit from the cockpit's cross-portal search. The cockpit already
+// aggregates every producer (Plan/Build/Test) into one store, so a single query
+// spans all four portals; `services` names which portals carry state and
+// `matched_on` explains why it ranked (key/title/repo/state).
+export const SearchResultSchema = z.object({
+  correlation_key: z.string(),
+  title: z.string().nullable(),
+  services: z.array(z.string()),
+  repo: z.string().nullable(),
+  status: z.string().nullable(),
+  score: z.number(),
+  matched_on: z.array(z.string()),
+  updated_at: z.string().nullable(),
+});
+export type SearchResult = z.infer<typeof SearchResultSchema>;
+
+const SearchResponseSchema = z.object({
+  query: z.string(),
+  count: z.number(),
+  results: z.array(SearchResultSchema),
+});
+
+// Federated search across all portals' work. Blank query returns nothing.
+export async function searchWorkItems(q: string, limit = 20): Promise<SearchResult[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  const body = await getJson(`/api/search?${params.toString()}`, SearchResponseSchema, "search");
+  return body.results;
+}

@@ -23,6 +23,7 @@ from .copilot.tools import (
 )
 from .copilot.tools import rollups as compute_rollups
 from .progress import LiveProgressHub
+from .search import search_workitems
 from .store import WorkItemStore, compute_liveness
 from .task_process import build_process_detail
 
@@ -45,6 +46,22 @@ def list_workitems(store: Annotated[WorkItemStore, Depends(store_dep)]) -> dict[
         "items": out,
         "stalled_count": sum(1 for d in out if d["liveness"]["stalled"]),
     }
+
+
+@router.get("/api/search")
+def search(
+    store: Annotated[WorkItemStore, Depends(store_dep)],
+    q: str = "",
+    limit: int = 20,
+) -> dict[str, object]:
+    """Federated cross-portal search over the aggregated work-item store (#149).
+
+    Ranks every ingested item (Plan/Build/Test) by relevance to ``q`` and
+    returns the top ``limit``; each result deep-links back via its
+    ``correlation_key``. A blank ``q`` returns an empty result set.
+    """
+    results = search_workitems(store.list(), q, max(1, min(limit, 50)))
+    return {"query": q, "count": len(results), "results": results}
 
 
 @router.get("/api/rollups")

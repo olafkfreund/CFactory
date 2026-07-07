@@ -2,7 +2,7 @@
 layout: post
 title: "The cockpit becomes the shell: one screen to run the whole factory"
 subtitle: "A fleet-wide command palette, a 'needs you' inbox, a portal switcher, and a full light mode land in Mission Control — with a one-page showcase ready to download."
-date: 2026-07-07 12:00:00
+date: 2026-07-07 06:00:00
 author: Factory Team
 ---
 

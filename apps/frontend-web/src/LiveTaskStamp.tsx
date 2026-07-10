@@ -18,6 +18,7 @@
 
 import { useMemo } from "react";
 import type { ProgressSample, WorkerRow, WorkItem } from "./api";
+import { fmtCost, fmtElapsed, fmtTokens } from "./format";
 
 // --- Pure, unit-testable derivation --------------------------------------
 
@@ -95,28 +96,6 @@ export function deriveSparklineSeries(
   return { series: cumulativeCost, dense: false };
 }
 
-// --- Tiny formatters (mirror TokensView's house style) -------------------
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(Math.round(n));
-}
-
-function fmtCost(n: number): string {
-  // Sub-cent costs (common for a single Ollama/short worker) shouldn't read $0.00.
-  if (n > 0 && n < 0.01) return "<$0.01";
-  return `$${n.toFixed(2)}`;
-}
-
-function fmtElapsed(sec: number | null): string {
-  if (sec == null) return "—";
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return `${h}h ${m}m`;
-}
 
 // --- Sparkline (hand-rolled SVG, no chart lib) ---------------------------
 //

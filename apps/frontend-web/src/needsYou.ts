@@ -6,6 +6,7 @@
 // finished — is not in the inbox.
 import { activeStage, overallState, stageState } from "./taskState";
 import type { WorkItem } from "./api";
+import { fmtAge } from "./format";
 
 export type AttentionKind = "approval" | "review" | "stalled";
 export type Stage = "plan" | "code" | "test";
@@ -26,17 +27,6 @@ const STAGE_BY_KEY: Record<
   aifactory: { stage: "code", service: "AIFactory" },
   tfactory: { stage: "test", service: "TFactory" },
 };
-
-/** Compact "3m" / "2h" / "1d" from a second count, for the reason line. */
-export function fmtAge(sec: number): string {
-  if (!Number.isFinite(sec) || sec < 0) return "";
-  if (sec < 90) return `${String(Math.round(sec))}s`;
-  const m = sec / 60;
-  if (m < 90) return `${String(Math.round(m))}m`;
-  const h = m / 60;
-  if (h < 36) return `${String(Math.round(h))}h`;
-  return `${String(Math.round(h / 24))}d`;
-}
 
 /**
  * The single most pressing reason this item needs a human, or null. Stalled wins

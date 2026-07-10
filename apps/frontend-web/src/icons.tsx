@@ -35,12 +35,6 @@ export const IconPipeline = (p: IconProps) => (
     <rect x="16" y="4" width="5" height="13" rx="1" />
   </Svg>
 );
-export const IconCopilot = (p: IconProps) => (
-  <Svg {...p}>
-    <path d="M12 3l1.8 4.7L18.5 9.5 13.8 11.3 12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" />
-    <path d="M19 15l.7 1.8L21.5 17.5l-1.8.7L19 20l-.7-1.8L16.5 17.5l1.8-.7z" />
-  </Svg>
-);
 export const IconInsights = (p: IconProps) => (
   <Svg {...p}>
     <path d="M3 12h3l2.5 6 5-13 2.5 7H21" />

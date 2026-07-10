@@ -7,6 +7,7 @@ import { displayTitle, keySlug } from "./correlationKey";
 import TaskDetail from "./TaskDetail";
 import AgentConsoleModal from "./AgentConsoleModal";
 import LiveTaskStamp from "./LiveTaskStamp";
+import { fmtAge } from "./format";
 
 type IconCmp = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 type Filter = "active" | "running" | "review" | "failed" | "done";
@@ -65,17 +66,6 @@ function buildRow(wi: WorkItem, lp: LiveProgress | undefined): Row | null {
 }
 
 const ORDER: Record<TaskState, number> = { failed: 0, running: 1, review: 2, queued: 3, done: 4, idle: 5 };
-
-// Compact human age for the stalled badge (#105): "18m", "2h", "1d".
-function fmtAge(seconds: number): string {
-  const s = Math.max(0, Math.round(seconds));
-  if (s < 90) return `${s}s`;
-  const m = Math.round(s / 60);
-  if (m < 90) return `${m}m`;
-  const h = Math.round(m / 60);
-  if (h < 36) return `${h}h`;
-  return `${Math.round(h / 24)}d`;
-}
 
 export default function RunningTasksView({
   items,

@@ -39,7 +39,7 @@ export function overallState(states: TaskState[]): TaskState {
 
 /** A stage is "active" (live work, not stale) when it's engaged but not yet
  *  terminal — i.e. running, in review, or queued. done/failed/idle are stale. */
-export function isActiveState(s: TaskState): boolean {
+function isActiveState(s: TaskState): boolean {
   return s === "running" || s === "review" || s === "queued";
 }
 

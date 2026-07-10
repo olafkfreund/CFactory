@@ -8,7 +8,6 @@
 #   securityContext — non-root defaults; do not relax without review
 #   service         — ClusterIP by default
 #   serviceAccount  — dedicated SA, no automount of API token
-#   probes          — liveness/readiness hitting /health
 #   config          — CFACTORY_* runtime configuration (upstream URLs etc.)
 #   apiKeys         — scoped API keys (CFACTORY_API_KEYS) via Secret
 #   database        — CFACTORY_DATABASE_URL via Secret
@@ -21,7 +20,6 @@ image:
   repository: ghcr.io/dataseeek/cfactory
   tag: ""  # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
-  pullSecrets: []
 
 # v0.x: the cockpit WebSocket fan-out is single-replica only; >1 will need
 # a shared pub/sub backend. Keep at 1 until then.
@@ -68,20 +66,6 @@ serviceAccount:
   annotations: {}
   # The app doesn't talk to the K8s API, so don't mount the token.
   automountServiceAccountToken: false
-
-# Liveness/readiness both hit the app's /health endpoint. The readiness
-# window is generous so cold starts (DB connect, upstream subscribe) don't
-# get killed before the app is ready.
-probes:
-  liveness:
-    initialDelaySeconds: 15
-    periodSeconds: 30
-    timeoutSeconds: 5
-  readiness:
-    initialDelaySeconds: 5
-    periodSeconds: 5
-    timeoutSeconds: 3
-    failureThreshold: 30
 
 # CFACTORY_* runtime configuration. These map 1:1 to the Settings fields in
 # apps/backend/cfactory/config.py (env_prefix="CFACTORY_"). Plain (non-secret)
@@ -172,7 +156,6 @@ frontend:
     repository: ghcr.io/dataseeek/cfactory-frontend
     tag: ""  # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
-    pullSecrets: []
   replicaCount: 1
   containerPort: 8080  # nginx-unprivileged listens here
   service:

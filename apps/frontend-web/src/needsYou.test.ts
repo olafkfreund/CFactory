@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { attentionFor, attentionList, fmtAge } from "./needsYou";
+import { attentionFor, attentionList } from "./needsYou";
+import { fmtAge } from "./format";
 import type { WorkItem } from "./api";
 
 // Needs-you classifier (#148). Pure logic, no DOM. We build minimal work items

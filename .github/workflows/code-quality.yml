@@ -96,9 +96,15 @@ jobs:
       - name: Check formatting
         run: ruff format --check --config ruff.toml "${PACKAGE_DIR}"
 
-  config-drift:
-    name: shared-baseline drift gate (blocking)
+  drift:
+    name: hub drift gates (shared-baseline configs + factory-contracts)
     runs-on: ubuntu-latest
+    # Two drift checks against the pinned hub, each at its own SHA:
+    #   1. Vendored standards (ruff.toml/mypy.ini/.editorconfig) vs the baseline.
+    #   2. The byte-identical factory-contracts single source of truth (Factory#160)
+    #      at apps/backend/cfactory/_contracts/factory_contracts/__init__.py.
+    # To update either: re-vendor from the hub and bump the corresponding SHA
+    # below (contracts also bumps _contracts/__init__.py + the drift test).
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,66 +114,51 @@ jobs:
         with:
           repository: olafkfreund/Factory
           ref: 93c3bb49ed5f3f3d3d46aae5f8a13ff601550702
-          path: factory-hub
+          path: factory-hub-standards
           # If Factory is private, a token with read access is needed here.
         continue-on-error: true
-        id: hub
+        id: hub_standards
+      - name: Check out hub at the pinned contracts SHA
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: 48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9
+          path: factory-hub-contracts
+          # If Factory is private, a token with read access is needed here.
+        continue-on-error: true
+        id: hub_contracts
       - name: Diff vendored configs against the pinned hub baseline
-        if: steps.hub.outcome == 'success'
+        if: steps.hub_standards.outcome == 'success'
         run: |
           set -e
           # Vendored copies carry a header above the body; compare the rule body
           # only by stripping leading comment lines from both sides.
           strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
           for f in ruff.toml mypy.ini .editorconfig; do
-            if ! diff <(strip "cfactory/$f") <(strip "factory-hub/standards/$f"); then
+            if ! diff <(strip "cfactory/$f") <(strip "factory-hub-standards/standards/$f"); then
               echo "DRIFT: cfactory/$f diverged from the pinned hub baseline (standards/$f)."
               echo "Re-vendor from the hub and bump the pinned SHA, or justify a tighten-only override."
               exit 1
             fi
           done
           echo "No drift: vendored configs match the pinned hub baseline."
-      - name: Hub unavailable (private repo / no token)
-        if: steps.hub.outcome != 'success'
-        run: echo "Hub checkout unavailable; skipping drift diff (configure a read token to enforce)."
-
-  contracts-drift:
-    name: vendored factory-contracts matches the pinned hub (drift gate)
-    runs-on: ubuntu-latest
-    # The backend vendors a BYTE-IDENTICAL copy of the hub's generated
-    # factory-contracts single source of truth (Factory#160) at
-    # apps/backend/cfactory/_contracts/factory_contracts/__init__.py. This gate
-    # fails if that copy drifts from the hub source at the pinned SHA, so the
-    # status taxonomy + usage shape CFactory consumes can never silently rot away
-    # from upstream. To update: re-vendor from the hub and bump the SHA below
-    # (and _VENDORED_SHA256 in tests/test_factory_contracts_drift.py).
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: cfactory
-      - name: Check out hub at the pinned contracts SHA
-        uses: actions/checkout@v4
-        with:
-          repository: olafkfreund/Factory
-          ref: 48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9
-          path: factory-hub
-          # If Factory is private, a token with read access is needed here.
-        continue-on-error: true
-        id: hub
+      - name: Standards hub unavailable (private repo / no token)
+        if: steps.hub_standards.outcome != 'success'
+        run: echo "Hub checkout unavailable; skipping config drift diff (configure a read token to enforce)."
       - name: Diff vendored module against the pinned hub source
-        if: steps.hub.outcome == 'success'
+        if: steps.hub_contracts.outcome == 'success'
         run: |
           set -e
           vendored="cfactory/apps/backend/cfactory/_contracts/factory_contracts/__init__.py"
-          hub="factory-hub/shared/factory-contracts/python/factory_contracts/__init__.py"
+          hub="factory-hub-contracts/shared/factory-contracts/python/factory_contracts/__init__.py"
           if ! diff -u "$vendored" "$hub"; then
             echo "DRIFT: vendored factory_contracts diverged from the pinned hub source."
             echo "Re-vendor from the hub and bump the pinned SHA (here + _contracts/__init__.py + the drift test)."
             exit 1
           fi
           echo "No drift: vendored factory-contracts matches the pinned hub source."
-      - name: Hub unavailable (private repo / no token)
-        if: steps.hub.outcome != 'success'
+      - name: Contracts hub unavailable (private repo / no token)
+        if: steps.hub_contracts.outcome != 'success'
         run: echo "Hub checkout unavailable; the in-repo checksum drift test still guards local edits."
 
   frontend-quality:

@@ -153,12 +153,10 @@ def test_verify_true_for_intact_chain(audit):
     for i in range(5):
         _record(audit, correlation_key=str(i))
     assert audit.verify() == []
-    assert audit.is_intact() is True
 
 
 def test_verify_empty_chain_is_intact(audit):
     assert audit.verify() == []
-    assert audit.is_intact() is True
 
 
 def test_verify_detects_mutated_field(audit):
@@ -173,7 +171,6 @@ def test_verify_detects_mutated_field(audit):
 
     breaks = audit.verify()
     assert target.id in breaks
-    assert audit.is_intact() is False
 
 
 def test_verify_detects_swapped_hash(audit):
@@ -208,11 +205,11 @@ def test_secret_change_breaks_verification(tmp_path):
     good = AuditStore(url, hmac_secret="secret-a")
     _record(good, correlation_key="1")
     _record(good, correlation_key="2")
-    assert good.is_intact()
+    assert good.verify() == []
 
     # Re-open with a different secret: the chain no longer verifies.
     wrong = AuditStore(url, create=False, hmac_secret="secret-b")
-    assert wrong.is_intact() is False
+    assert wrong.verify() != []
 
 
 def test_compute_entry_hash_is_deterministic():

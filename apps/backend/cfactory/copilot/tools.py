@@ -12,33 +12,7 @@ from collections import Counter
 
 from cfactory.usage import add_usage, empty_bucket
 
-from ..models import Stage, WorkItem
 from ..store import WorkItemStore
-
-_STAGE_ATTR = {Stage.PLAN: "pfactory", Stage.CODE: "aifactory", Stage.TEST: "tfactory"}
-
-
-def _slice(wi: WorkItem, stage: Stage):
-    return getattr(wi, _STAGE_ATTR[stage])
-
-
-def query_work_items(
-    store: WorkItemStore, *, stage: Stage | None = None, status: str | None = None
-) -> list[WorkItem]:
-    """Filter work items by stage activity and/or status (any slice)."""
-    items = store.list()
-    out = []
-    for wi in items:
-        if stage is not None and not _slice(wi, stage).status:
-            continue
-        if status is not None and status not in {
-            wi.pfactory.status,
-            wi.aifactory.status,
-            wi.tfactory.status,
-        }:
-            continue
-        out.append(wi)
-    return out
 
 
 def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | None:

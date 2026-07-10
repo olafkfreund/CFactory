@@ -23,6 +23,34 @@ async function getJson<T>(path: string, schema: z.ZodType<T>, label: string): Pr
   return schema.parse(await resp.json());
 }
 
+// Shared write helper (PUT/POST + JSON body). On a non-2xx it surfaces the
+// backend's `{detail}` message when present (falling back to `HTTP <status>`),
+// then validates the body against `schema`. Identical behavior to the
+// hand-rolled updateCopilotSettings/updateService blocks it replaces.
+async function sendJson<T>(
+  method: "POST" | "PUT",
+  path: string,
+  body: unknown,
+  schema: z.ZodType<T>,
+): Promise<T> {
+  const resp = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      detail =
+        z.object({ detail: z.string().optional() }).parse(await resp.json()).detail ?? detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail);
+  }
+  return schema.parse(await resp.json());
+}
+
 // --- Health ---------------------------------------------------------------
 
 export const HealthSchema = z
@@ -266,9 +294,11 @@ export type CostRouting = z.infer<typeof CostRoutingSchema>;
 // Best-effort: the caller swallows failures and renders nothing, so a transient
 // error or a 404 (unknown task) never blanks the task detail.
 export async function fetchCostRouting(correlationKey: string): Promise<CostRouting> {
-  const resp = await fetch(`/api/tasks/${encodeURIComponent(correlationKey)}/cost-routing`);
-  if (!resp.ok) throw new Error(`cost-routing error: HTTP ${String(resp.status)}`);
-  return CostRoutingSchema.parse(await resp.json());
+  return getJson(
+    `/api/tasks/${encodeURIComponent(correlationKey)}/cost-routing`,
+    CostRoutingSchema,
+    "cost-routing",
+  );
 }
 
 // --- Tier 1.5: per-worker progress heartbeat series ----------------------
@@ -286,8 +316,6 @@ export const WorkerProgressSchema = z.object({
   // Dense, time-ordered cumulative series. Empty when the task has no heartbeat
   // data yet — the stamp then falls back to its stepwise worker-completion series.
   series: z.array(ProgressSampleSchema),
-  // Raw per-worker drill-down (worker_id -> points). Unused by the stamp today.
-  workers: z.record(z.array(ProgressSampleSchema)),
 });
 export type WorkerProgress = z.infer<typeof WorkerProgressSchema>;
 
@@ -341,9 +369,11 @@ export async function fetchHealth(): Promise<Health> {
 }
 
 export async function fetchServices(): Promise<ServiceStatus[]> {
-  const resp = await fetch("/api/services");
-  if (!resp.ok) throw new Error(`services error: HTTP ${resp.status}`);
-  const data = z.object({ services: z.array(ServiceStatusSchema) }).parse(await resp.json());
+  const data = await getJson(
+    "/api/services",
+    z.object({ services: z.array(ServiceStatusSchema) }),
+    "services",
+  );
   return data.services ?? [];
 }
 
@@ -385,9 +415,11 @@ export const CopilotSettingsSchema = z.object({
 export type CopilotSettings = z.infer<typeof CopilotSettingsSchema>;
 
 export async function fetchSettings(): Promise<CopilotSettings> {
-  const resp = await fetch("/api/settings");
-  if (!resp.ok) throw new Error(`settings error: HTTP ${resp.status}`);
-  const data = z.object({ copilot: CopilotSettingsSchema }).parse(await resp.json());
+  const data = await getJson(
+    "/api/settings",
+    z.object({ copilot: CopilotSettingsSchema }),
+    "settings",
+  );
   return data.copilot;
 }
 
@@ -395,41 +427,22 @@ export async function updateCopilotSettings(
   provider: string,
   model: string,
 ): Promise<CopilotSettings> {
-  const resp = await fetch("/api/settings/copilot", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider, model }),
-  });
-  if (!resp.ok) {
-    let detail = `HTTP ${resp.status}`;
-    try {
-      detail =
-        z.object({ detail: z.string().optional() }).parse(await resp.json()).detail ?? detail;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(detail);
-  }
-  return z.object({ copilot: CopilotSettingsSchema }).parse(await resp.json()).copilot;
+  const data = await sendJson(
+    "PUT",
+    "/api/settings/copilot",
+    { provider, model },
+    z.object({ copilot: CopilotSettingsSchema }),
+  );
+  return data.copilot;
 }
 
 export async function updateService(name: string, url: string): Promise<ServiceStatus> {
-  const resp = await fetch(`/api/services/${encodeURIComponent(name)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
-  if (!resp.ok) {
-    let detail = `HTTP ${resp.status}`;
-    try {
-      detail =
-        z.object({ detail: z.string().optional() }).parse(await resp.json()).detail ?? detail;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(detail);
-  }
-  return ServiceStatusSchema.parse(await resp.json());
+  return sendJson(
+    "PUT",
+    `/api/services/${encodeURIComponent(name)}`,
+    { url },
+    ServiceStatusSchema,
+  );
 }
 
 export const ActivityEntrySchema = z.object({
@@ -443,9 +456,11 @@ export const ActivityEntrySchema = z.object({
 export type ActivityEntry = z.infer<typeof ActivityEntrySchema>;
 
 export async function fetchActivity(limit = 50): Promise<ActivityEntry[]> {
-  const resp = await fetch(`/api/activity?limit=${limit}`);
-  if (!resp.ok) throw new Error(`activity error: HTTP ${resp.status}`);
-  const data = z.object({ activity: z.array(ActivityEntrySchema) }).parse(await resp.json());
+  const data = await getJson(
+    `/api/activity?limit=${limit}`,
+    z.object({ activity: z.array(ActivityEntrySchema) }),
+    "activity",
+  );
   return data.activity ?? [];
 }
 
@@ -481,9 +496,12 @@ export const FeedMessageSchema = z.discriminatedUnion("type", [
 export type FeedMessage = z.infer<typeof FeedMessageSchema>;
 
 export async function fetchProgress(): Promise<LiveProgress[]> {
-  const resp = await fetch("/api/progress");
-  if (!resp.ok) throw new Error(`progress error: HTTP ${resp.status}`);
-  return z.object({ items: z.array(LiveProgressSchema) }).parse(await resp.json()).items;
+  const data = await getJson(
+    "/api/progress",
+    z.object({ items: z.array(LiveProgressSchema) }),
+    "progress",
+  );
+  return data.items;
 }
 
 export interface FeedHandle {
@@ -772,9 +790,12 @@ export async function askCopilot(question: string): Promise<string> {
 }
 
 export async function fetchAnomalies(): Promise<Anomaly[]> {
-  const resp = await fetch("/api/anomalies");
-  if (!resp.ok) throw new Error(`anomalies error: HTTP ${resp.status}`);
-  return z.object({ anomalies: z.array(AnomalySchema) }).parse(await resp.json()).anomalies;
+  const data = await getJson(
+    "/api/anomalies",
+    z.object({ anomalies: z.array(AnomalySchema) }),
+    "anomalies",
+  );
+  return data.anomalies;
 }
 
 export async function fetchRollups(): Promise<Rollups> {
@@ -859,11 +880,12 @@ export async function executeAction(action: PreparedAction): Promise<ExecuteResu
 }
 
 export async function fetchAudit(): Promise<AuditEntry[]> {
-  const resp = await fetch("/api/audit");
-  if (!resp.ok) throw new Error(`audit error: HTTP ${resp.status}`);
-  return z
-    .object({ count: z.number(), entries: z.array(AuditEntrySchema) })
-    .parse(await resp.json()).entries;
+  const data = await getJson(
+    "/api/audit",
+    z.object({ count: z.number(), entries: z.array(AuditEntrySchema) }),
+    "audit",
+  );
+  return data.entries;
 }
 
 export const ConnectTokenSchema = z.object({

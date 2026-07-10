@@ -2,18 +2,13 @@ import { useEffect, useState } from "react";
 import { fetchTokens, fetchTokensByWorker, type TokenTotals, type TokensByWorker } from "./api";
 import { useCountUp } from "./motion";
 import { displayTitle, keySlug } from "./correlationKey";
+import { fmtTokens } from "./format";
 
 const SERVICES = [
   { key: "pfactory", label: "Plan", svc: "PFactory", cls: "plan" },
   { key: "aifactory", label: "Code", svc: "AIFactory", cls: "code" },
   { key: "tfactory", label: "Test", svc: "TFactory", cls: "test" },
 ] as const;
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
 
 export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
   const [data, setData] = useState<TokenTotals | null>(null);

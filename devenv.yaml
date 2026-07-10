@@ -1,5 +1,0 @@
-# devenv.sh inputs. Additive to flake.nix — the flake devShell remains the
-# direnv default (.envrc `use flake`); devenv is opt-in via `devenv shell` / `devenv up`.
-inputs:
-  nixpkgs:
-    url: github:cachix/devenv-nixpkgs/rolling

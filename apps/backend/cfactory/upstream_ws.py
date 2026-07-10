@@ -87,19 +87,6 @@ def _auth_headers(settings: Settings) -> dict[str, str]:
     return {}
 
 
-async def consume_once(
-    ws_url: str,
-    service: Service,
-    store: WorkItemStore,
-    manager: ConnectionManager,
-    *,
-    headers: dict[str, str] | None = None,
-) -> CompletionEvent | None:
-    """Connect, handle a single message, disconnect (used by tests)."""
-    async with websockets.connect(ws_url, additional_headers=headers or {}) as ws:
-        return await handle_message(service, await ws.recv(), store, manager)
-
-
 async def subscribe(
     service: Service,
     ws_url: str,

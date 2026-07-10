@@ -70,19 +70,21 @@ ActionKind = Literal[
 ]
 
 
-class ActionStep(BaseModel):
-    """One HTTP write in a (possibly multi-step) prepared action."""
+def _check_endpoint(v: str) -> str:
+    if not is_safe_endpoint(v):
+        raise ValueError("endpoint must be a root-relative path (no scheme or host)")
+    return v
 
-    method: str
-    endpoint: str  # root-relative path on the target service (validated)
-    payload: dict[str, Any] = {}
 
-    @field_validator("endpoint")
+class _MethodEndpointModel(BaseModel):
+    """Base for models carrying a validated upstream ``method`` + ``endpoint``."""
+
+    @field_validator("endpoint", check_fields=False)
     @classmethod
     def _validate_endpoint(cls, v: str) -> str:
         return _check_endpoint(v)
 
-    @field_validator("method")
+    @field_validator("method", check_fields=False)
     @classmethod
     def _validate_method(cls, v: str) -> str:
         m = v.upper()
@@ -91,13 +93,15 @@ class ActionStep(BaseModel):
         return m
 
 
-def _check_endpoint(v: str) -> str:
-    if not is_safe_endpoint(v):
-        raise ValueError("endpoint must be a root-relative path (no scheme or host)")
-    return v
+class ActionStep(_MethodEndpointModel):
+    """One HTTP write in a (possibly multi-step) prepared action."""
+
+    method: str
+    endpoint: str  # root-relative path on the target service (validated)
+    payload: dict[str, Any] = {}
 
 
-class PreparedAction(BaseModel):
+class PreparedAction(_MethodEndpointModel):
     """A fully-described, not-yet-executed set of writes against an upstream.
 
     The primary step is ``method``/``endpoint``/``payload``; ``follow_ups`` are
@@ -112,19 +116,6 @@ class PreparedAction(BaseModel):
     payload: dict[str, Any] = {}
     follow_ups: list[ActionStep] = []
     rationale: str  # human-readable "why", shown in the confirm dialog
-
-    @field_validator("endpoint")
-    @classmethod
-    def _validate_endpoint(cls, v: str) -> str:
-        return _check_endpoint(v)
-
-    @field_validator("method")
-    @classmethod
-    def _validate_method(cls, v: str) -> str:
-        m = v.upper()
-        if m not in _ALLOWED_METHODS:
-            raise ValueError(f"method must be one of {sorted(_ALLOWED_METHODS)}")
-        return m
 
 
 def _review_target(wi: WorkItem) -> tuple[str, str] | None:

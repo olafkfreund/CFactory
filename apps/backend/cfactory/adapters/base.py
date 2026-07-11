@@ -131,18 +131,6 @@ class BaseHTTPAdapter:
                     return [r for r in val if isinstance(r, dict)]
         return []
 
-    def health(self, *, timeout: float = 2.0) -> bool:
-        """Cheap reachability probe for the Services view. Returns True if the
-        service answers at all — any HTTP response (even 404) means the process
-        is up; only a connect/timeout/transport error counts as offline."""
-        for path in ("/health", "/"):
-            try:
-                self._client.get(path, timeout=timeout)
-                return True
-            except httpx.HTTPError:
-                continue
-        return False
-
     def probe(self, *, timeout: float = 4.0) -> ServiceProbe:
         """Authenticated reachability+auth check of the real list endpoint.
 

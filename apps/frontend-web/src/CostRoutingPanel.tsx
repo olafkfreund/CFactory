@@ -13,19 +13,7 @@
 // instead of a dollar estimate, mirroring LiveTaskStamp / the tokens view.
 
 import type { CostRouting } from "./api";
-
-// Sub-cent costs shouldn't read $0.00 (mirrors LiveTaskStamp.fmtCost).
-function fmtCost(n: number | null | undefined): string {
-  if (n == null) return "—";
-  if (n > 0 && n < 0.01) return "<$0.01";
-  return `$${n.toFixed(2)}`;
-}
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(Math.round(n));
-}
+import { fmtCost, fmtTokens } from "./format";
 
 // Signed variance, e.g. "+$0.30 over" / "−$0.10 under". Null when there's no
 // metered estimate-vs-actual to compare (subscription/local or pre-RFC-0014).

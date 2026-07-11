@@ -89,20 +89,6 @@ def test_probe_offline_on_connect_error():
     assert p.online is False and p.status == "offline"
 
 
-def test_health_true_when_service_responds():
-    # Any HTTP response — even a 404 — means the process is up.
-    adapter = AIFactoryAdapter("http://x", transport=_transport({}, status=404))
-    assert adapter.health() is True
-
-
-def test_health_false_on_connect_error():
-    def boom(request):
-        raise httpx.ConnectError("connection refused", request=request)
-
-    adapter = AIFactoryAdapter("http://x", transport=httpx.MockTransport(boom))
-    assert adapter.health() is False
-
-
 def test_aifactory_normalizes_and_extracts_issue_key():
     payload = {"tasks": [{"id": "t1", "status": "coding", "phase": "code",
                           "metadata": {"githubIssueNumber": 42}, "title": "Login"}]}

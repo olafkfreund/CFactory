@@ -223,10 +223,6 @@ class AuditStore:
                 expected_prev = row.entry_hash
         return breaks
 
-    def is_intact(self) -> bool:
-        """True when the chain verifies with no breaks."""
-        return not self.verify()
-
 
 _audit_store: AuditStore | None = None
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -177,18 +178,20 @@ def _tool_get_anomalies() -> dict[str, Any]:
     return {"count": len(found), "anomalies": found}
 
 
+_TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], Any]] = {
+    "cfactory_list_workitems": lambda _: _tool_list_workitems(),
+    "cfactory_get_workitem": lambda args: _tool_get_workitem(args.get("correlation_key", "")),
+    "cfactory_get_timeline": lambda args: _tool_get_timeline(args.get("correlation_key", "")),
+    "cfactory_get_rollups": lambda _: _tool_get_rollups(),
+    "cfactory_get_anomalies": lambda _: _tool_get_anomalies(),
+}
+
+
 def _dispatch_tool(name: str, arguments: dict) -> Any:
-    if name == "cfactory_list_workitems":
-        return _tool_list_workitems()
-    if name == "cfactory_get_workitem":
-        return _tool_get_workitem(arguments.get("correlation_key", ""))
-    if name == "cfactory_get_timeline":
-        return _tool_get_timeline(arguments.get("correlation_key", ""))
-    if name == "cfactory_get_rollups":
-        return _tool_get_rollups()
-    if name == "cfactory_get_anomalies":
-        return _tool_get_anomalies()
-    return {"error": f"unknown tool: {name}"}
+    handler = _TOOL_HANDLERS.get(name)
+    if handler is None:
+        return {"error": f"unknown tool: {name}"}
+    return handler(arguments)
 
 
 # ---------------------------------------------------------------------------

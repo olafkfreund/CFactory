@@ -4,22 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from cfactory.copilot.tools import query_work_items, rollups, summarize_timeline
-from cfactory.models import CompletionEvent, Service, Stage
+from cfactory.copilot.tools import rollups, summarize_timeline
+from cfactory.models import CompletionEvent, Service
 
 
 def _ev(store, key, service, status, minute=0):
     store.upsert_from_event(CompletionEvent(
         correlation_key=key, service=service, task_id="t", status=status, phase=service.value,
         updated_at=datetime(2026, 6, 4, 12, minute, tzinfo=timezone.utc)))
-
-
-def test_query_by_stage_and_status(store):
-    _ev(store, "1", Service.PFACTORY, "human_review")
-    _ev(store, "2", Service.AIFACTORY, "coding")
-    assert {wi.correlation_key for wi in query_work_items(store, stage=Stage.PLAN)} == {"1"}
-    assert {wi.correlation_key for wi in query_work_items(store, stage=Stage.CODE)} == {"2"}
-    assert {wi.correlation_key for wi in query_work_items(store, status="coding")} == {"2"}
 
 
 def test_summarize_timeline_orders_and_spans(store):

@@ -57,12 +57,6 @@ image-frontend:
 # Build both images.
 image-all: image-backend image-frontend
 
-# Reproducible Nix builds (alternative to Docker).
-nix-frontend:
-    nix build .#frontend-static
-nix-backend-image:
-    nix build .#backend-image   # docker load < result
-
 # Render the Helm chart (ingress on) for review.
 helm-template *ARGS:
     helm template cfactory charts/cfactory --set ingress.enabled=true {{ARGS}}
@@ -79,7 +73,7 @@ helm-install NAMESPACE="cfactory":
 
 # Format Nix files.
 fmt:
-    nixpkgs-fmt flake.nix
+    nix fmt
 
 # Lint Nix files.
 lint:

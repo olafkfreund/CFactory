@@ -425,6 +425,61 @@ def _rfc0015_extras(
     return extras
 
 
+def _fetch_test_stage(
+    tf_adapter: TFactoryAdapter | None,
+    task_id: str | None,
+    correlation_key: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """Fetch the TFactory (test) slice: ``(evidence, raw detail, normalized stage)``.
+
+    Browser-lane evidence (screenshots + recordings) is fetched independently of
+    the lane graph so the cockpit can show the captured proof even when the graph
+    can't be aggregated. CFactory proxies the bytes (the browser is authenticated
+    to CFactory, not TFactory): see the
+    /api/workitems/{key}/evidence/{kind}/{name} route.
+    """
+    if tf_adapter is None or not task_id:
+        return None, None, None
+    evidence: dict[str, Any] | None = None
+    manifest = tf_adapter.get_evidence_manifest(task_id)
+    if manifest.get("screenshots") or manifest.get("videos"):
+        evidence = {
+            "spec_id": task_id,
+            "screenshots": manifest["screenshots"],
+            "videos": manifest["videos"],
+        }
+    tdetail = tf_adapter.get_test_detail(task_id)
+    test = _normalize_test(correlation_key, tdetail) if tdetail is not None else None
+    return evidence, tdetail, test
+
+
+def _fetch_code_stage(
+    ai_adapter: AIFactoryAdapter | None,
+    task_id: str | None,
+    correlation_key: str,
+) -> dict[str, Any] | None:
+    """Fetch + normalize the AIFactory (code) slice, best-effort."""
+    if ai_adapter is None or not task_id:
+        return None
+    code_detail = ai_adapter.get_task_detail(task_id)
+    return _normalize(correlation_key, code_detail) if code_detail is not None else None
+
+
+def _fetch_plan_stage(
+    pf_adapter: PFactoryAdapter | None,
+    task_id: str | None,
+    correlation_key: str,
+    store: WorkItemStore,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Fetch the PFactory (plan) slice: ``(raw session, normalized stage)``."""
+    if pf_adapter is None or not task_id:
+        return None, None
+    session = pf_adapter.get_session_detail(task_id)
+    if session is None:
+        return None, None
+    return session, _normalize_plan(correlation_key, session, store)
+
+
 def build_process_detail(
     store: WorkItemStore,
     adapters: list[BaseHTTPAdapter],
@@ -443,54 +498,26 @@ def build_process_detail(
     # Build EVERY available stage's process detail (plan/code/test), not just the
     # furthest, so the cockpit can offer a stage switcher and the plan DAG stays
     # visible after coding begins (#94 follow-up). Each fetch is best-effort.
+    # The raw upstream payloads are kept so we can mine RFC-0015 extras (readable
+    # spec/plan/tasks artifacts §3.3, requirement->test traceability §4 D2)
+    # without re-fetching. All best-effort + additive.
     tf = wi.tfactory
     ai = wi.aifactory
-    pf = wi.pfactory
     tf_adapter = next((a for a in adapters if isinstance(a, TFactoryAdapter)), None)
     ai_adapter = next((a for a in adapters if isinstance(a, AIFactoryAdapter)), None)
     pf_adapter = next((a for a in adapters if isinstance(a, PFactoryAdapter)), None)
 
+    tf_evidence, tdetail_raw, test = _fetch_test_stage(tf_adapter, tf.task_id, correlation_key)
+    code = _fetch_code_stage(ai_adapter, ai.task_id, correlation_key)
+    session_raw, plan = _fetch_plan_stage(pf_adapter, wi.pfactory.task_id, correlation_key, store)
+
     stages: dict[str, dict[str, Any]] = {}  # stage -> normalized process detail
-    # Raw upstream payloads, kept so we can mine RFC-0015 extras (readable
-    # spec/plan/tasks artifacts §3.3, requirement->test traceability §4 D2)
-    # without re-fetching. All best-effort + additive.
-    tdetail_raw: dict[str, Any] | None = None
-    session_raw: dict[str, Any] | None = None
-
-    # Browser-lane evidence (screenshots + recordings) for the test stage — fetched
-    # independently of the lane graph so the cockpit can show the captured proof
-    # even when the graph can't be aggregated. CFactory proxies the bytes (the
-    # browser is authenticated to CFactory, not TFactory): see the
-    # /api/workitems/{key}/evidence/{kind}/{name} route.
-    tf_evidence: dict[str, Any] | None = None
-    if tf_adapter is not None and tf.task_id:
-        manifest = tf_adapter.get_evidence_manifest(tf.task_id)
-        if manifest.get("screenshots") or manifest.get("videos"):
-            tf_evidence = {
-                "spec_id": tf.task_id,
-                "screenshots": manifest["screenshots"],
-                "videos": manifest["videos"],
-            }
-        tdetail = tf_adapter.get_test_detail(tf.task_id)
-        if tdetail is not None:
-            tdetail_raw = tdetail
-            test = _normalize_test(correlation_key, tdetail)
-            if test is not None:
-                stages["test"] = test
-
-    code_detail = None
-    if ai_adapter is not None and ai.task_id:
-        code_detail = ai_adapter.get_task_detail(ai.task_id)
-    if code_detail is not None:
-        stages["code"] = _normalize(correlation_key, code_detail)
-
-    if pf_adapter is not None and pf.task_id:
-        session = pf_adapter.get_session_detail(pf.task_id)
-        if session is not None:
-            session_raw = session
-            plan = _normalize_plan(correlation_key, session, store)
-            if plan is not None:
-                stages["plan"] = plan
+    if test is not None:
+        stages["test"] = test
+    if code is not None:
+        stages["code"] = code
+    if plan is not None:
+        stages["plan"] = plan
 
     # RFC-0015 cockpit extras (readable artifacts §3.3 + traceability §4 D2),
     # mined from the raw upstream payloads. Best-effort + additive.

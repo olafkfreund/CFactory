@@ -19,6 +19,7 @@ import {
 import { AgentTerminal } from "./LiveAgents";
 import TaskActions from "./TaskActions";
 import CostRoutingPanel from "./CostRoutingPanel";
+import StageGates from "./StageGates";
 import TraceabilityPanel from "./TraceabilityPanel";
 import ArtifactsPanel from "./ArtifactsPanel";
 import LiveTaskStamp from "./LiveTaskStamp";
@@ -334,6 +335,9 @@ export default function TaskDetail({
                         `Verified to ${st.extra.verification.achieved_level}`}
                     </div>
                   )}
+                  {/* #167: routing tier + security-gate verdicts + judge-vote
+                      split for this stage. Renders nothing on old envelopes. */}
+                  <StageGates extra={st.extra} />
                 </div>
               );
             })}

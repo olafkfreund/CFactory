@@ -801,6 +801,19 @@ body {
 .td-stage-val { font-size: 0.7rem; margin-top: 0.2rem; }
 .td-stage-val--high { color: var(--green, #2e8b57); }
 .td-stage-val--capped { color: var(--warn, #d9822b); }
+/* #167: routing tier + security-gate verdicts + judge-vote split per stage. */
+.td-stage-gates { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.3rem; }
+.td-gate { font: 600 0.62rem var(--font-mono); padding: 0.08rem 0.35rem; border-radius: 0.35rem; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); }
+.td-gate--tier { color: var(--cyan); border-color: var(--cyan); text-transform: uppercase; letter-spacing: 0.03em; }
+.td-gate--ok { color: var(--green, #2e8b57); border-color: var(--green, #2e8b57); }
+.td-gate--warn { color: var(--warn, #d9822b); border-color: var(--warn, #d9822b); }
+.td-gate--bad { color: var(--red, #fb4934); border-color: var(--red, #fb4934); }
+.td-votes { font-size: 0.68rem; margin-top: 0.25rem; color: var(--muted); flex-basis: 100%; }
+.td-votes summary { cursor: pointer; }
+.td-votes ul { list-style: none; margin: 0.2rem 0 0; padding: 0; }
+.td-votes li { display: flex; justify-content: space-between; gap: 0.5rem; font-family: var(--font-mono); }
+.td-vote--pass { color: var(--green, #2e8b57); }
+.td-vote--fail { color: var(--red, #fb4934); }
 .td-section h3 { font: 700 0.74rem var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 0.5rem; color: var(--muted); }
 /* RFC-0014 #124: cost & routing panel — estimate vs actual + per-role models. */
 .crp-badges { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.55rem; }

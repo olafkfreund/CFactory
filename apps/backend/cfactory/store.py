@@ -302,32 +302,38 @@ def _apply_terminal_or_scalar(prev: dict, event: CompletionEvent) -> dict:
     return slice_dict
 
 
-def _attach_access_verification(slice_dict: dict, event: CompletionEvent) -> dict:
-    """Carry the honest access (#88), verification (#76), and routing (#124)
-    annotations onto a slice.
+# Optional per-event annotation blocks carried onto the service slice's
+# ``extra`` map, all following the same additive pattern: present on the event ->
+# stored under the same key; absent -> the slice is untouched. access = RFC-0007
+# (#88) credentialed-lane honesty; verification = RFC-0006 (#76) gate-normalized
+# VAL block; routing = RFC-0014 (#124) cost-aware routing decision (now incl.
+# the Factory#272 tier/tier_source/savings_usd); injection_scan (Factory#273),
+# dependency_review (TFactory#650) and votes (TFactory#649) = the #167
+# security-gate / judge-vote verdicts.
+_ANNOTATION_FIELDS = (
+    "access",
+    "verification",
+    "routing",
+    "injection_scan",
+    "dependency_review",
+    "votes",
+)
 
-    RFC-0007 attaches the credentialed-lane access annotation; RFC-0006 attaches
-    the gate-normalized verification block (achieved_level + honest claim) so the
-    cockpit renders the assurance level and never shows VAL-2 as "done"; RFC-0014
-    attaches the pre-execution cost-aware routing decision (class, cost estimate
-    vs ceiling, per-role models, runtime, budget_mode, autonomy, rationale) so the
-    cockpit shows estimate-vs-actual. All land under the slice's ``extra`` map.
-    Returns the slice for chaining.
+
+def _attach_access_verification(slice_dict: dict, event: CompletionEvent) -> dict:
+    """Carry the optional per-event annotation blocks onto a slice.
+
+    Every ``_ANNOTATION_FIELDS`` block present on the event lands under the
+    slice's ``extra`` map; absent blocks leave the slice untouched, so legacy
+    envelopes round-trip unchanged. Returns the slice for chaining.
     """
-    access = getattr(event, "access", None)
-    verification = getattr(event, "verification", None)
-    routing = getattr(event, "routing", None)
-    if access or verification or routing:
-        extra = dict(slice_dict.get("extra") or {})
-        if access:
-            extra["access"] = access
-        if verification:
-            extra["verification"] = verification
-        if routing:
-            # Pydantic model on the event; persist as plain JSON-safe dict.
-            extra["routing"] = (
-                routing.model_dump(mode="json") if hasattr(routing, "model_dump") else routing
-            )
+    extra = dict(slice_dict.get("extra") or {})
+    for field in _ANNOTATION_FIELDS:
+        value = getattr(event, field, None)
+        if value:
+            # Pydantic model on the event (e.g. routing); persist JSON-safe.
+            extra[field] = value.model_dump(mode="json") if hasattr(value, "model_dump") else value
+    if extra:
         slice_dict["extra"] = extra
     return slice_dict
 

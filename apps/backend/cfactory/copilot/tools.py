@@ -206,6 +206,15 @@ def token_totals(store: WorkItemStore) -> dict:
             elapsed = _wi_elapsed_seconds(wi)
             if elapsed is not None:
                 row["elapsed_seconds"] = elapsed
+            # Routing savings (#167 / Factory#272): the producer-computed
+            # default-tier-minus-actual-tier saving on the routing block.
+            # Counted ONLY for metered work (billing-mode rule: subscription /
+            # local runs carry no real dollars, so no notional savings either).
+            if billing is not None and billing["has_metered"]:
+                routing = _routing_block(wi) or {}
+                saving = routing.get("savings_usd")
+                if isinstance(saving, int | float) and saving > 0:
+                    row["routing_savings_usd"] = round(float(saving), 6)
             by_work_item.append(row)
 
     by_work_item.sort(key=lambda w: w["total_tokens"], reverse=True)
@@ -219,6 +228,12 @@ def token_totals(store: WorkItemStore) -> dict:
     any_billing = any("billing" in r for r in by_work_item)
     total["metered_cost_usd"] = metered if any_billing else total["cost_usd"]
     total["has_billing_modes"] = any_billing
+    # Fleet routing savings (#167): sum of the per-task metered savings. The key
+    # is only present when at least one task carried one, so the pre-#167
+    # payload shape is unchanged for old envelopes.
+    savings = round(sum(r.get("routing_savings_usd", 0.0) for r in by_work_item), 6)
+    if savings > 0:
+        total["routing_savings_usd"] = savings
     return {"total": total, "by_service": by_service, "by_work_item": by_work_item}
 
 

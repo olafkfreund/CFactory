@@ -84,4 +84,46 @@ describe("needsYou", () => {
     expect(fmtAge(900)).toBe("15m");
     expect(fmtAge(7200)).toBe("2h");
   });
+
+  // #167: a review parked by a machine security gate names WHICH gate fired,
+  // not just "needs review".
+  it("names the injection-scan gate on a flagged review", () => {
+    const item = wi({ p: "done", a: "human_review" });
+    item.aifactory.extra = {
+      injection_scan: { verdict: "flagged", reason: "spec contains an override instruction" },
+    };
+    const a = attentionFor(item);
+    expect(a?.kind).toBe("review");
+    expect(a?.reason).toContain("prompt-injection scan");
+    expect(a?.reason).toContain("override instruction");
+  });
+
+  it("names the dependency-review gate with its finding count", () => {
+    const item = wi({ p: "done", a: "done", t: "human_review" });
+    item.tfactory.extra = {
+      dependency_review: {
+        status: "fail",
+        findings: [{ package: "leftpad", severity: "high", reason: "typosquat" }],
+      },
+    };
+    const a = attentionFor(item);
+    expect(a?.kind).toBe("review");
+    expect(a?.reason).toContain("dependency review");
+    expect(a?.reason).toContain("1 finding");
+  });
+
+  it("keeps the generic review copy when no gate verdict is present", () => {
+    const a = attentionFor(wi({ p: "done", a: "done", t: "human_review" }));
+    expect(a?.reason).toBe("Verified — awaiting your review before merge.");
+  });
+
+  it("does not name a gate on a clean scan / passing dependency review", () => {
+    const item = wi({ p: "done", a: "done", t: "human_review" });
+    item.tfactory.extra = {
+      injection_scan: { verdict: "clean" },
+      dependency_review: { status: "pass", findings: [] },
+    };
+    const a = attentionFor(item);
+    expect(a?.reason).toBe("Verified — awaiting your review before merge.");
+  });
 });

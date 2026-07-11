@@ -72,6 +72,15 @@ class RoutingInfo(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     routing_class: str | None = None
+    # #272 routing tier surfacing: the tier the router actually picked for this
+    # stage ("economy"/"standard"/...), where the pick came from in the
+    # precedence chain ("pinned"/"override"/"policy"/"default"), and the
+    # producer-computed saving vs the default tier (default-tier price minus
+    # actual-tier price for the token counts actually used; only meaningful for
+    # metered billing modes). All optional — absent on pre-#272 envelopes.
+    tier: str | None = None
+    tier_source: str | None = None
+    savings_usd: float | None = None
     cost_estimate_usd: float | None = None
     cost_ceiling_usd: float | None = None
     budget_mode: str | None = None
@@ -227,6 +236,17 @@ class CompletionEvent(BaseModel):
     # cockpit shows it next to actual rolled-up spend. Optional — absent on every
     # event that carries no routing block, so legacy events ingest unchanged.
     routing: RoutingInfo | None = None
+    # Factory#273: prompt-injection scan verdict a service attaches when it ran
+    # the scan — {verdict: "clean"|"flagged", reason, ...}. Kept as a free dict
+    # (the upstream shape is still landing); tolerant by construction. Optional —
+    # absent on every pre-#273 envelope.
+    injection_scan: dict[str, Any] | None = None
+    # TFactory#650: dependency-review signal — {status: "pass"|"fail"|"warn",
+    # findings: [...], ...}. Free dict for the same tolerance reason. Optional.
+    dependency_review: dict[str, Any] | None = None
+    # TFactory#649: judge-vote split behind a verdict — {verdict, majority,
+    # dissent, votes: [{judge/model, verdict}, ...]}. Free dict; optional.
+    votes: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _reconcile_timestamps(self) -> CompletionEvent:

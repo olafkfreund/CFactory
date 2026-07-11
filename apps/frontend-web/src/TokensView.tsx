@@ -49,6 +49,15 @@ export default function TokensView({ reloadSignal }: { reloadSignal: number }) {
         <div className="mc-stat"><div className="mc-stat-v" style={{ color: "var(--code)" }}>${(totalCostCents / 100).toFixed(2)}</div><div className="mc-stat-l">Total cost</div></div>
         <div className="mc-stat"><div className="mc-stat-v" style={{ color: "var(--muted)" }}>{fmtTokens(data?.total.input_tokens ?? 0)}</div><div className="mc-stat-l">Input</div></div>
         <div className="mc-stat"><div className="mc-stat-v" style={{ color: "var(--muted)" }}>{fmtTokens(data?.total.output_tokens ?? 0)}</div><div className="mc-stat-l">Output</div></div>
+        {/* #167: routing savings — default-tier price minus actual-tier price for
+            the tokens actually used, metered (api/cloud) work only. Absent when no
+            task carried a savings figure, so the pre-#167 view is unchanged. */}
+        {(data?.total.routing_savings_usd ?? 0) > 0 && (
+          <div className="mc-stat" title="Saved by cost-aware routing vs the default tier (metered runs only)">
+            <div className="mc-stat-v" style={{ color: "var(--green)" }}>${data!.total.routing_savings_usd!.toFixed(2)}</div>
+            <div className="mc-stat-l">Routing savings</div>
+          </div>
+        )}
       </div>
 
       <div className="svc-grid" style={{ marginBottom: "1.2rem" }}>

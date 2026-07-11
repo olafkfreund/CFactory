@@ -39,6 +39,25 @@ export function fmtAge(sec: number): string {
 }
 
 /**
+ * A gate-specific reason when a stage was parked by a machine security gate
+ * (#167): the injection scan flagged the task, or the dependency review failed.
+ * The inbox card must say WHICH gate fired, not just "needs review". Null when
+ * neither gate verdict is present (the generic review reason then applies).
+ */
+function gateReason(state: WorkItem["pfactory"]): string | null {
+  const scan = state.extra?.injection_scan;
+  if (scan?.verdict === "flagged") {
+    return `Flagged by the prompt-injection scan${scan.reason ? ` — ${scan.reason}` : ""}. Review before it proceeds.`;
+  }
+  const dep = state.extra?.dependency_review;
+  if (dep?.status === "fail") {
+    const n = dep.findings?.length ?? 0;
+    return `Failed the dependency review${n > 0 ? ` — ${String(n)} finding${n === 1 ? "" : "s"}` : ""}. Review before it proceeds.`;
+  }
+  return null;
+}
+
+/**
  * The single most pressing reason this item needs a human, or null. Stalled wins
  * (it's the unhealthy case); otherwise the furthest stage sitting in review — a
  * PFactory review is a plan approval, a downstream review is a merge/verify gate.
@@ -76,13 +95,16 @@ export function attentionFor(wi: WorkItem): Attention | null {
   for (const key of order) {
     if (stageState(statuses[key]) !== "review") continue;
     const meta = STAGE_BY_KEY[key];
+    // A machine security gate (#167) is more specific than the generic review
+    // copy — the card must name the gate that fired.
+    const gate = gateReason(wi[key]);
     if (key === "pfactory") {
       return {
         wi,
         kind: "approval",
         stage: meta.stage,
         service: meta.service,
-        reason: "Plan is awaiting your approval to emit and hand off.",
+        reason: gate ?? "Plan is awaiting your approval to emit and hand off.",
       };
     }
     if (key === "tfactory") {
@@ -91,7 +113,7 @@ export function attentionFor(wi: WorkItem): Attention | null {
         kind: "review",
         stage: meta.stage,
         service: meta.service,
-        reason: "Verified — awaiting your review before merge.",
+        reason: gate ?? "Verified — awaiting your review before merge.",
       };
     }
     return {
@@ -99,7 +121,7 @@ export function attentionFor(wi: WorkItem): Attention | null {
       kind: "review",
       stage: meta.stage,
       service: meta.service,
-      reason: "Build is awaiting your review.",
+      reason: gate ?? "Build is awaiting your review.",
     };
   }
 

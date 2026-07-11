@@ -92,6 +92,12 @@ export type VerificationBlock = z.infer<typeof VerificationBlockSchema>;
 // All fields optional so a partial block (or none) round-trips unchanged.
 export const RoutingInfoSchema = z.object({
   routing_class: z.string().nullable().optional(),
+  // #167 / Factory#272: the routing tier actually picked for this stage, where
+  // the pick came from in the precedence chain (pinned/override/policy/default),
+  // and the producer-computed saving vs the default tier (metered runs only).
+  tier: z.string().nullable().optional(),
+  tier_source: z.string().nullable().optional(),
+  savings_usd: z.number().nullable().optional(),
   cost_estimate_usd: z.number().nullable().optional(),
   cost_ceiling_usd: z.number().nullable().optional(),
   budget_mode: z.string().nullable().optional(),
@@ -104,6 +110,57 @@ export const RoutingInfoSchema = z.object({
 });
 export type RoutingInfo = z.infer<typeof RoutingInfoSchema>;
 
+// Factory#273: prompt-injection scan verdict a service attached when it ran the
+// scan. Tolerant by design — the upstream shape is still landing, so only the
+// fields the cockpit renders are named and everything else passes through.
+export const InjectionScanSchema = z
+  .object({
+    verdict: z.string().optional(), // "clean" | "flagged"
+    reason: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type InjectionScan = z.infer<typeof InjectionScanSchema>;
+
+// TFactory#650: dependency-review signal — pass/fail/warn plus findings.
+export const DependencyReviewSchema = z
+  .object({
+    status: z.string().optional(), // "pass" | "fail" | "warn"
+    findings: z
+      .array(
+        z
+          .object({
+            package: z.string().optional(),
+            severity: z.string().optional(),
+            reason: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type DependencyReview = z.infer<typeof DependencyReviewSchema>;
+
+// TFactory#649: the judge-vote split behind a verdict (majority + dissent).
+export const VoteSplitSchema = z
+  .object({
+    verdict: z.string().nullable().optional(),
+    majority: z.number().optional(),
+    dissent: z.number().optional(),
+    votes: z
+      .array(
+        z
+          .object({
+            judge: z.string().optional(),
+            model: z.string().optional(),
+            verdict: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type VoteSplit = z.infer<typeof VoteSplitSchema>;
+
 export const ServiceStateSchema = z.object({
   task_id: z.string().nullable(),
   status: z.string().nullable(),
@@ -114,6 +171,9 @@ export const ServiceStateSchema = z.object({
       access: AccessAnnotationSchema.optional(),
       verification: VerificationBlockSchema.optional(),
       routing: RoutingInfoSchema.optional(),
+      injection_scan: InjectionScanSchema.optional(),
+      dependency_review: DependencyReviewSchema.optional(),
+      votes: VoteSplitSchema.optional(),
     })
     .passthrough()
     .optional(),
@@ -169,6 +229,9 @@ export const WorkItemTokenRowSchema = z.object({
   budget: BudgetInfoSchema.optional(),
   billing: BillingSummarySchema.optional(),
   elapsed_seconds: z.number().optional(),
+  // #167: producer-computed routing saving (default tier minus actual tier for
+  // the tokens actually used). Present only on metered rows that carried one.
+  routing_savings_usd: z.number().optional(),
 });
 export type WorkItemTokenRow = z.infer<typeof WorkItemTokenRowSchema>;
 
@@ -182,6 +245,10 @@ export const TokenTotalsSchema = z.object({
     // everything ran on subscription/local → the cockpit hides the Cost stat.
     metered_cost_usd: z.number().optional(),
     has_billing_modes: z.boolean().optional(),
+    // #167: fleet routing savings — sum of per-task metered savings. Present
+    // only when at least one task carried one (metered modes only, no notional
+    // dollars for subscription/local runs).
+    routing_savings_usd: z.number().optional(),
   }),
   by_service: z.record(ServiceTokensSchema),
   by_work_item: z.array(WorkItemTokenRowSchema),

@@ -437,12 +437,7 @@ export async function updateCopilotSettings(
 }
 
 export async function updateService(name: string, url: string): Promise<ServiceStatus> {
-  return sendJson(
-    "PUT",
-    `/api/services/${encodeURIComponent(name)}`,
-    { url },
-    ServiceStatusSchema,
-  );
+  return sendJson("PUT", `/api/services/${encodeURIComponent(name)}`, { url }, ServiceStatusSchema);
 }
 
 export const ActivityEntrySchema = z.object({

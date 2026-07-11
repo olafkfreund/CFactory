@@ -178,11 +178,11 @@ def _tool_get_anomalies() -> dict[str, Any]:
 
 
 _TOOL_HANDLERS = {
-    "cfactory_list_workitems": lambda args: _tool_list_workitems(),
+    "cfactory_list_workitems": lambda _: _tool_list_workitems(),
     "cfactory_get_workitem": lambda args: _tool_get_workitem(args.get("correlation_key", "")),
     "cfactory_get_timeline": lambda args: _tool_get_timeline(args.get("correlation_key", "")),
-    "cfactory_get_rollups": lambda args: _tool_get_rollups(),
-    "cfactory_get_anomalies": lambda args: _tool_get_anomalies(),
+    "cfactory_get_rollups": lambda _: _tool_get_rollups(),
+    "cfactory_get_anomalies": lambda _: _tool_get_anomalies(),
 }
 
 

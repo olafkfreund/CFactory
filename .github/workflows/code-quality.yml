@@ -3,10 +3,12 @@ name: Code quality (ratchet)
 # Factory coding-standards adoption for the CFactory Python backend.
 #
 # This is a RATCHET gate (coding-standards.md section 4.6): ruff (shared select
-# set) + mypy --strict run ONLY on the Python lines a PR changes. Untouched
-# legacy hotspots are allowed until touched, so the gate is green at adoption and
-# tightens monotonically. A whole-repo strict gate is intentionally NOT blocking
-# (127 legacy violations would make it instantly red).
+# set) + mypy --strict run ONLY on the Python files a PR changes, and a changed
+# file may not gain violations vs the PR base (per-file base-vs-HEAD counts,
+# scripts/ratchet_lint.py). Untouched legacy hotspots are allowed until touched,
+# so the gate is green at adoption and tightens monotonically. A whole-repo
+# strict gate is intentionally NOT blocking (127 legacy ruff violations and a
+# ~90-error mypy --strict backlog would make it instantly red).
 #
 # Also runs a whole-repo `ruff format --check` (formatting is auto-applied, never
 # reviewed - section 3.6) and a drift gate confirming the vendored configs still
@@ -38,7 +40,7 @@ env:
 
 jobs:
   ratchet:
-    name: ruff ratchet (diff-scoped, blocking) + mypy (informational)
+    name: ruff + mypy ratchet (diff-scoped, blocking)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,19 +71,11 @@ jobs:
       - name: Ratchet (ruff on changed files; blocks net-new violations)
         run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
 
-      - name: mypy --strict on changed files (informational)
-        # Non-blocking for now: the legacy backend is largely untyped, so
-        # mypy --strict over touched files reports a large existing backlog. This
-        # surfaces type debt without making the adoption PR red. Promoting this to
-        # a blocking per-file ratchet is tracked as follow-up (issues #112, #116).
-        continue-on-error: true
-        env:
-          MYPYPATH: apps/backend
-          PYTHONPATH: apps/backend
-        run: |
-          mapfile -t files < <(git diff --name-only --diff-filter=AM "${{ steps.base.outputs.ref }}...HEAD" -- "${PACKAGE_DIR}" | grep '\.py$' || true)
-          if [ ${#files[@]} -eq 0 ]; then echo "no changed Python files"; exit 0; fi
-          mypy --config-file mypy.ini "${files[@]}" || true
+      - name: Ratchet (mypy --strict on changed files; blocks net-new type errors)
+        # Per-file base-vs-HEAD error counts (issues #112, #116, hub Factory#260):
+        # a touched legacy file keeps its existing mypy debt, but a PR may not add
+        # NET-NEW strict-mode type errors to any file it changes.
+        run: python scripts/ratchet_lint.py --tool mypy --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
 
   format-check:
     name: ruff format --check (whole repo, blocking)

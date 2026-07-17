@@ -75,6 +75,8 @@ agentic SDLC needs.
 
 **Design system:** the [Factory Design System](guides/factory-design-system.md) — the shared brand & UI rules every Factory service follows so the suite looks like one product.
 
+**Multi-tenant mode:** [Multi-Tenant Mode](guides/multi-tenant.md) — the `CFACTORY_MULTI_TENANT` flag, how `X-Tenant-Id` is resolved, and the operator flip steps.
+
 ---
 
 <p class="muted">CFactory is early and built in the open. Follow along on

@@ -127,9 +127,10 @@ class Settings(BaseSettings):
     # Multi-tenant mode (#23). Local-first: OFF by default, so tenant resolution
     # always yields the single "default" tenant (unchanged local behaviour). When
     # CFACTORY_MULTI_TENANT=true (hosted deploy), the tenant is resolved per
-    # request from the "X-Tenant-Id" header (falling back to "default"). This is
-    # the resolution seam + the flag that turns it on; per-tenant *data scoping*
-    # of store/audit queries remains DEFERRED to the hosted deployment.
+    # request from the "X-Tenant-Id" header (falling back to "default") — the
+    # header is injected by oauth2-proxy from the Keycloak ``tenant`` claim
+    # (factory-gitops#13), never trusted from the browser directly. Work-item
+    # reads/writes are scoped to the resolved tenant via store_dep (#172).
     multi_tenant: bool = False
 
     # HMAC secret anchoring the tamper-evident audit chain (#21). Each audit
@@ -151,6 +152,25 @@ class Settings(BaseSettings):
             "aifactory": to_ws(self.aifactory_api_url),
             "tfactory": to_ws(self.tfactory_api_url),
         }
+
+
+# The single implicit tenant in local/single-tenant mode (#172). Existing rows
+# are backfilled to this value, and writers without a request context (poll
+# loops, WS subscribers) stamp it.
+DEFAULT_TENANT = "default"
+
+
+def resolve_tenant(x_tenant_id: str | None = None, settings: Settings | None = None) -> str:
+    """Resolve the tenant for a request (#23/#172).
+
+    Multi-tenant OFF (local default): always ``DEFAULT_TENANT``, whatever headers
+    say. ON: the ``X-Tenant-Id`` header value (injected by oauth2-proxy from the
+    Keycloak tenant claim), falling back to ``DEFAULT_TENANT`` when absent/blank.
+    """
+    settings = settings or get_settings()
+    if not settings.multi_tenant:
+        return DEFAULT_TENANT
+    return (x_tenant_id or "").strip() or DEFAULT_TENANT
 
 
 _settings: Settings | None = None

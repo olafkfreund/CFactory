@@ -12,12 +12,13 @@ so the override keys are identical.
 from __future__ import annotations
 
 import httpx
-from fastapi import HTTPException, WebSocket
+from fastapi import Header, HTTPException, WebSocket
 from pydantic import BaseModel
 
 from .adapters import BaseHTTPAdapter, ServiceProbe, build_adapters
 from .audit import AuditStore, get_audit_store
 from .auth import READ, authorize_headers, get_keystore
+from .config import get_settings, resolve_tenant
 from .copilot import Copilot, get_copilot
 from .live_agent_proxy import ConnectFn
 from .progress import LiveProgressHub, get_progress_hub
@@ -43,8 +44,20 @@ class CopilotSettingsUpdate(BaseModel):
     model: str
 
 
-def store_dep() -> WorkItemStore:
-    """Dependency seam — overridden in tests with a temp store."""
+def store_dep(
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+) -> WorkItemStore:
+    """Dependency seam — overridden in tests with a temp store.
+
+    Tenant scoping (#172): when CFACTORY_MULTI_TENANT is on, every route gets a
+    view of the store scoped to the tenant resolved from ``X-Tenant-Id`` (the
+    header oauth2-proxy injects from the Keycloak tenant claim) — reads filter
+    by it, writes stamp it. Off (local default): the unscoped store, exactly
+    the pre-#172 behaviour.
+    """
+    settings = get_settings()
+    if settings.multi_tenant:
+        return get_store().scoped(resolve_tenant(x_tenant_id, settings))
     return get_store()
 
 

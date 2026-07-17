@@ -10,12 +10,13 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Integer, String, select
+from sqlalchemy import DateTime, Integer, Select, String, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
 
-from .config import Settings, get_settings
+from .config import DEFAULT_TENANT, Settings, get_settings
 from .db import Base, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem
 from .status_taxonomy import is_terminal as _is_terminal
@@ -343,6 +344,14 @@ class WorkItemRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     correlation_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    # Tenant partition (#172). Always "default" in single-tenant mode; stamped
+    # from the resolved request tenant when CFACTORY_MULTI_TENANT is on.
+    # ponytail: correlation_key stays globally unique — a cross-tenant key
+    # collision on write raises IntegrityError; move to a (tenant_id,
+    # correlation_key) composite unique if tenants ever share key spaces.
+    tenant_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_TENANT, server_default=DEFAULT_TENANT, index=True
+    )
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     pfactory: Mapped[dict] = mapped_column(JSON, default=dict)
     aifactory: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -364,19 +373,66 @@ class WorkItemRow(Base):
         )
 
 
+def _ensure_tenant_column(engine: Engine) -> None:
+    """Idempotent live-DB guard for the #172 ``tenant_id`` column.
+
+    The deployed store bootstraps via ``create_all`` (no alembic step in the
+    container), and ``create_all`` never ALTERs an existing table — so a DB
+    created before #172 would crash every SELECT. The formal Alembic migration
+    exists too; this guard covers deploys that don't run it. The DEFAULT
+    backfills existing rows to the single ``default`` tenant.
+    """
+    from sqlalchemy import inspect, text  # noqa: PLC0415 — init-time only
+
+    if "tenant_id" in {c["name"] for c in inspect(engine).get_columns("work_items")}:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE work_items ADD COLUMN tenant_id VARCHAR(64) "
+                f"NOT NULL DEFAULT '{DEFAULT_TENANT}'"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_work_items_tenant_id ON work_items (tenant_id)")
+        )
+
+
 class WorkItemStore:
     """Thin repository over the work_items table.
 
     Pass an explicit ``url`` for tests (a temp SQLite file); production resolves
     from settings (PostgreSQL). Tables are created on init for dev/test; real
     deployments manage schema via Alembic.
+
+    Tenant scoping (#172): an unscoped store (the default) sees every row —
+    exactly the pre-#172 behaviour. ``scoped(tenant)`` returns a view whose
+    reads filter by ``tenant_id`` and whose writes stamp it; ``store_dep``
+    hands routes a scoped view only when CFACTORY_MULTI_TENANT is on.
     """
 
     def __init__(self, url: str | None = None, *, create: bool = True) -> None:
         self._engine = make_engine(url)
         self._session = sessionmaker(self._engine, expire_on_commit=False)
+        self._tenant: str | None = None  # None = unscoped (single-tenant mode)
         if create:
             Base.metadata.create_all(self._engine)
+            _ensure_tenant_column(self._engine)
+
+    def scoped(self, tenant: str) -> WorkItemStore:
+        """A tenant-scoped view sharing this store's engine/session factory."""
+        import copy  # noqa: PLC0415 — trivial stdlib, scoped-view only
+
+        view = copy.copy(self)
+        view._tenant = tenant
+        return view
+
+    def _select(self) -> Select[tuple[WorkItemRow]]:
+        """Base SELECT honouring the tenant scope (no filter when unscoped)."""
+        stmt = select(WorkItemRow)
+        if self._tenant is not None:
+            stmt = stmt.where(WorkItemRow.tenant_id == self._tenant)
+        return stmt
 
     def upsert_from_event(self, event: CompletionEvent) -> tuple[WorkItem, bool]:
         """Thread a completion event into its WorkItem.
@@ -400,7 +456,11 @@ class WorkItemStore:
                         return row.to_model(), False
 
                     if row is None:
-                        row = WorkItemRow(correlation_key=event.correlation_key, timeline=[])
+                        row = WorkItemRow(
+                            correlation_key=event.correlation_key,
+                            timeline=[],
+                            tenant_id=self._tenant or DEFAULT_TENANT,
+                        )
                         session.add(row)
 
                     prev = getattr(row, event.service.value) or {}
@@ -469,10 +529,14 @@ class WorkItemStore:
                         and existing.get("phase") == new_slice.get("phase")
                         and (existing.get("usage") or None) == (new_slice.get("usage") or None)
                     )
-                    if unchanged:
+                    if unchanged and row is not None:
                         return row.to_model()
                     if row is None:
-                        row = WorkItemRow(correlation_key=correlation_key, timeline=[])
+                        row = WorkItemRow(
+                            correlation_key=correlation_key,
+                            timeline=[],
+                            tenant_id=self._tenant or DEFAULT_TENANT,
+                        )
                         session.add(row)
                     setattr(row, service.value, new_slice)
                     if title and not row.title:
@@ -498,7 +562,7 @@ class WorkItemStore:
         transient outage would wipe live state)."""
         cleared = 0
         with self._session.begin() as session:
-            rows = session.scalars(select(WorkItemRow)).all()
+            rows = session.scalars(self._select()).all()
             for row in rows:
                 data = getattr(row, service.value) or {}
                 status = data.get("status")
@@ -524,7 +588,7 @@ class WorkItemStore:
         after a successful poll (``task_id_to_key`` from the same fetch)."""
         affected = 0
         with self._session.begin() as session:
-            rows = session.scalars(select(WorkItemRow)).all()
+            rows = session.scalars(self._select()).all()
             for row in rows:
                 data = getattr(row, service.value) or {}
                 tid = data.get("task_id")
@@ -546,7 +610,7 @@ class WorkItemStore:
 
     def list(self) -> list[WorkItem]:
         with self._session() as session:
-            rows = session.scalars(select(WorkItemRow).order_by(WorkItemRow.updated_at.desc()))
+            rows = session.scalars(self._select().order_by(WorkItemRow.updated_at.desc()))
             return [r.to_model() for r in rows]
 
     def delete(self, correlation_key: str) -> bool:
@@ -565,10 +629,9 @@ class WorkItemStore:
             session.delete(row)
             return True
 
-    @staticmethod
-    def _get_row(session: Session, correlation_key: str) -> WorkItemRow | None:
+    def _get_row(self, session: Session, correlation_key: str) -> WorkItemRow | None:
         return session.scalars(
-            select(WorkItemRow).where(WorkItemRow.correlation_key == correlation_key)
+            self._select().where(WorkItemRow.correlation_key == correlation_key)
         ).first()
 
 

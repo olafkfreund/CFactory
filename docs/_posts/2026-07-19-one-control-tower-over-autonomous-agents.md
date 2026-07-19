@@ -81,5 +81,10 @@ finished, terminals into every running agent, the real cost, and an honest
 verdict — including the gaps. An operator should never have to guess what the
 factory just did, what it cost, or whether to believe it.
 
-A live walkthrough of the full run across all four portals is available on
-request.
+## Watch it run
+
+One continuous walkthrough of all four live portals with this run's own data:
+
+<video controls preload="metadata" style="width:100%;max-width:960px;border-radius:8px" src="{{ '/assets/blog/2026-07-19/factory-walkthrough.mp4' | relative_url }}">
+  Your browser does not support embedded video. <a href="{{ '/assets/blog/2026-07-19/factory-walkthrough.mp4' | relative_url }}">Download the walkthrough</a>.
+</video>

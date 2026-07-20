@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 import httpx
@@ -19,6 +20,8 @@ from .api_deps import (
 )
 from .auth import require_scope
 from .config import get_settings, set_service_url
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["services"])
 
@@ -43,8 +46,9 @@ async def services(
         name = adapter.service.value
         try:
             probe = await run_in_threadpool(adapter.probe)
-        except Exception as exc:  # noqa: BLE001 — never fatal
-            probe = ServiceProbe(online=False, status="error", detail=str(exc))
+        except Exception:  # never fatal — logged and reported as an offline probe
+            logger.exception("[cfactory] probe failed service=%s", name)
+            probe = ServiceProbe(online=False, status="error", detail="probe failed")
         finally:
             adapter.close()
         out.append(
@@ -123,8 +127,9 @@ async def update_service(
         if adapter.service.value == name:
             try:
                 probe = await run_in_threadpool(adapter.probe)
-            except Exception as exc:  # noqa: BLE001 — never fatal
-                probe = ServiceProbe(online=False, status="error", detail=str(exc))
+            except Exception:  # never fatal — logged and reported as an offline probe
+                logger.exception("[cfactory] probe failed service=%s", name)
+                probe = ServiceProbe(online=False, status="error", detail="probe failed")
         adapter.close()
     return {
         "name": name,

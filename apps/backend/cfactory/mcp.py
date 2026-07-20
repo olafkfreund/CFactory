@@ -241,9 +241,9 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         arguments = params.get("arguments", {}) or {}
         try:
             payload = _dispatch_tool(tool_name, arguments)
-        except Exception as exc:
+        except Exception:
             logger.exception("[cfactory-mcp] tool call failed tool=%s", tool_name)
-            return JSONResponse(_error(-32603, f"Internal error: {exc}", rpc_id))
+            return JSONResponse(_error(-32603, "Internal error", rpc_id))
         return JSONResponse(
             _result(
                 {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]},

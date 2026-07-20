@@ -11,11 +11,14 @@ an API key. The default runner is the live integration point (Claude Agent SDK).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..config import Settings, get_settings
 from ..store import WorkItemStore, get_store
+
+logger = logging.getLogger(__name__)
 
 # (question, context, system_prompt) -> answer text
 AgentRunner = Callable[[str, str, str], str]
@@ -165,9 +168,10 @@ def provider_status(settings: Settings | None = None) -> dict[str, object]:
         rows = data.get("data", []) if isinstance(data, dict) else []
         out["reachable"] = True
         out["models"] = [r.get("id") for r in rows if isinstance(r, dict)][:50]
-    except Exception as exc:  # noqa: BLE001 — surface, don't crash
+    except Exception:  # surface, don't crash — logged and reported as unreachable
+        logger.exception("[cfactory] copilot provider probe failed provider=%s", provider)
         out["reachable"] = False
-        out["error"] = str(exc)
+        out["error"] = "provider probe failed"
     return out
 
 

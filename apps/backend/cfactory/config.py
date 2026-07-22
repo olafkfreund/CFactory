@@ -145,7 +145,14 @@ class Settings(BaseSettings):
 
         def to_ws(url: str) -> str:
             ws = url.replace("https://", "wss://").replace("http://", "ws://")
-            return ws.rstrip("/") + "/api/ws"
+            # The upstream live feed is `/ws/events` on every service (PFactory,
+            # AIFactory, TFactory all mount events_ws there). NOT `/api/ws` — that
+            # is CFactory's OWN cockpit-facing endpoint (routes_ws.py); dialing it
+            # upstream hits no route and Starlette 403s the WS, so the cockpit gets
+            # zero pushed events and falls back to polling only (Mission Control
+            # looks dead while task lists still populate). See routes_ws + the
+            # services' server/websockets/events.py.
+            return ws.rstrip("/") + "/ws/events"
 
         return {
             "pfactory": to_ws(self.pfactory_api_url),

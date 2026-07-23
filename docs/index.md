@@ -48,12 +48,19 @@ agentic SDLC needs.
   real cross-service state. The copilot summarises timelines, computes cost and
   latency rollups, and flags anomalies (stuck phases, runaway handback loops,
   gate failures, cost spikes).
-- **Advise + confirm, never silent.** The copilot can *prepare* actions — approve
-  a gate, trigger a handoff, kick a handback — but every write waits for an
-  explicit human click. Human-in-the-loop by design.
+- **Advise + confirm, never silent.** The copilot can *prepare* actions — Approve
+  a plan gate, Approve review (accept code, open the PR, then merge), Reject,
+  Recover, or Remove a failed task — but every write waits for an explicit human
+  click and is audited. Human-in-the-loop by design.
+- **A self-cleaning board.** Stuck and stalled cards no longer linger as phantom
+  "running" tasks: a stage an upstream reports as `stalled` is filtered from the
+  live feed and pruned, and a silent *running* frontier past the stall deadline
+  is age-pruned each poll cycle. A `*_review` or queued frontier waiting on a
+  human is never touched.
 - **Watch agents work, live.** When a build is running, the cockpit streams each
   AIFactory agent's terminal straight into Mission Control — a read-only window
-  into what the agent is doing *right now*, no extra tabs.
+  into what the agent is doing *right now*, no extra tabs. The LIVE AGENTS panel
+  also surfaces TFactory verify sessions, so an active verify never reads as idle.
 - **See the cost.** Every stage reports token usage and cost via the shared
   RFC-0001 `usage` block, so the Tokens & cost page totals real spend across
   plan, code and test — per work item and per service.
@@ -76,6 +83,8 @@ agentic SDLC needs.
 **Design system:** the [Factory Design System](guides/factory-design-system.md) — the shared brand & UI rules every Factory service follows so the suite looks like one product.
 
 **Multi-tenant mode:** [Multi-Tenant Mode](guides/multi-tenant.md) — the `CFACTORY_MULTI_TENANT` flag, how `X-Tenant-Id` is resolved, and the operator flip steps.
+
+**Configuration:** the [Environment reference](dev/environment-reference.md) — every environment variable, flag and operational parameter CFactory reads, with defaults and which ones must be set for a hosted deployment.
 
 ---
 

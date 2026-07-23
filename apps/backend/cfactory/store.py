@@ -603,6 +603,32 @@ class WorkItemStore:
                         session.delete(row)
         return affected
 
+    def prune_stuck(self, service: Service, stuck_task_ids: set[str]) -> int:
+        """Delete work items whose ``service`` stage the upstream reports as
+        stuck/stalled — its own liveness watchdog has given up (TFactory's #95
+        sweep marks a hung stage ``stalled``).
+
+        Auto-removes a dead task from the board instead of the cockpit showing it
+        as "running" forever (which just confuses users). The whole row is dropped
+        (not merely the stage): a task whose current stage is stuck is dead, and
+        keeping its earlier ``done`` stages would leave a card that reads as
+        finished. Robust against re-hydration — the caller also excludes these
+        task ids from the hydrate/reconcile live set every poll, so a still-
+        reported stalled task stays gone. Returns rows deleted. Call ONLY after a
+        successful poll (``stuck_task_ids`` from the same fetch)."""
+        if not stuck_task_ids:
+            return 0
+        deleted = 0
+        with self._session.begin() as session:
+            rows = session.scalars(self._select()).all()
+            for row in rows:
+                data = getattr(row, service.value) or {}
+                tid = data.get("task_id")
+                if tid is not None and tid in stuck_task_ids:
+                    session.delete(row)
+                    deleted += 1
+        return deleted
+
     def get(self, correlation_key: str) -> WorkItem | None:
         with self._session() as session:
             row = self._get_row(session, correlation_key)

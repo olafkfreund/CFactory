@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,8 +24,29 @@ from starlette.concurrency import run_in_threadpool
 from .adapters import AdapterError, AdapterItem, BaseHTTPAdapter, build_adapters, hydrate
 from .config import Settings, get_settings
 from .models import Service
+from .status_taxonomy import is_stuck
 from .store import WorkItemStore, get_store
 from .ws import ConnectionManager
+
+_SPLIT_RE = re.compile(r"[\s_\-]+")
+
+
+def _is_dead_stage(status: str | None) -> bool:
+    """A stage the upstream has given up on: an explicit ``stuck`` marker, or a
+    liveness-swept ``stalled`` / ``watchdog_stalled`` (TFactory's #95 sweep flips
+    a hung stage to ``status=stalled``).
+
+    Such a stage is auto-removed from the board rather than shown as running
+    forever. Token-boundary match (never substring — ``"installed"`` must not
+    read as stalled). ponytail follow-up: fold ``stalled`` into the fleet-shared
+    ``_STUCK_TOKENS`` so ``is_stuck``/``is_active`` agree everywhere, not just
+    here.
+    """
+    if is_stuck(status):
+        return True
+    if not status:
+        return False
+    return "stalled" in {t for t in _SPLIT_RE.split(status.strip().lower()) if t}
 
 
 def _now() -> datetime:
@@ -107,18 +129,30 @@ def poll_progress_once(
     for adapter in adapters:
         try:
             items = adapter.list_items()
+            # A stage the upstream reports as stuck/stalled is a dead task — its
+            # own watchdog gave up. Auto-remove it: keep it out of the live feed +
+            # store so the board never shows it as "running", and delete any card
+            # already on the board. Filtering every poll makes removal stick even
+            # though the upstream keeps listing the stalled task.
+            stuck_ids = {i.task_id for i in items if _is_dead_stage(i.status)}
             for item in items:
+                if item.task_id in stuck_ids:
+                    continue
                 lp = progress_from_item(item)
                 hub.update(lp)
                 changed.append(lp)
             if store is not None:
-                hydrate(store, items)
-                store.reconcile_snapshot(adapter.service, {i.task_id for i in items})
+                live = [i for i in items if i.task_id not in stuck_ids]
+                # Delete dead cards BEFORE reconcile — reconcile would blank the
+                # stalled stage's task_id, defeating prune_stuck's id match.
+                store.prune_stuck(adapter.service, stuck_ids)
+                hydrate(store, live)
+                store.reconcile_snapshot(adapter.service, {i.task_id for i in live})
                 # Drop orphaned duplicate cards left when an upstream re-keys a
                 # task (fallback id -> real GitHub-issue key); reconcile preserves
                 # their terminal stage, so prune by task_id->canonical-key here.
                 store.prune_duplicate_stages(
-                    adapter.service, {i.task_id: i.correlation_key for i in items}
+                    adapter.service, {i.task_id: i.correlation_key for i in live}
                 )
         except AdapterError:
             pass

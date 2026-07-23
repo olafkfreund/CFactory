@@ -11,7 +11,11 @@ from .adapters import AIFactoryAdapter, BaseHTTPAdapter
 from .api_deps import adapters_dep, live_agent_connect_dep, reject_unauthorized_ws
 from .config import get_settings
 from .live_agent_proxy import ConnectFn, proxy_agent_console
-from .live_agents import LiveAgentsResult, discover_live_agents
+from .live_agents import (
+    LiveAgentsResult,
+    discover_live_agents,
+    discover_tfactory_agents,
+)
 from .models import Service
 
 router = APIRouter(tags=["live-agents"])
@@ -28,11 +32,19 @@ async def get_live_agents(
     agent carries a cockpit-side ``ws_path`` that the backend WS proxy (#34)
     re-streams from — the browser never sees an AIFactory URL or token."""
     ai = next((a for a in adapters if a.service is Service.AIFACTORY), None)
+    tf = next((a for a in adapters if a.service is Service.TFACTORY), None)
     try:
         if isinstance(ai, AIFactoryAdapter):
             result = await run_in_threadpool(discover_live_agents, ai)
         else:
             result = LiveAgentsResult(rmux_enabled=False, agents=[])
+        # #184: also surface TFactory's active verify sessions as non-streamable
+        # rows so the panel isn't falsely idle during test-stage agent work.
+        if tf is not None:
+            tf_agents = await run_in_threadpool(discover_tfactory_agents, tf)
+            result = LiveAgentsResult(
+                rmux_enabled=result.rmux_enabled, agents=[*result.agents, *tf_agents]
+            )
     finally:
         for adapter in adapters:
             adapter.close()

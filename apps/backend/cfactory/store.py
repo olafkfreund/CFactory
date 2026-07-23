@@ -19,6 +19,7 @@ from sqlalchemy.types import JSON
 from .config import DEFAULT_TENANT, Settings, get_settings
 from .db import Base, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem
+from .status_taxonomy import is_running
 from .status_taxonomy import is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
 
@@ -625,6 +626,31 @@ class WorkItemStore:
                 data = getattr(row, service.value) or {}
                 tid = data.get("task_id")
                 if tid is not None and tid in stuck_task_ids:
+                    session.delete(row)
+                    deleted += 1
+        return deleted
+
+    def prune_stalled(
+        self, *, now: datetime | None = None, deadline_seconds: float | None = None
+    ) -> int:
+        """Delete work items whose active RUNNING frontier has gone silent past
+        the stall deadline — a dead executor the cockpit would otherwise show as
+        "running" forever.
+
+        Uses ``compute_liveness`` so it catches the case ``prune_stuck`` and
+        ``reconcile_snapshot`` miss: a stale ``in_progress`` orphaned from a
+        completion event (no ``task_id`` for reconcile to match, and no explicit
+        ``stalled`` marker to filter). A parked ``*_review`` / queued frontier
+        legitimately WAITS on a human/agent decision and is never pruned — only a
+        silent *running* frontier is a dead task. Returns rows deleted."""
+        now = now or _now()
+        deadline = stall_deadline_seconds() if deadline_seconds is None else deadline_seconds
+        deleted = 0
+        with self._session.begin() as session:
+            rows = session.scalars(self._select()).all()
+            for row in rows:
+                lv = compute_liveness(row.to_model(), now=now, deadline_seconds=deadline)
+                if lv.stalled and is_running(lv.active_status):
                     session.delete(row)
                     deleted += 1
         return deleted

@@ -158,6 +158,12 @@ def poll_progress_once(
             pass
         finally:
             adapter.close()
+    if store is not None:
+        # Store-wide age sweep (once per cycle, after every adapter): drop a card
+        # whose RUNNING frontier has gone silent past the stall deadline — a dead
+        # executor orphaned from a completion event that no per-adapter reconcile
+        # can clear (no task_id). Parked review/queued frontiers are never touched.
+        store.prune_stalled()
     return changed
 
 

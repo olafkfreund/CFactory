@@ -148,3 +148,44 @@ def test_poll_deletes_a_task_that_later_stalls():
         store,
     )
     assert store.get("5") is None
+
+
+# ── age-based prune_stalled: silent RUNNING frontier removed, parked kept ────
+
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+
+def _future():
+    return datetime.now(UTC) + timedelta(hours=1)  # forces age > deadline
+
+
+def test_prune_stalled_removes_silent_running_frontier():
+    s = _store()
+    s.upsert_snapshot("1", Service.AIFACTORY, ServiceState(task_id="ai:1", status="in_progress"))
+    assert s.prune_stalled(now=_future()) == 1
+    assert s.get("1") is None
+
+
+def test_prune_stalled_keeps_parked_review():
+    # human_review legitimately WAITS on a human — never auto-removed.
+    s = _store()
+    s.upsert_snapshot("2", Service.AIFACTORY, ServiceState(task_id="ai:2", status="human_review"))
+    assert s.prune_stalled(now=_future()) == 0
+    assert s.get("2") is not None
+
+
+def test_prune_stalled_keeps_terminal_and_queued():
+    s = _store()
+    s.upsert_snapshot("3", Service.AIFACTORY, ServiceState(task_id="ai:3", status="done"))
+    s.upsert_snapshot("4", Service.AIFACTORY, ServiceState(task_id="ai:4", status="backlog"))
+    assert s.prune_stalled(now=_future()) == 0
+    assert s.get("3") is not None
+    assert s.get("4") is not None
+
+
+def test_prune_stalled_keeps_fresh_running():
+    # Not yet aged past the deadline → still legitimately running.
+    s = _store()
+    s.upsert_snapshot("5", Service.AIFACTORY, ServiceState(task_id="ai:5", status="in_progress"))
+    assert s.prune_stalled() == 0
+    assert s.get("5") is not None

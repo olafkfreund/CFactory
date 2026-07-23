@@ -656,6 +656,10 @@ export const LiveAgentSchema = z.object({
   title: z.string().nullable(),
   phase: z.string().nullable(),
   status: z.string().nullable(),
+  // A streamable agent has a live rmux console; a non-streamable row (#184, e.g.
+  // a TFactory verify session) is shown as informational — no console to open.
+  // Always emitted by the backend (pydantic defaults serialize), so required here.
+  streamable: z.boolean(),
   // Cockpit-side proxy path the backend re-streams from; never a raw AIFactory URL.
   ws_path: z.string(),
 });

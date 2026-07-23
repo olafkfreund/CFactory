@@ -126,6 +126,26 @@ function ConsoleIcon() {
 }
 
 function AgentTile({ agent, onExpand }: { agent: LiveAgent; onExpand: () => void }) {
+  // #184: a non-streamable row (e.g. a TFactory verify session) is shown so the
+  // panel isn't falsely idle during test-stage work, but has no rmux console.
+  if (!agent.streamable) {
+    return (
+      <div
+        className="la-card"
+        style={{ cursor: "default" }}
+        title={`${agent.service} — #${agent.correlation_key} (no console)`}
+      >
+        <RobotHead live />
+        <span className="la-bubble">
+          <span className="la-id">#{keySlug(agent.correlation_key)}</span>
+          <span className="la-phase">
+            {agent.service}
+            {agent.phase ? ` · ${agent.phase}` : ""}
+          </span>
+        </span>
+      </div>
+    );
+  }
   return (
     <button className="la-card" onClick={onExpand} title={`Open rmux console — #${agent.correlation_key}`}>
       <RobotHead live />
@@ -216,16 +236,26 @@ function Body({ phase, onExpand }: { phase: Phase; onExpand: (a: LiveAgent) => v
       </div>
     );
   }
-  if (!phase.rmuxEnabled) {
-    return <p className="mc-note">Live agents are off — AIFactory’s rmux console is disabled.</p>;
-  }
+  // #184: the panel covers AIFactory console sessions AND TFactory verify
+  // sessions, so it must not read "idle" just because AIFactory has no task.
+  // Render whenever ANY agent (streamable or not) is active; the empty state is
+  // honest about what "no agents" means.
   if (phase.agents.length === 0) {
-    return <p className="mc-note">No agents running right now. Terminals appear here as tasks start.</p>;
+    return (
+      <p className="mc-note">
+        No agent sessions running right now.
+        {!phase.rmuxEnabled && " (AIFactory’s rmux console is disabled.)"}
+      </p>
+    );
   }
   return (
     <div className="mc-agents">
       {phase.agents.map((a) => (
-        <AgentTile key={a.correlation_key} agent={a} onExpand={() => onExpand(a)} />
+        <AgentTile
+          key={`${a.service}:${a.correlation_key}`}
+          agent={a}
+          onExpand={() => onExpand(a)}
+        />
       ))}
     </div>
   );

@@ -20,6 +20,8 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  id-token: write        # cosign keyless via GitHub OIDC
+  attestations: write    # cosign attest (SBOM)
 
 env:
   BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/cfactory
@@ -63,6 +65,7 @@ jobs:
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Build + push backend
+        id: build_backend
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -74,8 +77,11 @@ jobs:
             ${{ env.BACKEND_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
 
       - name: Build + push frontend (cockpit)
+        id: build_frontend
         uses: docker/build-push-action@v6
         with:
           context: apps/frontend-web
@@ -87,6 +93,98 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      # ----------------------------------------------------------------------
+      # Supply-chain parity (Factory#317/#318): Trivy P0 gate → cosign keyless
+      # sign → dual SBOM (SPDX + CycloneDX) attest, for BOTH images. Adapted
+      # from the proven fleet pattern: AIFactory/TFactory release.yml (cosign +
+      # Syft dual-SBOM) and the P0.8/P0.8b Trivy gate in AIFactory
+      # tests/docker/test_p0_supply_chain.py.
+      #
+      # The gate runs AFTER push (scans the pushed image by digest) but BEFORE
+      # the factory-gitops bump below, so a vulnerable image is never promoted
+      # to the cluster even though it exists in GHCR.
+      # ----------------------------------------------------------------------
+
+      - name: Install Trivy (P0 CVE gate)
+        uses: aquasecurity/setup-trivy@v0.2.6
+        with:
+          version: latest
+
+      # Same policy as the fleet's P0.8 test: fail on FIXABLE HIGH/CRITICAL
+      # only (`--ignore-unfixed`). Trivy auto-reads .trivyignore from the repo
+      # root for audited exceptions. `--exit-code 1` turns a finding into a
+      # hard gate.
+      - name: Trivy scan backend image (fixable HIGH/CRITICAL)
+        run: |
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}"
+
+      - name: Trivy scan frontend image (fixable HIGH/CRITICAL)
+        run: |
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"
+
+      # P0.8b blind spot: the cockpit's node_modules never reaches the runtime
+      # image (only /app/dist is copied into nginx), so the image scan can't see
+      # bundled JS deps. Scan the lockfile directly — this is the layer that
+      # caught the Copilot-cache CVE class (Factory#971).
+      - name: Trivy scan frontend lockfile (bundled JS deps)
+        run: |
+          trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 apps/frontend-web/package-lock.json
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.17.8
+
+      - name: Sign both images (cosign keyless via Sigstore + GitHub OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}"
+          cosign sign --yes "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"
+
+      - name: Generate + attest dual SBOMs (SPDX + CycloneDX) for both images
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          BACKEND="${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}"
+          FRONTEND="${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"
+          # Backend
+          syft scan "$BACKEND" -o spdx-json=sbom-backend.spdx.json
+          syft scan "$BACKEND" -o cyclonedx-json=sbom-backend.cyclonedx.json
+          cosign attest --yes --type spdxjson  --predicate sbom-backend.spdx.json      "$BACKEND"
+          cosign attest --yes --type cyclonedx --predicate sbom-backend.cyclonedx.json "$BACKEND"
+          # Frontend (cockpit)
+          syft scan "$FRONTEND" -o spdx-json=sbom-frontend.spdx.json
+          syft scan "$FRONTEND" -o cyclonedx-json=sbom-frontend.cyclonedx.json
+          cosign attest --yes --type spdxjson  --predicate sbom-frontend.spdx.json      "$FRONTEND"
+          cosign attest --yes --type cyclonedx --predicate sbom-frontend.cyclonedx.json "$FRONTEND"
+
+      - name: Verify signatures (deploy self-test)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          for IMG in \
+            "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}" \
+            "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"; do
+            cosign verify \
+              --certificate-identity-regexp "^https://github\.com/${{ github.repository_owner }}/CFactory/" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$IMG"
+          done
+
+      - name: Upload SBOMs as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfactory-sboms-${{ steps.tags.outputs.sha }}
+          path: sbom-*.json
+          if-no-files-found: error
 
       - name: Bump factory-gitops (if GITOPS_PAT set)
         if: ${{ env.GITOPS_PAT != '' }}

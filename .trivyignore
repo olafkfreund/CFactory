@@ -1,0 +1,11 @@
+# Trivy CVE allow-list — audited exceptions only.
+#
+# Every line must include the CVE ID + a rationale. NEVER blanket-skip.
+# When a patched upstream lands or we migrate the dependency, REMOVE the
+# corresponding line.
+#
+# The image + lockfile scans in deploy.yml run with `--ignore-unfixed`, so
+# CVEs with no upstream patch never reach this file — only add a fixable
+# HIGH/CRITICAL here, and only with an audited not-applicable justification.
+#
+# (No exceptions currently. Keep it that way.)

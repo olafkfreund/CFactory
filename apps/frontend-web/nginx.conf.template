@@ -70,6 +70,15 @@ server {
         proxy_set_header Authorization     "Bearer ${CFACTORY_API_KEY}";
     }
 
+    # Agent capability manifest (RFC-0019 §3.4) → backend. Needs its own location
+    # or the SPA fallback above would answer with index.html. No Authorization is
+    # injected: the manifest is public metadata an agent reads before it holds a
+    # token, and the backend does not gate this path.
+    location = /.well-known/agent-skills/index.json {
+        proxy_pass ${BACKEND_URL};
+        proxy_set_header Host $host;
+    }
+
     # Health passthrough (used by the cockpit's BackendPill).
     location = /health {
         proxy_pass ${BACKEND_URL};

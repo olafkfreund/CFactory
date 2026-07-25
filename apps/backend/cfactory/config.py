@@ -85,12 +85,30 @@ class Settings(BaseSettings):
     # it would turn the feature on by accident for every developer, which is
     # exactly what happened the first time this was wired that way.
     github_token: str | None = None
-    # "owner/repo" a card's issue is OPENED in. Adopting an existing issue needs
-    # no default — the card's own issue_ref names its repo. Unset means cards can
-    # only adopt, never create.
+    # The repository path a card's issue is OPENED in: "owner/repo" on GitHub,
+    # "group/project" (subgroups allowed) on GitLab, "organization/project/repo"
+    # on Azure DevOps. Adopting an existing issue needs no default — the card's
+    # own issue_ref names its project. Unset means cards can only adopt, never
+    # create.
     github_repo: str | None = None
     # Overridable for GitHub Enterprise (and pinned in tests).
     github_api_url: str = "https://api.github.com"
+
+    # Which git host the board syncs cards with (RFC-0020 phase 1): "github"
+    # (default), "gitlab" or "azure_devops". The default keeps every existing
+    # deploy on exactly the behaviour it has today — the three settings below are
+    # inert until this is changed.
+    git_provider: str = "github"
+    # Credential for the selected provider. The provider-neutral name for
+    # `github_token` above: set either, this one wins. It carries the same
+    # deliberate omission — the bare GITHUB_TOKEN / GH_TOKEN is NOT accepted,
+    # because it is ambient wherever `gh` is logged in and this credential opens
+    # issues in someone's repo.
+    git_provider_token: str | None = None
+    # Base URL of the provider instance — a self-hosted GitLab, an Azure DevOps
+    # server, a GitHub Enterprise. Unset means the provider's public default
+    # (`github_api_url` for GitHub, https://gitlab.com, https://dev.azure.com).
+    git_provider_url: str | None = None
 
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None

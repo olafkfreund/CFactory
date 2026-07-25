@@ -43,6 +43,33 @@ developer's machine must not be able to switch that on by accident.
 With a token but no repo, cards can only *adopt* existing issues — nothing is
 ever created.
 
+## Other git hosts: GitLab and Azure DevOps (RFC-0020 phase 1)
+
+GitHub is the default, and a deploy that never sets `CFACTORY_GIT_PROVIDER`
+behaves exactly as this guide describes. Point the board at another host with:
+
+```bash
+CFACTORY_GIT_PROVIDER=gitlab                           # github (default) | gitlab | azure_devops
+CFACTORY_GIT_PROVIDER_TOKEN=<a token that can open issues>
+CFACTORY_GIT_PROVIDER_URL=https://gitlab.example.com   # optional; self-hosted instance
+CFACTORY_GITHUB_REPO=group/subgroup/project            # the host's project path
+```
+
+`CFACTORY_GITHUB_REPO` keeps its name (renaming a setting breaks running deploys
+for nothing) but is read as *the provider's project path*: `owner/repo` on
+GitHub, `group/project` on GitLab, `organization/project/repo` on Azure DevOps.
+Everything above this section — the ownership table, the conflict rule,
+idempotency, adoption, the fail-safe posture — is unchanged, because the board
+talks to the fleet's `GitProvider` protocol rather than to any host's API. Read
+"GitHub wins" as "the provider wins": a GitLab issue closed on gitlab.com moves
+its card to `done` exactly as a GitHub one does, and GitLab's own vocabulary
+(`opened` state, IID identifiers, flat label strings) never reaches a card.
+
+That protocol is not CFactory's. It is vendored byte-for-byte from the Factory
+hub into `apps/backend/runners/github/` and guarded by the
+`factory-github drift` CI gate — do not edit that tree; fix the hub canonical and
+re-vendor.
+
 ## What syncs, and when
 
 | Trigger | What happens |

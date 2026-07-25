@@ -57,6 +57,12 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
     BoardOperation("update", "PATCH", "/api/cards/{card_key}", "cfactory_update_card"),
     BoardOperation("move", "PATCH", "/api/cards/{card_key}", "cfactory_move_card"),
     BoardOperation("reprioritise", "PATCH", "/api/cards/{card_key}", "cfactory_reprioritise_card"),
+    BoardOperation(
+        "sync_github",
+        "POST",
+        "/api/cards/{card_key}/sync-github",
+        "cfactory_sync_card_github",
+    ),
     BoardOperation("delete", "DELETE", "/api/cards/{card_key}", "cfactory_delete_card"),
 )
 

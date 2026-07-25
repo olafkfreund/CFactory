@@ -75,6 +75,23 @@ class Settings(BaseSettings):
     # silently accepted. `hard` cards route through PFactory and need no project.
     intake_project_id: str | None = None
 
+    # GitHub card <-> issue sync (RFC-0019 §3.5, Phase 6). Sync is OFF unless
+    # this is set, so an unconfigured deploy behaves exactly as before: no
+    # network call on a card write, no issue opened. Server-side only.
+    #
+    # Deliberately does NOT accept the bare GITHUB_TOKEN / GH_TOKEN the way the
+    # copilot accepts OLLAMA_API_KEY. Those are ambient on any machine with `gh`
+    # logged in, and this credential OPENS ISSUES in someone's repo — inheriting
+    # it would turn the feature on by accident for every developer, which is
+    # exactly what happened the first time this was wired that way.
+    github_token: str | None = None
+    # "owner/repo" a card's issue is OPENED in. Adopting an existing issue needs
+    # no default — the card's own issue_ref names its repo. Unset means cards can
+    # only adopt, never create.
+    github_repo: str | None = None
+    # Overridable for GitHub Enterprise (and pinned in tests).
+    github_api_url: str = "https://api.github.com"
+
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None
 

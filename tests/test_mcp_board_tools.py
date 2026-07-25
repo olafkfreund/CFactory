@@ -53,6 +53,9 @@ MUTATIONS = [
     ("cfactory_update_card", {"card_key": "FCT-1", "title": "renamed"}),
     ("cfactory_move_card", {"card_key": "FCT-1", "status": "in_progress"}),
     ("cfactory_reprioritise_card", {"card_key": "FCT-1", "priority": 3}),
+    # Phase 6. Inert here (no CFACTORY_GITHUB_TOKEN in these Settings), which is
+    # the point: it must still be refused to a read-scoped key.
+    ("cfactory_sync_card_github", {"card_key": "FCT-1"}),
     ("cfactory_delete_card", {"card_key": "FCT-1"}),
 ]
 

@@ -103,6 +103,8 @@ def test_initialize_and_tools_list(mcp_client):
         "cfactory_list_cards",
         "cfactory_get_card",
         "cfactory_create_card",
+        # RFC-0019 Phase 6 GitHub sync.
+        "cfactory_sync_card_github",
         "cfactory_update_card",
         "cfactory_move_card",
         "cfactory_reprioritise_card",

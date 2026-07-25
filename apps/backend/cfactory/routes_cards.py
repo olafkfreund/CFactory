@@ -128,6 +128,35 @@ def update_card(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; the
         raise _not_found(card_key) from None
 
 
+@router.post("/api/cards/{card_key}/sync-github")
+def sync_card_github(
+    card_key: str,
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Sync this card with its GitHub issue (RFC-0019 §3.5).
+
+    Opens an issue in `CFACTORY_GITHUB_REPO` if the card has none; otherwise
+    adopts the issue named by `issue_ref` and mirrors it down. **GitHub is the
+    record of truth: on conflict its title / labels / open-closed state
+    overwrite the card's.** The card's planning fields (priority, tier,
+    milestone, acceptance criteria) are never touched.
+
+    Idempotent — syncing twice adopts, it does not open a second issue. A GitHub
+    outage returns 200 with `sync.ok == false` and the reason recorded on the
+    card, rather than failing the board.
+    """
+    try:
+        return card_ops.sync_card_github(
+            store, AuditContext(audit, actor), card_key, transport=transport
+        )
+    except CardNotFoundError:
+        raise _not_found(card_key) from None
+
+
 @router.delete("/api/cards/{card_key}")
 def delete_card(
     card_key: str,

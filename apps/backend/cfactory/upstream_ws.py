@@ -17,6 +17,8 @@ import websockets
 from starlette.concurrency import run_in_threadpool
 
 from .adapters.base import first
+from .card_intake import apply_status
+from .cards import get_cards_store
 from .config import Settings, get_settings
 from .models import CompletionEvent, Service
 from .store import WorkItemStore
@@ -75,6 +77,11 @@ async def handle_message(
     work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
     # Idempotent: a duplicate upstream message is not re-broadcast.
     if applied:
+        # Same card write-back as the REST ingress (RFC-0019 §3.2) — a card must
+        # not go stale just because its progress arrived over the WS relay
+        # instead of /api/events. Unscoped store: a relayed upstream message
+        # carries no tenant header to scope by.
+        await run_in_threadpool(apply_status, get_cards_store(), work_item)
         await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
     return event
 

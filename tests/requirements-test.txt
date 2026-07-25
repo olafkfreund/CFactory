@@ -2,3 +2,6 @@
 pytest>=8.3
 pytest-asyncio>=0.25
 httpx>=0.28
+# Validates the served fleet agent-skills aggregate against the vendored
+# RFC-0019 contract schema (tests/test_fleet_manifest_conformance.py).
+jsonschema>=4.23

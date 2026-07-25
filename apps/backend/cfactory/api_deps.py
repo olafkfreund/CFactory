@@ -109,6 +109,14 @@ def provider_health_transport_dep() -> httpx.BaseTransport | None:
     return None
 
 
+def fleet_transport_dep() -> httpx.AsyncBaseTransport | None:
+    """Dependency seam for the fleet agent-skills aggregate's sibling fetches
+    (RFC-0019 §3.4) — overridden in tests with a MockTransport. None → real
+    transport. Async, unlike the probes above: the three siblings are fetched
+    concurrently so one slow origin cannot serialise the others."""
+    return None
+
+
 def live_agent_connect_dep() -> ConnectFn:
     """Dependency seam for the upstream rmux WS client — overridden in tests with
     a fake upstream. Defaults to the real ``websockets.connect``."""

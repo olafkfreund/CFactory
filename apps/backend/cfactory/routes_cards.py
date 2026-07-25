@@ -20,6 +20,7 @@ mapping the domain errors onto status codes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Annotated
 
@@ -30,7 +31,7 @@ from . import card_ops
 from .api_deps import action_transport_dep, audit_dep, cards_store_dep
 from .audit import AuditStore
 from .auth import require_scope
-from .card_ops import AuditContext, CardNotFoundError
+from .card_ops import AuditContext, CardNotFoundError, StageRefusedError, UnknownStageError
 from .cards import Card, CardCreate, CardStore, CardTier, CardUpdate, DuplicateCardKeyError
 from .cards import CardStatus as CardStatusT
 from .enterprise import identity_dep
@@ -40,6 +41,37 @@ router = APIRouter(tags=["cards"])
 
 def _not_found(card_key: str) -> HTTPException:
     return HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"no card {card_key!r}")
+
+
+def _stage_action(
+    store: CardStore,
+    ctx: AuditContext,
+    card_key: str,
+    transport: httpx.BaseTransport | None,
+    stage: str | None,
+) -> dict[str, object]:
+    """Run one stage action (or the whole sequence when ``stage`` is None).
+
+    The four routes below differ only in which stage they name, so the error
+    mapping lives here once: 404 for an unknown card, and 409 for a REFUSED
+    transition carrying both a machine-readable ``reason`` and a human
+    ``message`` — never a dispatch into nothing reported as success.
+    """
+    try:
+        if stage is None:
+            return card_ops.run_card_sequence(store, ctx, card_key, transport=transport)
+        return card_ops.run_card_stage(store, ctx, card_key, stage, transport=transport)
+    except CardNotFoundError:
+        raise _not_found(card_key) from None
+    except StageRefusedError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={"reason": exc.code, "message": exc.message},
+        ) from None
+    except UnknownStageError as exc:  # pragma: no cover — the paths are literals
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail=f"unknown stage {exc.args[0]!r}"
+        ) from None
 
 
 @router.get("/api/cards")
@@ -155,6 +187,74 @@ def sync_card_github(
         )
     except CardNotFoundError:
         raise _not_found(card_key) from None
+
+
+@dataclass
+class StageActionDeps:
+    """The injected seams every stage action needs, bundled as one dependency.
+
+    The four routes below are identical apart from which stage they name, so the
+    wiring is declared once here instead of as four copies of the same five-param
+    FastAPI signature. Requires the WRITE scope, exactly as the other mutations do.
+    """
+
+    store: Annotated[CardStore, Depends(cards_store_dep)]
+    audit: Annotated[AuditStore, Depends(audit_dep)]
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)]
+    _scope: Annotated[str | None, Depends(require_scope("write"))]
+    actor: Annotated[str, Depends(identity_dep)]
+
+    def run(self, card_key: str, stage: str | None) -> dict[str, object]:
+        return _stage_action(
+            self.store, AuditContext(self.audit, self.actor), card_key, self.transport, stage
+        )
+
+
+@router.post("/api/cards/{card_key}/actions/plan")
+def plan_card(card_key: str, deps: Annotated[StageActionDeps, Depends()]) -> dict[str, object]:
+    """Send this card to PFactory for planning (RFC-0020 §3.7).
+
+    Explicit, so it OVERRIDES tier routing for the destination — a `low` card can
+    be planned even though its tier would skip planning — while the tier still
+    supplies the payload. 409 with a `reason` code when the transition is
+    impossible; a stage already complete is skipped with a reason, not re-run.
+    """
+    return deps.run(card_key, "plan")
+
+
+@router.post("/api/cards/{card_key}/actions/code")
+def code_card(card_key: str, deps: Annotated[StageActionDeps, Depends()]) -> dict[str, object]:
+    """Send this card to AIFactory to be built (RFC-0020 §3.7).
+
+    Allowed on a `hard` card that was never planned — the response warns that a
+    stage was skipped rather than refusing, because building without a plan is a
+    lossy choice a human is entitled to make. 409 when there is no tier to build
+    from or no configured intake project.
+    """
+    return deps.run(card_key, "code")
+
+
+@router.post("/api/cards/{card_key}/actions/test")
+def test_card(card_key: str, deps: Annotated[StageActionDeps, Depends()]) -> dict[str, object]:
+    """Send this card to TFactory to be verified (RFC-0020 §3.7).
+
+    Refuses with `no_build_to_verify` unless the card is joined to a work item AND
+    its code stage completed: asking to verify something that was never built would
+    generate verification lanes against nothing.
+    """
+    return deps.run(card_key, "test")
+
+
+@router.post("/api/cards/{card_key}/actions/run")
+def run_card(card_key: str, deps: Annotated[StageActionDeps, Depends()]) -> dict[str, object]:
+    """Run this card through plan -> code -> test (RFC-0020 §3.7).
+
+    Only the first stage still owed is dispatched now; each later one goes out when
+    the previous reaches terminal success on the work-item timeline. Stages already
+    complete are skipped, so this RESUMES a part-finished or failed card rather than
+    restarting it, and a failed stage stops the sequence with the card blocked.
+    """
+    return deps.run(card_key, None)
 
 
 @router.delete("/api/cards/{card_key}")

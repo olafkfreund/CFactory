@@ -76,6 +76,12 @@ agentic SDLC needs.
 
 [See the architecture →](/architecture/) &nbsp; · &nbsp; [See the roadmap →](/roadmap/) &nbsp; · &nbsp; [Meet the family →](/family/)
 
+**Plan the work:** the [Planning board guide](guides/planning-board.md) — the
+agent-native backlog RFC-0019 added in front of the pipeline: cards, board views,
+MCP board tools and scopes, and how promoting a card to `ready` dispatches it
+into the factory by itself. New here? Follow
+[Plan a card, watch it build](guides/plan-a-card-walkthrough.md) end to end.
+
 **See the cockpit:** the [Cockpit gallery](guides/cockpit-gallery.md) — a captioned tour of every view, captured against the live cluster, including the live execution graph across all three PARR stages.
 
 **Connect your editor:** see [Connecting editors & external clients](guides/token-gated-api.md) — how to point VS Code (and other clients) at CFactory in any deployment.

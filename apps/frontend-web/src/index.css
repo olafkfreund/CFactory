@@ -1814,3 +1814,70 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .cmdk-scrim, .cmdk { animation: none; }
 }
+
+/* --- Planning cards (RFC-0019 Phase 1, #302) -------------------------------
+   The Backlog list and the planning Kanban reuse .board/.column/.page-head/
+   .rt-toolbar wholesale; only the card body, the form controls and the per-status
+   column accents are new. */
+.column--card-backlog { border-top-color: var(--faint); }
+.column--card-ready { border-top-color: var(--cyan); }
+.column--card-progress { border-top-color: var(--code); }
+.column--card-blocked { border-top-color: var(--red); }
+.column--card-done { border-top-color: var(--green); }
+.column--card-backlog .column-dot { background: var(--faint); }
+.column--card-ready .column-dot { background: var(--cyan); }
+.column--card-progress .column-dot { background: var(--code); }
+.column--card-blocked .column-dot { background: var(--red); }
+.column--card-done .column-dot { background: var(--green); }
+
+.backlog-list { display: flex; flex-direction: column; gap: 0.6rem; }
+
+.card-pl {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 0.7rem 0.8rem; transition: border-color 0.15s, opacity 0.15s;
+}
+.card-pl--busy { opacity: 0.55; }
+.card-pl__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.card-pl__prio { font-size: 0.72rem; color: var(--faint); }
+.card-pl__title { font-size: 0.92rem; font-weight: 500; margin: 0.35rem 0 0.5rem; line-height: 1.35; }
+.card-pl__chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.55rem; }
+.card-pl__actions { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+
+.card-chip {
+  font: 500 0.7rem var(--font-mono); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border-soft);
+  border-radius: 999px; padding: 0.12rem 0.5rem;
+}
+.card-chip--live { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, var(--border)); }
+.card-tier {
+  font: 600 0.7rem var(--font-mono); border-radius: 999px; padding: 0.12rem 0.5rem;
+  border: 1px solid var(--border);
+}
+.card-tier--low { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.card-tier--medium { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
+.card-tier--hard { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--border)); }
+
+.card-select, .card-input {
+  font: 500 0.76rem var(--font-mono); color: var(--text);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 7px; padding: 0.3rem 0.5rem;
+}
+.card-select:focus-visible, .card-input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.card-input--sm { width: 8.5rem; }
+.card-textarea { width: 100%; resize: vertical; font-family: var(--font-ui); }
+
+.card-btn {
+  font: 600 0.74rem var(--font-mono); cursor: pointer; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 7px; padding: 0.3rem 0.6rem;
+}
+.card-btn:hover { color: var(--text); border-color: var(--cyan); }
+.card-btn:disabled { opacity: 0.5; cursor: default; }
+.card-btn--danger:hover { color: var(--red); border-color: var(--red); }
+
+.card-form {
+  display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.9rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem;
+}
+.card-form__row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.card-form__actions { display: flex; gap: 0.4rem; }

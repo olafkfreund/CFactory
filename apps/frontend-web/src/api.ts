@@ -28,7 +28,7 @@ async function getJson<T>(path: string, schema: z.ZodType<T>, label: string): Pr
 // then validates the body against `schema`. Identical behavior to the
 // hand-rolled updateCopilotSettings/updateService blocks it replaces.
 async function sendJson<T>(
-  method: "POST" | "PUT",
+  method: "POST" | "PUT" | "PATCH",
   path: string,
   body: unknown,
   schema: z.ZodType<T>,
@@ -38,17 +38,19 @@ async function sendJson<T>(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!resp.ok) {
-    let detail = `HTTP ${resp.status}`;
-    try {
-      detail =
-        z.object({ detail: z.string().optional() }).parse(await resp.json()).detail ?? detail;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(detail);
-  }
+  if (!resp.ok) throw new Error(await errorDetail(resp));
   return schema.parse(await resp.json());
+}
+
+// Surface the backend's `{detail}` message when present, falling back to
+// `HTTP <status>` for a non-JSON error body.
+async function errorDetail(resp: Response): Promise<string> {
+  try {
+    const parsed = z.object({ detail: z.string().optional() }).parse(await resp.json());
+    return parsed.detail ?? `HTTP ${resp.status}`;
+  } catch {
+    return `HTTP ${resp.status}`;
+  }
 }
 
 // --- Health ---------------------------------------------------------------
@@ -1010,4 +1012,89 @@ export async function searchWorkItems(q: string, limit = 20): Promise<SearchResu
   const params = new URLSearchParams({ q, limit: String(limit) });
   const body = await getJson(`/api/search?${params.toString()}`, SearchResponseSchema, "search");
   return body.results;
+}
+
+// --- Planning cards (RFC-0019 Phase 1, #302) -------------------------------
+
+// A card is the planning-time home of a correlation: humans (and, via MCP,
+// agents) create and prioritise cards; when one enters the factory it gains a
+// `correlation_key` and threads the existing work-item timeline. Statuses are
+// the PLANNING axis (backlog → done) and are orthogonal to the PARR pipeline
+// stage statuses rendered by Board.tsx.
+export const CardStatusSchema = z.enum(["backlog", "ready", "in_progress", "blocked", "done"]);
+export type CardStatus = z.infer<typeof CardStatusSchema>;
+
+// Difficulty tiers reuse RFC-0011's intake vocabulary.
+export const CardTierSchema = z.enum(["low", "medium", "hard"]);
+export type CardTier = z.infer<typeof CardTierSchema>;
+
+export const CardSchema = z
+  .object({
+    card_key: z.string(),
+    tenant_id: z.string(),
+    title: z.string(),
+    acceptance_criteria: z.array(z.string()),
+    status: CardStatusSchema,
+    // Lower is higher priority (1 sorts above 2).
+    priority: z.number(),
+    tier: CardTierSchema.nullable(),
+    assignee: z.string().nullable(),
+    milestone: z.string().nullable(),
+    // Set once the card enters the factory (RFC-0001 correlation).
+    correlation_key: z.string().nullable(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .passthrough();
+export type Card = z.infer<typeof CardSchema>;
+
+// The list endpoint's envelope: tolerate both a bare array and the `{cards}`
+// envelope the sibling endpoints use, so either backend shape round-trips.
+const CardListSchema = z.union([
+  z.array(CardSchema),
+  z.object({ cards: z.array(CardSchema) }).passthrough(),
+]);
+
+export type CardFilters = Partial<Record<"status" | "milestone" | "assignee" | "tier", string>>;
+
+// Fields a human (or an agent) may change on an existing card. `status` +
+// `priority` are the move/reprioritise pair the planning board drives.
+export type CardPatch = Partial<
+  Pick<
+    Card,
+    "title" | "acceptance_criteria" | "status" | "priority" | "tier" | "assignee" | "milestone"
+  >
+>;
+
+export type CardCreate = Pick<Card, "title"> &
+  Partial<
+    Pick<Card, "acceptance_criteria" | "status" | "priority" | "tier" | "assignee" | "milestone">
+  >;
+
+export async function fetchCards(filters: CardFilters = {}): Promise<Card[]> {
+  const params = new URLSearchParams(
+    Object.entries(filters).filter((e): e is [string, string] => Boolean(e[1])),
+  );
+  const qs = params.toString();
+  const body = await getJson(`/api/cards${qs ? `?${qs}` : ""}`, CardListSchema, "cards");
+  return Array.isArray(body) ? body : body.cards;
+}
+
+export async function fetchCard(cardKey: string): Promise<Card> {
+  return getJson(`/api/cards/${encodeURIComponent(cardKey)}`, CardSchema, "card");
+}
+
+export async function createCard(card: CardCreate): Promise<Card> {
+  return sendJson("POST", "/api/cards", card, CardSchema);
+}
+
+export async function patchCard(cardKey: string, patch: CardPatch): Promise<Card> {
+  return sendJson("PATCH", `/api/cards/${encodeURIComponent(cardKey)}`, patch, CardSchema);
+}
+
+export async function deleteCard(cardKey: string): Promise<void> {
+  const resp = await fetch(`/api/cards/${encodeURIComponent(cardKey)}`, { method: "DELETE" });
+  // 204 (no body) is the expected success shape; anything non-2xx surfaces the
+  // backend detail exactly like the JSON writers above.
+  if (!resp.ok) throw new Error(await errorDetail(resp));
 }

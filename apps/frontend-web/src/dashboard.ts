@@ -6,6 +6,8 @@ import type { Health, WorkItem } from "./api";
 import {
   IconAudit,
   IconBell,
+  IconDocument,
+  IconEdit,
   IconInsights,
   IconPipeline,
   IconRunning,
@@ -17,6 +19,8 @@ import {
 export type View =
   | "overview"
   | "needs"
+  | "backlog"
+  | "planning"
   | "pipeline"
   | "running"
   | "tokens"
@@ -32,6 +36,10 @@ export type Backend =
 export const NAV: { id: View; label: string; Icon: typeof IconPipeline }[] = [
   { id: "overview", label: "Mission Control", Icon: IconInsights },
   { id: "needs", label: "Needs you", Icon: IconBell },
+  // RFC-0019 planning surface (#302): the backlog + the status Kanban over cards,
+  // sitting just ahead of the PARR pipeline they feed.
+  { id: "backlog", label: "Backlog", Icon: IconDocument },
+  { id: "planning", label: "Planning board", Icon: IconEdit },
   { id: "pipeline", label: "Pipeline", Icon: IconPipeline },
   { id: "running", label: "Active tasks", Icon: IconRunning },
   { id: "tokens", label: "Tokens", Icon: IconTokens },

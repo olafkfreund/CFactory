@@ -48,6 +48,7 @@ from .api_deps import (  # noqa: F401 — public re-export surface
     adapters_dep,
     audit_dep,
     copilot_dep,
+    fleet_transport_dep,
     live_agent_connect_dep,
     observe_transport_dep,
     progress_hub_dep,

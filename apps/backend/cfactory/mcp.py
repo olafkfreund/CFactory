@@ -665,6 +665,26 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
 }
 
 
+# How each transport-neutral domain error is rendered over JSON-RPC. A table
+# rather than a ladder of ``except`` clauses because every entry says the same
+# thing in the same shape, and the ladder grew one rung per phase.
+_TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...] = (
+    (CardNotFoundError, lambda exc: {"error": f"no card {exc.args[0]!r}"}),
+    (DuplicateCardKeyError, lambda exc: {"error": f"card already exists: {exc.args[0]!r}"}),
+    (
+        DuplicateIssueRefError,
+        lambda exc: {"error": f"another card already tracks issue {exc.args[0]!r}"},
+    ),
+    # The REST twin answers 409 {reason, message}; over JSON-RPC the same two
+    # fields, so an agent can branch on the code and quote the sentence.
+    (StageRefusedError, lambda exc: {"error": exc.message, "reason": exc.code}),
+    (
+        ValidationError,
+        lambda exc: {"error": "invalid arguments", "details": exc.errors(include_url=False)},
+    ),
+)
+
+
 def _dispatch_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> Any:
     """Run a tool, rendering the domain errors as JSON the agent can read.
 
@@ -677,18 +697,8 @@ def _dispatch_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> An
         return {"error": f"unknown tool: {name}"}
     try:
         return handler(arguments, ctx)
-    except CardNotFoundError as exc:
-        return {"error": f"no card {exc.args[0]!r}"}
-    except DuplicateCardKeyError as exc:
-        return {"error": f"card already exists: {exc.args[0]!r}"}
-    except DuplicateIssueRefError as exc:
-        return {"error": f"another card already tracks issue {exc.args[0]!r}"}
-    except StageRefusedError as exc:
-        # The REST twin answers 409 {reason, message}; over JSON-RPC the same two
-        # fields, so an agent can branch on the code and quote the sentence.
-        return {"error": exc.message, "reason": exc.code}
-    except ValidationError as exc:
-        return {"error": "invalid arguments", "details": exc.errors(include_url=False)}
+    except tuple(kind for kind, _ in _TOOL_ERRORS) as exc:
+        return next(render(exc) for kind, render in _TOOL_ERRORS if isinstance(exc, kind))
 
 
 # ---------------------------------------------------------------------------

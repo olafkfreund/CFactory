@@ -31,6 +31,7 @@ import httpx
 from .audit import AuditStore
 from .card_intake import maybe_dispatch
 from .cards import Card, CardCreate, CardStore, CardUpdate
+from .github_sync import maybe_sync, sync_card
 
 # Audit rows carry a ``target_service``; a card mutation never leaves CFactory,
 # so it is attributed to CFactory itself rather than to an upstream factory.
@@ -111,6 +112,43 @@ def _intake(
     return store.get(card.card_key) or card
 
 
+def _github(
+    store: CardStore,
+    ctx: AuditContext,
+    card: Card,
+    transport: httpx.BaseTransport | None,
+) -> Card:
+    """Run the RFC-0019 §3.5 GitHub hook and return the card as it now stands.
+
+    A no-op unless sync is configured AND this write left the card ``ready`` (or
+    already carrying an issue). Like the intake hook it never raises: a GitHub
+    outage marks the card and writes an ``ok=False`` audit entry rather than
+    500ing the board.
+
+    Runs BEFORE the intake dispatch, so a card that enters the factory does so
+    with GitHub's title rather than a local one the sync is about to overwrite.
+    """
+    result = maybe_sync(store, card, transport=transport)
+    if result is None:
+        return card
+    _record_sync(ctx, card.card_key, result)
+    return store.get(card.card_key) or card
+
+
+def _record_sync(ctx: AuditContext, card_key: str, result: dict[str, object]) -> None:
+    """Audit one GitHub sync. Carries ``ok`` from the result — a failed sync is a
+    visible ``ok=False`` entry on the chain, not a gap in it."""
+    ctx.audit.record(
+        actor=ctx.actor,
+        kind="sync_card_github",
+        correlation_key=card_key,
+        target_service="github",
+        endpoint=f"{ctx.endpoint}/{card_key}",
+        status_code=int(HTTPStatus.OK) if result.get("ok") else 0,
+        ok=bool(result.get("ok", False)),
+    )
+
+
 def list_cards(
     store: CardStore,
     *,
@@ -150,7 +188,7 @@ def create_card(
     """
     card = store.create(data)
     _record(ctx, kind="create_card", card_key=card.card_key, status_code=int(HTTPStatus.CREATED))
-    return _intake(store, ctx, card, transport)
+    return _intake(store, ctx, _github(store, ctx, card, transport), transport)
 
 
 def update_card(
@@ -176,7 +214,33 @@ def update_card(
     if card is None:
         raise CardNotFoundError(card_key)
     _record(ctx, kind="update_card", card_key=card_key, status_code=int(HTTPStatus.OK))
-    return _intake(store, ctx, card, transport)
+    return _intake(store, ctx, _github(store, ctx, card, transport), transport)
+
+
+def sync_card_github(
+    store: CardStore,
+    ctx: AuditContext,
+    card_key: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, object]:
+    """Sync one card with its GitHub issue on demand (RFC-0019 §3.5).
+
+    Opens the issue if the card has none, adopts and mirrors it if it has —
+    which is also how a card picks up an issue that was closed, renamed or
+    relabelled on github.com since the last sync. **GitHub wins** on every
+    mirrored field; the card's planning fields are untouched. See
+    :mod:`cfactory.github_sync` for the full rule.
+
+    Returns the sync result AND the resulting card, because the two answer
+    different questions: whether the call reached GitHub, and what the board now
+    says. A failed sync is a 200 with ``ok=False`` and the reason on the card —
+    an unreachable GitHub is not a board error.
+    """
+    card = get_card(store, card_key)
+    result = sync_card(store, card, transport=transport)
+    _record_sync(ctx, card_key, result)
+    return {"sync": result, "card": (store.get(card_key) or card).model_dump(mode="json")}
 
 
 def delete_card(store: CardStore, ctx: AuditContext, card_key: str) -> dict[str, object]:

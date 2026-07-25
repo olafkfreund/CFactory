@@ -162,6 +162,14 @@ _CARD_FIELDS: dict[str, Any] = {
         "description": "Owner — a human handle or a factory runtime ('aifactory').",
     },
     "milestone": {"type": "string", "description": "Release / grouping this card belongs to."},
+    "issue_ref": {
+        "type": "string",
+        "description": (
+            "Adopt an EXISTING GitHub issue, as 'owner/repo#123' (RFC-0019 §3.5). Set "
+            "this instead of letting the card open its own issue. Once set, GitHub's "
+            "title, labels and open/closed state win over the card's on every sync."
+        ),
+    },
 }
 
 _STATUS_PROP = {
@@ -272,6 +280,23 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "cfactory_sync_card_github",
+        "description": (
+            "Sync a card with its GitHub issue. Opens one if the card has none, or adopts "
+            "and mirrors the issue named by issue_ref — syncing twice never opens a "
+            "duplicate. GitHub is the record of truth: on conflict the ISSUE's title, "
+            "labels and open/closed state overwrite the card's, while the card's own "
+            "planning fields (priority, tier, milestone, acceptance criteria) are left "
+            "alone. Use this to check whether work moved on GitHub. If GitHub is "
+            "unreachable the reason is recorded on the card and ok is false."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key"],
+            "properties": {"card_key": _CARD_KEY_PROP},
+        },
+    },
+    {
         "name": "cfactory_delete_card",
         "description": "Remove a card from the planning backlog for good.",
         "inputSchema": {
@@ -301,6 +326,7 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_update_card": WRITE,
     "cfactory_move_card": WRITE,
     "cfactory_reprioritise_card": WRITE,
+    "cfactory_sync_card_github": WRITE,
     "cfactory_delete_card": WRITE,
 }
 
@@ -472,6 +498,12 @@ def _tool_update_card(args: dict[str, Any], ctx: ToolContext) -> Any:
     return card.model_dump(mode="json")
 
 
+def _tool_sync_card_github(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return card_ops.sync_card_github(
+        ctx.cards, ctx.audit, args.get("card_key", ""), transport=ctx.transport
+    )
+
+
 def _tool_delete_card(args: dict[str, Any], ctx: ToolContext) -> Any:
     return card_ops.delete_card(ctx.cards, ctx.audit, args.get("card_key", ""))
 
@@ -488,6 +520,7 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_update_card": _tool_update_card,
     "cfactory_move_card": _tool_update_card,
     "cfactory_reprioritise_card": _tool_update_card,
+    "cfactory_sync_card_github": _tool_sync_card_github,
     "cfactory_delete_card": _tool_delete_card,
 }
 

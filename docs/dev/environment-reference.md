@@ -52,6 +52,9 @@ Conventions in the tables below:
 | `CFACTORY_MCP_DEV_OPEN` | `false` | no | Explicit local-dev opt-in that reopens `/mcp` when NO credential is configured. Unconfigured otherwise means DENY (RFC-0019 Phase 2a) — never set this in a hosted deploy. Ignored once `CFACTORY_MCP_SECRET` or `CFACTORY_API_KEYS` is set. |
 | `CFACTORY_PUBLIC_API_URL` | _(unset)_ | no | Public base URL of the token-gated API shown on `/settings/token` for editor/external clients. Display only. |
 | `CFACTORY_MULTI_TENANT` | `false` | no | On: resolve tenant per request from the `X-Tenant-Id` header (hosted, injected by oauth2-proxy from the Keycloak tenant claim). Off: single `default` tenant. |
+| `CFACTORY_GITHUB_TOKEN` | _(unset)_ | no | Enables GitHub card ↔ issue sync (RFC-0019 §3.5). Unset = sync OFF: no network call on a card write, no issue opened. The bare `GITHUB_TOKEN`/`GH_TOKEN` are deliberately **not** accepted — this credential opens issues in a real repo, so an ambient `gh` login must not switch the feature on. Server-side only. |
+| `CFACTORY_GITHUB_REPO` | _(unset)_ | no | `owner/repo` a `ready` card opens its issue in. Unset = cards can only *adopt* an existing issue (set the card's `issue_ref`), never create one. |
+| `CFACTORY_GITHUB_API_URL` | `https://api.github.com` | no | GitHub API base. Override for GitHub Enterprise. |
 | `CFACTORY_AUDIT_HMAC_SECRET` | dev secret (`dev-insecure-...`) | in hosted | HMAC secret anchoring the tamper-evident audit chain. MUST be overridden in any hosted/shared deploy (API keys or multi-tenant set) — the default is a clearly-labelled dev value and startup hard-warns if it is left in place in a non-local posture. Server-side only. |
 
 ## Copilot external secret

@@ -27,6 +27,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import DateTime, Index, Integer, Select, String, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
@@ -70,6 +71,22 @@ class CardRow(Base):
     # NULL while the card is only planned; set when it enters the factory, at
     # which point it joins work_items.correlation_key.
     correlation_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+
+    # ── GitHub mirror (RFC-0019 §3.5, Phase 6) ───────────────────────────────
+    # The issue this card is the planning projection of, as "owner/repo#123".
+    # NULL means the card has no issue yet; non-NULL is also the idempotency
+    # guard — exactly as correlation_key means "already in the factory", this
+    # means "already has an issue", so a second sync adopts instead of creating.
+    issue_ref: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    # Mirrored FROM GitHub, never pushed to it: GitHub is the record of truth for
+    # these (see cfactory.github_sync — GitHub wins on conflict).
+    issue_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    labels: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Last sync failure, NULL when the last sync succeeded. A GitHub outage marks
+    # the card here rather than raising: the board stays up and stays truthful
+    # about the fact that it may now be stale.
+    github_sync_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -91,6 +108,10 @@ class Card(BaseModel):
     assignee: str | None
     milestone: str | None
     correlation_key: str | None
+    issue_ref: str | None
+    issue_state: str | None
+    labels: list[str]
+    github_sync_error: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -108,6 +129,11 @@ class CardCreate(BaseModel):
     assignee: str | None = Field(default=None, max_length=128)
     milestone: str | None = Field(default=None, max_length=128)
     correlation_key: str | None = Field(default=None, max_length=128)
+    # Adopt an EXISTING issue ("owner/repo#123") instead of opening a new one
+    # (RFC-0019 §3.5). The other three GitHub columns are deliberately absent
+    # from both write models: they are mirrored FROM GitHub, so letting a caller
+    # set them would let the board assert something GitHub never said.
+    issue_ref: str | None = Field(default=None, max_length=256)
 
 
 class CardUpdate(BaseModel):
@@ -127,10 +153,48 @@ class CardUpdate(BaseModel):
     assignee: str | None = Field(default=None, max_length=128)
     milestone: str | None = Field(default=None, max_length=128)
     correlation_key: str | None = Field(default=None, max_length=128)
+    # Adopt (or re-point) the card's GitHub issue. See CardCreate for why the
+    # mirrored columns are not writable here.
+    issue_ref: str | None = Field(default=None, max_length=256)
 
 
 class DuplicateCardKeyError(Exception):
     """Raised by :meth:`CardStore.create` when the tenant already has that key."""
+
+
+# The Phase 6 GitHub-mirror columns and the DDL that adds each to a live table.
+# Every one is nullable or defaulted, so backfilling an existing board is a
+# no-op: a pre-Phase-6 card simply has no issue.
+_GITHUB_COLUMNS = {
+    "issue_ref": "VARCHAR(256)",
+    "issue_state": "VARCHAR(16)",
+    "labels": "JSON NOT NULL DEFAULT '[]'",
+    "github_sync_error": "VARCHAR(512)",
+}
+
+
+def _ensure_github_columns(engine: Engine) -> None:
+    """Idempotent live-DB guard for the Phase 6 card columns.
+
+    Same reason as ``store._ensure_tenant_column``: the deployed store
+    bootstraps via ``create_all``, which never ALTERs an existing table, so a
+    cards table created in Phase 1 would 500 every SELECT once the model gained
+    these columns. The Alembic migration exists too; this covers deploys that
+    don't run it.
+    """
+    from sqlalchemy import inspect, text  # noqa: PLC0415 — init-time only
+
+    inspector = inspect(engine)
+    if not inspector.has_table(CardRow.__tablename__):
+        return
+    existing = {c["name"] for c in inspector.get_columns(CardRow.__tablename__)}
+    missing = {name: ddl for name, ddl in _GITHUB_COLUMNS.items() if name not in existing}
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for name, ddl in missing.items():
+            conn.execute(text(f"ALTER TABLE cards ADD COLUMN {name} {ddl}"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cards_issue_ref ON cards (issue_ref)"))
 
 
 class CardStore:
@@ -154,6 +218,7 @@ class CardStore:
         self._tenant: str | None = None  # None = unscoped (single-tenant mode)
         if create:
             Base.metadata.create_all(self._engine)
+            _ensure_github_columns(self._engine)
 
     def scoped(self, tenant: str) -> CardStore:
         """A tenant-scoped view sharing this store's engine/session factory."""

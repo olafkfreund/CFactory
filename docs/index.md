@@ -84,6 +84,8 @@ agentic SDLC needs.
 
 **Multi-tenant mode:** [Multi-Tenant Mode](guides/multi-tenant.md) — the `CFACTORY_MULTI_TENANT` flag, how `X-Tenant-Id` is resolved, and the operator flip steps.
 
+**GitHub sync:** [GitHub Card ↔ Issue Sync](guides/github-card-sync.md) — how a planning card is backed by a GitHub issue, and the conflict rule: GitHub is the record of truth, so on conflict **GitHub wins**.
+
 **Configuration:** the [Environment reference](dev/environment-reference.md) — every environment variable, flag and operational parameter CFactory reads, with defaults and which ones must be set for a hosted deployment.
 
 ---

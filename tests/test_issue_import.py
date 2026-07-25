@@ -26,7 +26,8 @@ import pytest
 from cfactory import auth, card_ops, config, github_sync, issue_import, mcp
 from cfactory.app import audit_dep, cards_store_dep, create_app
 from cfactory.audit import AuditStore
-from cfactory.card_ops import AuditContext
+from cfactory.card_intake import maybe_dispatch
+from cfactory.card_ops import AuditContext, StageRefusedError
 from cfactory.cards import CardCreate, CardStore, DuplicateIssueRefError
 from cfactory.config import Settings
 from cfactory.issue_import import import_issues
@@ -328,6 +329,61 @@ def test_two_concurrent_imports_produce_one_card_each(cards, host):
     assert sum(t["imported"] for t in tallies) == 2
 
 
+# ── Interaction with the stage actions (RFC-0020 §3.7) ──────────────────────
+
+
+def test_an_imported_card_claims_no_factory_work(cards):
+    """Importing records ISSUES; it must not claim work was ever started.
+
+    `correlation_key` and `stage_runs` are the board's record of what the factory
+    was asked to do. An imported card has neither until somebody dispatches it —
+    which is also what keeps the §3.7 preconditions meaningful for it.
+    """
+    host = FakeHost([_issue(1, labels=[{"name": "factory:low"}])])
+
+    _import(cards, host)
+
+    card = cards.list()[0]
+    assert card.correlation_key is None
+    assert card.stage_runs == {}
+
+
+def test_a_freshly_imported_card_cannot_be_tested(cards, ctx):
+    """The precondition that proves the two features compose: a card with a tier
+    but no build refuses `test` with `no_build_to_verify`, rather than generating
+    verification lanes against nothing."""
+    host = FakeHost([_issue(1, labels=[{"name": "factory:low"}])])
+    _import(cards, host)
+    card = cards.list()[0]
+
+    with pytest.raises(StageRefusedError) as refusal:
+        card_ops.run_card_stage(cards, ctx, card.card_key, "test", transport=host.transport())
+
+    assert refusal.value.code == "no_build_to_verify"
+
+
+def test_importing_never_makes_a_card_dispatchable_on_its_own(cards):
+    """An imported card must not become dispatchable merely by existing.
+
+    Asserted at the intake hook itself, on tiered issues — the dangerous case.
+    `maybe_dispatch` returning None for every imported card is the statement that
+    matters: no board write, no poll, and no later refactor that runs the hook
+    over the backlog can turn one import into a hundred builds.
+    """
+    host = FakeHost(
+        [_issue(1, labels=[{"name": "factory:low"}]), _issue(2, labels=[{"name": "factory:hard"}])]
+    )
+
+    _import(cards, host)
+
+    imported = cards.list()
+    assert len(imported) == 2, "the fixture must actually have imported something"
+    for card in imported:
+        assert card.status == "backlog"
+        assert card.tier is not None, "…and these are exactly the tiered, dispatchable-looking ones"
+        assert maybe_dispatch(cards, card, transport=host.transport()) is None
+
+
 # ── Mapping ─────────────────────────────────────────────────────────────────
 
 
@@ -458,6 +514,31 @@ def test_a_card_in_flight_keeps_its_status(cards, host):
     assert refreshed.status == "in_progress", "the run owns the status"
     assert refreshed.issue_state == "closed", "…but the issue's state is still mirrored"
     assert refreshed.title == "Renamed upstream"
+
+
+def test_a_failed_dispatch_is_not_un_blocked_by_the_next_poll(cards, host):
+    """The RFC-0020 §3.7 interaction: `correlation_key` alone is not "in the factory".
+
+    A dispatch that FAILED leaves a `stage_runs` record and a `blocked` card with
+    no correlation key at all — §3.7 writes the key only when a stage actually
+    lands. A poll that read only the key would cheerfully move that card back to
+    `backlog` and erase the fact that a build was attempted and broke.
+    """
+    _import(cards, host)
+    card = next(c for c in cards.list() if c.title == "Issue 1")
+    cards.update(
+        card.card_key,
+        {
+            "status": "blocked",
+            "stage_runs": {"code": {"service": "aifactory", "status": "failed"}},
+        },
+    )
+
+    _import(cards, host, full=True)
+
+    refreshed = cards.get(card.card_key)
+    assert refreshed.correlation_key is None, "a failed dispatch never got a key"
+    assert refreshed.status == "blocked", "the failed stage still owns the column"
 
 
 def test_a_deleted_card_is_not_resurrected_by_the_next_import(cards, host):

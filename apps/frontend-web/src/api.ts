@@ -17,7 +17,13 @@ import { z } from "zod";
 // then validate the body against `schema` (returning the inferred type). The
 // thrown message is identical to the previous hand-rolled calls
 // (`<label> error: HTTP <status>`), so callers behave exactly as before.
-async function getJson<T>(path: string, schema: z.ZodType<T>, label: string): Promise<T> {
+async function getJson<T>(
+  path: string,
+  // Input is `unknown` (a parsed JSON body), not `T` — so a schema with a
+  // `.default()`, whose input and output types differ, is accepted here.
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  label: string,
+): Promise<T> {
   const resp = await fetch(path);
   if (!resp.ok) throw new Error(`${label} error: HTTP ${resp.status}`);
   return schema.parse(await resp.json());
@@ -31,7 +37,7 @@ async function sendJson<T>(
   method: "POST" | "PUT" | "PATCH",
   path: string,
   body: unknown,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
 ): Promise<T> {
   const resp = await fetch(path, {
     method,
@@ -44,10 +50,20 @@ async function sendJson<T>(
 
 // Surface the backend's `{detail}` message when present, falling back to
 // `HTTP <status>` for a non-JSON error body.
+//
+// `detail` is normally a string. A refused stage action (RFC-0020 §3.7) instead
+// sends `{reason, message}` so a caller can branch on the machine-readable code;
+// accept either shape and show the human sentence, which is what a banner needs.
+const ErrorDetailSchema = z.object({
+  detail: z.union([z.string(), z.object({ reason: z.string(), message: z.string() })]).optional(),
+});
+
 async function errorDetail(resp: Response): Promise<string> {
   try {
-    const parsed = z.object({ detail: z.string().optional() }).parse(await resp.json());
-    return parsed.detail ?? `HTTP ${resp.status}`;
+    const { detail } = ErrorDetailSchema.parse(await resp.json());
+    if (typeof detail === "string") return detail;
+    if (detail) return detail.message;
+    return `HTTP ${resp.status}`;
   } catch {
     return `HTTP ${resp.status}`;
   }
@@ -1028,6 +1044,23 @@ export type CardStatus = z.infer<typeof CardStatusSchema>;
 export const CardTierSchema = z.enum(["low", "medium", "hard"]);
 export type CardTier = z.infer<typeof CardTierSchema>;
 
+// The three pipeline stages a card can be pushed into (RFC-0020 §3.7).
+export const CardStageSchema = z.enum(["plan", "code", "test"]);
+export type CardStage = z.infer<typeof CardStageSchema>;
+
+// One stage's dispatch record: what the factory was actually asked to do, and
+// how it turned out. `queued` is committed to by a sequence but not yet sent.
+export const StageRunSchema = z
+  .object({
+    service: z.string().optional(),
+    status: z.enum(["queued", "dispatched", "done", "failed"]),
+    dispatched_at: z.string().nullable().optional(),
+    ref: z.string().nullable().optional(),
+    detail: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type StageRun = z.infer<typeof StageRunSchema>;
+
 export const CardSchema = z
   .object({
     card_key: z.string(),
@@ -1042,8 +1075,12 @@ export const CardSchema = z
     tier: CardTierSchema.nullable(),
     assignee: z.string().nullable(),
     milestone: z.string().nullable(),
-    // Set once the card enters the factory (RFC-0001 correlation).
+    // Set once the card's work enters the factory (RFC-0001 correlation), and
+    // then REUSED by every later stage rather than re-pointed.
     correlation_key: z.string().nullable(),
+    // Per-stage dispatch records, keyed by stage name. Optional so a card served
+    // by a pre-Phase-7 backend still parses.
+    stage_runs: z.record(CardStageSchema, StageRunSchema).default({}),
     created_at: z.string(),
     updated_at: z.string(),
   })
@@ -1113,6 +1150,46 @@ export type CardImport = z.infer<typeof CardImportSchema>;
 
 export async function importCards(): Promise<CardImport> {
   return sendJson("POST", "/api/cards/import", {}, CardImportSchema);
+}
+
+// What a stage action answers with: what the dispatch did, and the card as it now
+// stands. Deliberately tolerant — the dispatch half mirrors an upstream response
+// whose shape is the factory's, not ours.
+export const StageActionResultSchema = z
+  .object({
+    stage: z
+      .object({
+        stage: CardStageSchema.optional(),
+        dispatched: z.boolean().optional(),
+        ok: z.boolean().optional(),
+        reason: z.string().optional(),
+        skipped: z.string().optional(),
+        target_service: z.string().optional(),
+        sequence: z.array(CardStageSchema).optional(),
+        warnings: z.array(z.string()).optional(),
+      })
+      .passthrough(),
+    card: CardSchema.nullable(),
+  })
+  .passthrough();
+export type StageActionResult = z.infer<typeof StageActionResultSchema>;
+
+/**
+ * Push a card into one stage, or through the whole sequence when `action` is
+ * "run" (RFC-0020 §3.7). A REFUSED transition is a 409 whose `detail.message`
+ * `sendJson` throws verbatim, so the caller surfaces the backend's own sentence
+ * rather than inventing one.
+ */
+export async function runCardStage(
+  cardKey: string,
+  action: CardStage | "run",
+): Promise<StageActionResult> {
+  return sendJson(
+    "POST",
+    `/api/cards/${encodeURIComponent(cardKey)}/actions/${action}`,
+    {},
+    StageActionResultSchema,
+  );
 }
 
 export async function deleteCard(cardKey: string): Promise<void> {

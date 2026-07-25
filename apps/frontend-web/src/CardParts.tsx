@@ -4,7 +4,14 @@
 // only (react-refresh) and the two views hold nothing but their own layout.
 import type { ReactNode } from "react";
 import type { Card, CardFilters, CardPatch, CardStatus } from "./api";
-import { CARD_STATUSES, CARD_TIERS } from "./cards";
+import {
+  CARD_STAGE_ACTIONS,
+  CARD_STAGES,
+  CARD_STATUSES,
+  CARD_TIERS,
+  stageBlocker,
+  type StageAction,
+} from "./cards";
 
 /**
  * The filter bar both views share: a free-text query plus the server-side
@@ -98,9 +105,72 @@ export function CardFilterBar({
 }
 
 /**
+ * The error + notice banners both views show above their cards.
+ *
+ * One component rather than a copy per view: a refusal and a "that stage was
+ * skipped" notice are different things and must not read the same, so keeping the
+ * pair together is what stops one view rendering only half of them.
+ */
+export function CardBanners({ error, notice }: { error?: string | null; notice?: string | null }) {
+  return (
+    <>
+      {error && <div className="banner banner--error">{error}</div>}
+      {notice && <div className="banner banner--info">{notice}</div>}
+    </>
+  );
+}
+
+/**
+ * The plan / code / test / run-all buttons (RFC-0020 §3.7).
+ *
+ * Rendered inside `CardBody`, so the Backlog list and the Kanban board get them
+ * from the same place — the alternative was the same four buttons written twice
+ * and drifting.
+ *
+ * A button is disabled when the backend WOULD refuse it, with the reason as its
+ * title (see `stageBlocker`); each stage also shows what its dispatch record
+ * currently says, so "already running" and "already done" are visible rather than
+ * merely implied by a greyed-out button.
+ */
+export function CardStageActions({
+  card,
+  busy,
+  onStage,
+}: {
+  card: Card;
+  busy: boolean;
+  onStage: (action: StageAction) => void;
+}) {
+  return (
+    <div className="card-pl__stages" role="group" aria-label={`Stage actions for ${card.card_key}`}>
+      {CARD_STAGE_ACTIONS.map(({ key, label, hint }) => {
+        const blocked = stageBlocker(card, key);
+        const state = key === "run" ? undefined : card.stage_runs[key]?.status;
+        return (
+          <button
+            key={key}
+            className={`card-btn card-btn--stage${state ? ` card-btn--stage-${state}` : ""}`}
+            disabled={busy || blocked !== null}
+            title={blocked ?? hint}
+            aria-label={`${label} ${card.card_key}`}
+            onClick={() => {
+              onStage(key);
+            }}
+          >
+            {label}
+            {state && <span className="card-stage-dot" aria-hidden="true" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * The card body both views render: key, title, acceptance criteria count, tier
- * / assignee / milestone / correlation chips, plus the two mutation affordances
- * — a status `<select>` (move) and ▲/▼ priority nudges (reprioritise).
+ * / assignee / milestone / correlation chips, the two mutation affordances — a
+ * status `<select>` (move) and ▲/▼ priority nudges (reprioritise) — and, when
+ * `onStage` is supplied, the plan / code / test / run-all stage actions.
  *
  * ponytail: keyboard-first controls rather than drag-and-drop. They are
  * accessible for free and hit both PATCH paths; DnD can be layered on top of
@@ -110,12 +180,14 @@ export function CardBody({
   card,
   busy,
   onMutate,
+  onStage,
   onEdit,
   onDelete,
 }: {
   card: Card;
   busy: boolean;
   onMutate: (patch: CardPatch) => void;
+  onStage?: (action: StageAction) => void;
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
@@ -144,6 +216,19 @@ export function CardBody({
             ⟳ {card.correlation_key}
           </span>
         )}
+        {CARD_STAGES.filter((s) => card.stage_runs[s]).map((s) => {
+          const run = card.stage_runs[s];
+          if (!run) return null;
+          return (
+            <span
+              key={s}
+              className={`card-chip card-stage-chip card-stage-chip--${run.status}`}
+              title={run.detail ? `${s}: ${run.status} (${run.detail})` : `${s}: ${run.status}`}
+            >
+              {s} · {run.status}
+            </span>
+          );
+        })}
       </div>
       <div className="card-pl__actions">
         <select
@@ -199,6 +284,7 @@ export function CardBody({
           </button>
         )}
       </div>
+      {onStage && <CardStageActions card={card} busy={busy} onStage={onStage} />}
     </article>
   );
 }

@@ -121,8 +121,12 @@ def _mapping(issue: IssueData) -> dict[str, Any]:
       verifies against. Import leaves it empty (a legal planning state) and the
       board warns that the card is not dispatch-ready.
     * ``priority`` — planning-only, set once at create time.
-    * ``correlation_key`` — the board's join into the factory; the host has never
-      heard of it.
+    * ``correlation_key`` and ``stage_runs`` — the board's record of what the
+      FACTORY was asked to do (RFC-0020 §3.7). An imported card has neither
+      until somebody dispatches it, which is the point: importing a repository
+      records issues, it does not claim work was started. The stage preconditions
+      then refuse sensibly on their own — ``test`` on a freshly imported card
+      answers ``no_build_to_verify``, because there is no completed code stage.
     """
     labels = [name for name in issue.labels if isinstance(name, str)]
     return {
@@ -137,18 +141,35 @@ def _mapping(issue: IssueData) -> dict[str, Any]:
     }
 
 
+def _entered_the_factory(card: Card) -> bool:
+    """Has this card ever been dispatched? Two signals, and both are needed.
+
+    ``correlation_key`` alone is not enough since RFC-0020 §3.7 redefined it: it
+    now means "the key this card's work is threaded on — reuse it", written by
+    the FIRST stage that lands. A dispatch that *failed* leaves a ``stage_runs``
+    record and a ``blocked`` card with **no** key at all, and a poll that read
+    only the key would cheerfully un-block it and claim the work was never
+    started.
+
+    Nor is ``stage_runs`` alone enough: a card adopted from a pre-Phase-7 board
+    carries a key and no per-stage record. Either signal means hands off.
+    """
+    return card.correlation_key is not None or bool(card.stage_runs)
+
+
 def _changes_for(card: Card, issue: IssueData) -> dict[str, Any]:
     """The update an already-imported card takes from a later pass.
 
     Same mapping, minus the no-ops, plus the one rule that makes a poll safe to
-    run against a live board: **a card in the factory keeps its status.** A
-    non-NULL ``correlation_key`` means a run owns this card, and a poll that
-    stomped it back to ``backlog`` because somebody reopened the issue would
-    contradict a run that is still going. The issue's state still mirrors onto
-    ``issue_state``, so nothing is hidden — only ``status`` is left alone.
+    run against a live board: **a card the factory has touched keeps its
+    status.** A run in flight — or a stage that failed and left the card blocked
+    — owns that column, and a poll that stomped it back to ``backlog`` because
+    somebody reopened the issue would contradict what the pipeline is actually
+    doing. The issue's state still mirrors onto ``issue_state``, so nothing is
+    hidden; only ``status`` is left alone.
     """
     changes = _mapping(issue)
-    if card.correlation_key is None:
+    if not _entered_the_factory(card):
         changes["status"] = _status_for(issue.state)
     return {field: value for field, value in changes.items() if getattr(card, field) != value}
 

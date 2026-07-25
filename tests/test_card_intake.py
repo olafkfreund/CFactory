@@ -15,10 +15,8 @@ Contract points covered:
 
 from __future__ import annotations
 
-import httpx
 import pytest
 from cfactory import card_intake
-from cfactory.app import audit_dep, cards_store_dep, create_app, store_dep
 from cfactory.audit import AuditStore
 from cfactory.auth import reset_keystore
 from cfactory.card_intake import card_status_for
@@ -26,9 +24,8 @@ from cfactory.cards import CardStore
 from cfactory.config import Settings
 from cfactory.models import ServiceState, WorkItem
 from cfactory.store import WorkItemStore
-from fastapi.testclient import TestClient
 
-from cfactory.api_deps import action_transport_dep  # isort: skip
+from cards_harness import Upstream, build_client
 
 # Not a credential: the HMAC anchor for the temp audit chain in these tests.
 _TEST_HMAC = "card-intake-test-hmac"
@@ -52,24 +49,6 @@ def audit(tmp_path):
     return AuditStore(f"sqlite:///{tmp_path / 'audit.db'}", hmac_secret=_TEST_HMAC)
 
 
-class Upstream:
-    """Records every intake POST and answers with a canned response."""
-
-    def __init__(self, status_code: int = 200, body: dict | None = None) -> None:
-        self.status_code = status_code
-        self.body = {"task_id": "task-7"} if body is None else body
-        self.calls: list[tuple[str, dict]] = []
-
-    def transport(self) -> httpx.MockTransport:
-        def handler(request: httpx.Request) -> httpx.Response:
-            import json
-
-            self.calls.append((request.url.path, json.loads(request.content or b"{}")))
-            return httpx.Response(self.status_code, json=self.body)
-
-        return httpx.MockTransport(handler)
-
-
 @pytest.fixture
 def upstream():
     return Upstream()
@@ -80,12 +59,7 @@ def client(cards, items, audit, upstream, monkeypatch):
     # An intake project is configured, so a low/medium card has a build target.
     settings = Settings(intake_project_id="proj-1")
     monkeypatch.setattr(card_intake, "get_settings", lambda: settings)
-    app = create_app()
-    app.dependency_overrides[cards_store_dep] = lambda: cards
-    app.dependency_overrides[store_dep] = lambda: items
-    app.dependency_overrides[audit_dep] = lambda: audit
-    app.dependency_overrides[action_transport_dep] = upstream.transport
-    return TestClient(app)
+    return build_client(cards, items, audit, upstream)
 
 
 @pytest.fixture(autouse=True)
@@ -270,12 +244,7 @@ def test_unconfigured_intake_project_blocks_instead_of_pretending(
     """No CFACTORY_INTAKE_PROJECT_ID: a low/medium card cannot be built, so it is
     blocked with that reason rather than left looking dispatched."""
     monkeypatch.setattr(card_intake, "get_settings", lambda: Settings(intake_project_id=None))
-    app = create_app()
-    app.dependency_overrides[cards_store_dep] = lambda: cards
-    app.dependency_overrides[store_dep] = lambda: items
-    app.dependency_overrides[audit_dep] = lambda: audit
-    app.dependency_overrides[action_transport_dep] = upstream.transport
-    client = TestClient(app)
+    client = build_client(cards, items, audit, upstream)
 
     card = _card(client)
     resp = client.patch(f"/api/cards/{card['card_key']}", json={"status": "ready", "tier": "low"})

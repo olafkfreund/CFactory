@@ -65,6 +65,14 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
     ),
     BoardOperation("import", "POST", "/api/cards/import", "cfactory_import_cards"),
     BoardOperation("delete", "DELETE", "/api/cards/{card_key}", "cfactory_delete_card"),
+    # Explicit stage actions (RFC-0020 §3.7, #369). Unlike update/move/reprioritise
+    # these are NOT one route behind several tools: each stage is its own route and
+    # its own tool, because "plan this" and "test this" are different capabilities
+    # with different preconditions, not two ergonomics for one call.
+    BoardOperation("plan", "POST", "/api/cards/{card_key}/actions/plan", "cfactory_plan_card"),
+    BoardOperation("code", "POST", "/api/cards/{card_key}/actions/code", "cfactory_code_card"),
+    BoardOperation("test", "POST", "/api/cards/{card_key}/actions/test", "cfactory_test_card"),
+    BoardOperation("run", "POST", "/api/cards/{card_key}/actions/run", "cfactory_run_card"),
 )
 
 

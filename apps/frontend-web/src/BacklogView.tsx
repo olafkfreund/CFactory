@@ -12,7 +12,7 @@ import {
   type CardTier,
 } from "./api";
 import { byPriority, CARD_STATUSES, CARD_TIERS, matchesQuery, useCards } from "./cards";
-import { CardBody, CardFilterBar } from "./CardParts";
+import { CardBanners, CardBody, CardFilterBar } from "./CardParts";
 
 type Draft = {
   title: string;
@@ -56,7 +56,10 @@ const nullable = (s: string): string | null => s.trim() || null;
 export default function BacklogView({ reloadSignal }: { reloadSignal: number }) {
   const [filters, setFilters] = useState<CardFilters>({});
   const [query, setQuery] = useState("");
-  const { cards, loading, error, mutate, reload, setError } = useCards(filters, reloadSignal);
+  const { cards, loading, error, notice, mutate, runStage, reload, setError } = useCards(
+    filters,
+    reloadSignal,
+  );
 
   // `create` = the new-card form; a card_key = that card's inline editor.
   const [editing, setEditing] = useState<string | null>(null);
@@ -120,8 +123,9 @@ export default function BacklogView({ reloadSignal }: { reloadSignal: number }) 
       <div className="page-head">
         <h1>Backlog</h1>
         <p>
-          Every planning card, highest priority first. Create, edit, move and reprioritise here —
-          the same cards laid out by status live on the Planning board.
+          Every planning card, highest priority first. Create, edit, move, reprioritise and push a
+          card into plan, code or test here — the same cards laid out by status live on the Planning
+          board.
         </p>
       </div>
 
@@ -137,7 +141,7 @@ export default function BacklogView({ reloadSignal }: { reloadSignal: number }) 
         </button>
       </CardFilterBar>
 
-      {error && <div className="banner banner--error">{error}</div>}
+      <CardBanners error={error} notice={notice} />
 
       {editing === "create" && (
         <CardForm
@@ -184,6 +188,9 @@ export default function BacklogView({ reloadSignal }: { reloadSignal: number }) 
                 busy={busy}
                 onMutate={(patch) => {
                   void mutate(card.card_key, patch);
+                }}
+                onStage={(action) => {
+                  void runStage(card.card_key, action);
                 }}
                 onEdit={() => {
                   open(card);

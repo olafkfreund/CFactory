@@ -10,12 +10,17 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   fetchCards,
+  importCards,
   patchCard,
+  runCardStage,
   type Card,
   type CardFilters,
+  type CardImport,
   type CardPatch,
+  type CardStage,
   type CardStatus,
   type CardTier,
+  type StageActionResult,
 } from "./api";
 
 /** The Kanban columns, in board order. `cls` picks the column accent in CSS. */
@@ -28,6 +33,79 @@ export const CARD_STATUSES: { key: CardStatus; label: string; cls: string }[] = 
 ];
 
 export const CARD_TIERS: CardTier[] = ["low", "medium", "hard"];
+
+/** The pipeline stages, in the order `run` walks them. */
+export const CARD_STAGES: CardStage[] = ["plan", "code", "test"];
+
+/** A stage action, or the whole sequence. */
+export type StageAction = CardStage | "run";
+
+/** The buttons on a card, in press order. `hint` is the title when enabled. */
+export const CARD_STAGE_ACTIONS: { key: StageAction; label: string; hint: string }[] = [
+  { key: "plan", label: "Plan", hint: "Decompose this card in PFactory" },
+  { key: "code", label: "Code", hint: "Build this card in AIFactory" },
+  { key: "test", label: "Test", hint: "Verify the build in TFactory" },
+  { key: "run", label: "Run all", hint: "Plan, then code, then test" },
+];
+
+/**
+ * Why this action cannot be taken right now, or null when it can.
+ *
+ * A deliberate MIRROR of the backend's precondition rules
+ * (`card_intake.refuse_reason`) — the same relationship `taskState.ts` has with
+ * `status_taxonomy.py`. The backend is the authority and still refuses with a 409
+ * whatever the UI does; this only exists so a button that would be refused is
+ * disabled with the reason on it rather than inviting a pointless round trip.
+ *
+ * Deliberately NOT mirrored: `no_intake_project`, which is deployment state the
+ * browser cannot see. That one surfaces as the backend's refusal message.
+ */
+export function stageBlocker(card: Card, action: StageAction): string | null {
+  if (!card.tier) return "set a tier first — it decides what gets sent";
+  const runs = card.stage_runs;
+  const live = CARD_STAGES.find((s) => runs[s]?.status === "dispatched");
+  if (action === "run") {
+    if (live) return `${live} is already running`;
+  } else {
+    if (runs[action]?.status === "dispatched") return `${action} is already running`;
+    if (runs[action]?.status === "done") return `${action} has already completed`;
+  }
+  if (action === "test" && !(card.correlation_key && runs.code?.status === "done")) {
+    return "nothing built to verify yet — run code to completion first";
+  }
+  return null;
+}
+
+/**
+ * The one-line notice a stage action leaves behind, or null when it just worked.
+ *
+ * Covers the two things a human needs told even though nothing failed: a stage
+ * that was SKIPPED (already complete), and a warning that the action overrode
+ * tier routing or skipped planning.
+ */
+export function stageNotice(cardKey: string, result: StageActionResult): string | null {
+  const { skipped, reason, warnings, dispatched, ok } = result.stage;
+  if (ok === false) return `${cardKey}: ${reason ?? "dispatch failed"}`;
+  if (dispatched === false) return `${cardKey}: ${reason ?? skipped ?? "nothing to do"}`;
+  return warnings?.length ? `${cardKey}: ${warnings.join(" ")}` : null;
+}
+
+/**
+ * The one-line summary an import leaves in the notice banner (RFC-0020 §3.6).
+ *
+ * Says three things the human cannot see from the board itself: how much came
+ * in, whether `CFACTORY_IMPORT_MAX` truncated the run (a board holding the first
+ * 1000 of 3000 issues looks complete and is not), and how stale it is — import
+ * is a poll, never live.
+ */
+export function importNotice(result: CardImport): string {
+  const truncated = result.truncated ? " (truncated — raise CFACTORY_IMPORT_MAX)" : "";
+  return (
+    `Imported ${String(result.imported)}, updated ${String(result.updated)}, ` +
+    `skipped ${String(result.skipped)} from ${result.project}${truncated}. ` +
+    `Last synced ${result.last_synced_at ?? "never"} — polled, not live.`
+  );
+}
 
 /** Priority order: lower number first, then card_key so the sort is stable. */
 export function byPriority(a: Card, b: Card): number {
@@ -81,8 +159,16 @@ export type CardsState = {
   cards: Card[];
   loading: boolean;
   error: string | null;
+  /** A non-failure thing the human should know: a skipped stage, a warning. */
+  notice: string | null;
   /** Move / reprioritise / edit one card, optimistically with rollback. */
   mutate: (cardKey: string, patch: CardPatch) => Promise<void>;
+  /** Push one card into a stage, or through the whole sequence (RFC-0020 §3.7). */
+  runStage: (cardKey: string, action: StageAction) => Promise<void>;
+  /** True while an import is in flight, so the trigger can disable itself. */
+  importing: boolean;
+  /** Pull the connected repo's EXISTING issues onto the board (RFC-0020 §3.6). */
+  importIssues: () => Promise<void>;
   /** Re-run the list query (after a create/delete). */
   reload: () => void;
   setError: (message: string | null) => void;
@@ -96,6 +182,8 @@ export function useCards(filters: CardFilters, reloadSignal: number): CardsState
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const [tick, setTick] = useState(0);
   // Serialise the filter object so the effect re-runs on value (not identity).
   const filterKey = JSON.stringify(filters);
@@ -133,8 +221,59 @@ export function useCards(filters: CardFilters, reloadSignal: number): CardsState
     [cards],
   );
 
+  // Not optimistic, unlike `mutate`: a dispatch's outcome is not knowable in
+  // advance (it may be refused, skipped, or blocked upstream), so the card is
+  // replaced only with what the server actually reports.
+  const runStage = useCallback(async (cardKey: string, action: StageAction) => {
+    try {
+      const result = await runCardStage(cardKey, action);
+      if (result.card) {
+        const settled = result.card;
+        setCards((current) => replaceCard(current, settled));
+      }
+      setError(null);
+      setNotice(stageNotice(cardKey, result));
+    } catch (e) {
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
   const reload = useCallback(() => {
     setTick((t) => t + 1);
   }, []);
-  return { cards, loading, error, mutate, reload, setError };
+
+  // Like `runStage` and unlike `mutate`, this is not optimistic: how many issues
+  // a repository has is not knowable in advance, so the board is re-read from
+  // the server once the import reports what it did. A backend that answers
+  // `ok: false` (unreachable or unconfigured provider) is an error, not a
+  // notice — it is a 200 on the wire but a failure to the human.
+  const importIssues = useCallback(async () => {
+    setImporting(true);
+    try {
+      const result = await importCards();
+      if (!result.ok) throw new Error(result.reason ?? "import failed");
+      setError(null);
+      setNotice(importNotice(result));
+      setTick((t) => t + 1);
+    } catch (e) {
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
+  return {
+    cards,
+    loading,
+    error,
+    notice,
+    mutate,
+    runStage,
+    importing,
+    importIssues,
+    reload,
+    setError,
+  };
 }

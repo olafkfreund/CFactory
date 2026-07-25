@@ -110,6 +110,12 @@ def test_initialize_and_tools_list(mcp_client):
         "cfactory_update_card",
         "cfactory_move_card",
         "cfactory_reprioritise_card",
+        # Explicit stage actions (RFC-0020 §3.7) — each the twin of
+        # POST /api/cards/{key}/actions/<stage>.
+        "cfactory_plan_card",
+        "cfactory_code_card",
+        "cfactory_test_card",
+        "cfactory_run_card",
         "cfactory_delete_card",
     }
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 import copy
 import logging
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import DateTime, Index, Integer, Select, String, Text, select
@@ -87,9 +87,21 @@ class CardRow(Base):
     tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
     assignee: Mapped[str | None] = mapped_column(String(128), nullable=True)
     milestone: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    # NULL while the card is only planned; set when it enters the factory, at
-    # which point it joins work_items.correlation_key.
+    # NULL while the card is only planned; set ONCE when the card's work enters
+    # the factory, at which point it joins work_items.correlation_key. Every
+    # later stage of the same card REUSES it — see ``stage_runs`` for why.
     correlation_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+
+    # ── Per-stage dispatch record (RFC-0020 §3.7, Phase 7) ───────────────────
+    # ``{"plan": {"service", "status", "dispatched_at", "ref", "detail"}, ...}``
+    # keyed by stage name, where ``status`` is queued | dispatched | done |
+    # failed. THIS is the idempotency guard for a stage action, and it has to be:
+    # ``correlation_key`` cannot be, because planning SETS it, so the old
+    # "non-NULL means already in the factory" rule made every stage after the
+    # first a no-op and a plan -> code -> test sequence impossible. The key now
+    # means "the key this card's work is threaded on — reuse it", and the
+    # per-stage record answers "has THIS stage already run".
+    stage_runs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     # ── GitHub mirror (RFC-0019 §3.5, Phase 6) ───────────────────────────────
     # The issue this card is the planning projection of, as "owner/repo#123".
@@ -146,6 +158,10 @@ class Card(BaseModel):
     issue_state: str | None
     labels: list[str]
     github_sync_error: str | None
+    # Read-only on the wire, like the mirrored GitHub columns: it records what
+    # the factory was actually asked to do, so a caller must not be able to
+    # assert a dispatch that never happened. Absent from CardCreate/CardUpdate.
+    stage_runs: dict[str, Any]
     # Always NULL on anything a read hands back — a soft-deleted card is off the
     # board. It is on the model because the import asks for a card BY ISSUE and
     # has to be able to see the tombstone (RFC-0020 §3.6).
@@ -237,14 +253,17 @@ class DuplicateIssueRefError(Exception):
     """
 
 
-# Columns added to `cards` after Phase 1, and the DDL that adds each to a live
-# table. Every one is nullable or defaulted, so backfilling an existing board is
-# a no-op: a pre-Phase-6 card simply has no issue and no body.
+# Columns added to ``cards`` after Phase 1, and the DDL that adds each to a live
+# table: the Phase 6 GitHub mirror, the §3.6 import columns, and the Phase 7
+# per-stage dispatch record. Every one is nullable or defaulted, so backfilling
+# an existing board is a no-op: a pre-Phase-6 card simply has no issue and no
+# body, a pre-Phase-7 one no stage runs.
 _LATE_COLUMNS = {
     "issue_ref": "VARCHAR(256)",
     "issue_state": "VARCHAR(16)",
     "labels": "JSON NOT NULL DEFAULT '[]'",
     "github_sync_error": "VARCHAR(512)",
+    "stage_runs": "JSON NOT NULL DEFAULT '{}'",
     "description": "TEXT",
     # TIMESTAMP, not DATETIME: PostgreSQL has no DATETIME, and SQLite accepts
     # any type name.
@@ -277,6 +296,8 @@ def _ensure_late_columns(engine: Engine) -> None:
         return
     existing = {c["name"] for c in inspector.get_columns(CardRow.__tablename__)}
     missing = {name: ddl for name, ddl in _LATE_COLUMNS.items() if name not in existing}
+    # No early return when nothing is missing: the indexes below still have to be
+    # ensured on a board whose columns were added by an earlier release.
     with engine.begin() as conn:
         for name, ddl in missing.items():
             conn.execute(text(f"ALTER TABLE cards ADD COLUMN {name} {ddl}"))

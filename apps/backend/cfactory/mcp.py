@@ -59,7 +59,7 @@ from . import card_ops
 from .api_deps import action_transport_dep, cards_store_dep
 from .audit import get_audit_store
 from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
-from .card_ops import CardNotFoundError
+from .card_ops import CardNotFoundError, StageRefusedError
 from .cards import (
     CardCreate,
     CardStore,
@@ -302,6 +302,69 @@ BOARD_TOOLS: list[dict[str, Any]] = [
             "properties": {"card_key": _CARD_KEY_PROP},
         },
     },
+    # ── Stage actions (RFC-0020 §3.7) ────────────────────────────────────────
+    # The explicit counterpart to tier routing: say plan / code / test outright,
+    # or run the sequence. Each is the MCP twin of
+    # POST /api/cards/{card_key}/actions/<stage>, and the parity gate
+    # (tests/test_board_parity.py) fails the build if one exists without the other.
+    {
+        "name": "cfactory_plan_card",
+        "description": (
+            "Send a card to PFactory for planning. Explicit, so it OVERRIDES tier routing "
+            "for the destination — a 'low' card can be planned even though its tier would "
+            "skip planning — while the tier still supplies the payload. Refuses (rather "
+            "than dispatching into nothing) when the card has no tier or the plan stage is "
+            "already running; a plan that already completed is skipped, not re-run."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key"],
+            "properties": {"card_key": _CARD_KEY_PROP},
+        },
+    },
+    {
+        "name": "cfactory_code_card",
+        "description": (
+            "Send a card to AIFactory to be built. Allowed on a 'hard' card that was never "
+            "planned — the result warns that a stage was skipped rather than refusing. "
+            "Refuses when the card has no tier (no payload to build) or no intake project "
+            "is configured; a build that already completed is skipped, not re-run."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key"],
+            "properties": {"card_key": _CARD_KEY_PROP},
+        },
+    },
+    {
+        "name": "cfactory_test_card",
+        "description": (
+            "Send a card to TFactory to be verified against its acceptance criteria. "
+            "Refuses with 'no_build_to_verify' unless the card is joined to a work item AND "
+            "its code stage completed — verifying something that was never built would "
+            "generate lanes against nothing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key"],
+            "properties": {"card_key": _CARD_KEY_PROP},
+        },
+    },
+    {
+        "name": "cfactory_run_card",
+        "description": (
+            "Run a card through plan -> code -> test. Only the first stage still owed is "
+            "dispatched now; each later one goes out when the previous reaches terminal "
+            "success. Stages already complete are skipped, so this RESUMES a part-finished "
+            "or failed card rather than restarting it, and a failed stage stops the "
+            "sequence with the card blocked and the reason recorded."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key"],
+            "properties": {"card_key": _CARD_KEY_PROP},
+        },
+    },
     {
         "name": "cfactory_import_cards",
         "description": (
@@ -363,6 +426,11 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_reprioritise_card": WRITE,
     "cfactory_sync_card_github": WRITE,
     "cfactory_import_cards": WRITE,
+    # Stage actions dispatch work into the factory, so every one is a WRITE.
+    "cfactory_plan_card": WRITE,
+    "cfactory_code_card": WRITE,
+    "cfactory_test_card": WRITE,
+    "cfactory_run_card": WRITE,
     "cfactory_delete_card": WRITE,
 }
 
@@ -554,6 +622,27 @@ def _tool_delete_card(args: dict[str, Any], ctx: ToolContext) -> Any:
     return card_ops.delete_card(ctx.cards, ctx.audit, args.get("card_key", ""))
 
 
+def _tool_stage_card(stage: str) -> Callable[[dict[str, Any], ToolContext], Any]:
+    """Handler for one stage tool — the whole sequence when ``stage`` is empty.
+
+    Built per stage rather than written four times: the tools differ only in which
+    stage they name, and going through ``card_ops`` is what makes them behave
+    IDENTICALLY to their REST twins rather than merely similarly.
+    """
+
+    def handler(args: dict[str, Any], ctx: ToolContext) -> Any:
+        card_key = args.get("card_key", "")
+        if not stage:
+            return card_ops.run_card_sequence(
+                ctx.cards, ctx.audit, card_key, transport=ctx.transport
+            )
+        return card_ops.run_card_stage(
+            ctx.cards, ctx.audit, card_key, stage, transport=ctx.transport
+        )
+
+    return handler
+
+
 _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_list_workitems": lambda _a, _c: _tool_list_workitems(),
     "cfactory_get_workitem": lambda args, _c: _tool_get_workitem(args.get("correlation_key", "")),
@@ -568,6 +657,10 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_reprioritise_card": _tool_update_card,
     "cfactory_sync_card_github": _tool_sync_card_github,
     "cfactory_import_cards": _tool_import_cards,
+    "cfactory_plan_card": _tool_stage_card("plan"),
+    "cfactory_code_card": _tool_stage_card("code"),
+    "cfactory_test_card": _tool_stage_card("test"),
+    "cfactory_run_card": _tool_stage_card(""),
     "cfactory_delete_card": _tool_delete_card,
 }
 
@@ -590,6 +683,10 @@ def _dispatch_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> An
         return {"error": f"card already exists: {exc.args[0]!r}"}
     except DuplicateIssueRefError as exc:
         return {"error": f"another card already tracks issue {exc.args[0]!r}"}
+    except StageRefusedError as exc:
+        # The REST twin answers 409 {reason, message}; over JSON-RPC the same two
+        # fields, so an agent can branch on the code and quote the sentence.
+        return {"error": exc.message, "reason": exc.code}
     except ValidationError as exc:
         return {"error": "invalid arguments", "details": exc.errors(include_url=False)}
 

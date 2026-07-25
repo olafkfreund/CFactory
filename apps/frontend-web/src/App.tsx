@@ -4,6 +4,8 @@
 // Board.tsx, and the shared types/constants/helpers in dashboard.ts (#115).
 import { useEffect, useMemo, useState } from "react";
 import AuditView from "./AuditView";
+import BacklogView from "./BacklogView";
+import PlanningBoard from "./PlanningBoard";
 import CommandPalette, { type PaletteCommand } from "./CommandPalette";
 import TaskDetail from "./TaskDetail";
 import ThemeToggle from "./ThemeToggle";
@@ -261,6 +263,8 @@ export default function App() {
             {error && <div className="banner banner--error">{error}</div>}
             {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
             {view === "needs" && <NeedsYouView items={items} progress={progress} />}
+            {view === "backlog" && <BacklogView reloadSignal={tick} />}
+            {view === "planning" && <PlanningBoard reloadSignal={tick} />}
             {view === "pipeline" && (
               <Board
                 items={items}

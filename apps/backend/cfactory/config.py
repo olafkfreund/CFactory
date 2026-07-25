@@ -110,11 +110,19 @@ class Settings(BaseSettings):
     # with the required scope. Format: "<key>:read,write;<key2>:read".
     api_keys: str | None = None
 
-    # Bearer token the MCP transport (POST /mcp) requires (#113). When unset the
-    # MCP server accepts all requests (dev convenience); set it in any
-    # hosted/shared deploy. Routed through Settings so every secret flows through
-    # one typed boundary rather than an inline os.environ read in mcp.py.
+    # Bearer token the MCP transport (POST /mcp) requires (#113). Treated as a
+    # LEGACY FULL-SCOPE credential since RFC-0019 Phase 2a: a caller presenting it
+    # holds both read and write. Existing prod clients keep working unchanged.
+    # Routed through Settings so every secret flows through one typed boundary
+    # rather than an inline os.environ read in mcp.py.
     mcp_secret: str | None = None
+
+    # Explicit dev opt-in that re-opens /mcp when NO credential is configured
+    # (RFC-0019 Phase 2a). Unconfigured used to mean "open"; it now means DENY, so
+    # that adding write tools cannot silently expose mutation on a fail-open
+    # surface. Set CFACTORY_MCP_DEV_OPEN=true for local dev only — never in a
+    # hosted/shared deploy. Ignored once mcp_secret or api_keys is set.
+    mcp_dev_open: bool = False
 
     # Public base URL of the token-gated API surface for editor/external clients
     # (#73 follow-up). When set (e.g. https://cfactory-api.freundcloud.org.uk —

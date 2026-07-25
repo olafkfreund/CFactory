@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from . import (
     __version__,
     routes_actions,
+    routes_cards,
     routes_connect,
     routes_copilot,
     routes_events,
@@ -47,6 +48,7 @@ from .api_deps import (  # noqa: F401 — public re-export surface
     action_transport_dep,
     adapters_dep,
     audit_dep,
+    cards_store_dep,
     copilot_dep,
     fleet_transport_dep,
     live_agent_connect_dep,
@@ -151,6 +153,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_workitems.router)
     app.include_router(routes_live_agents.router)
     app.include_router(routes_actions.router)
+    app.include_router(routes_cards.router)
     app.include_router(routes_copilot.router)
     app.include_router(routes_connect.router)
     app.include_router(routes_ws.router)

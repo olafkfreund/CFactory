@@ -99,6 +99,14 @@ def test_initialize_and_tools_list(mcp_client):
         "cfactory_get_timeline",
         "cfactory_get_rollups",
         "cfactory_get_anomalies",
+        # RFC-0019 Phase 2b board tools.
+        "cfactory_list_cards",
+        "cfactory_get_card",
+        "cfactory_create_card",
+        "cfactory_update_card",
+        "cfactory_move_card",
+        "cfactory_reprioritise_card",
+        "cfactory_delete_card",
     }
 
 
@@ -180,7 +188,7 @@ def test_write_tool_refused_to_read_only_key(scoped_client, monkeypatch):
     # No write tools exist yet (Phase 2b adds them), so register a dummy one for
     # the duration of this test to exercise the real enforcement path.
     monkeypatch.setitem(mcp.TOOL_SCOPES, "cfactory_dummy_write", auth.WRITE)
-    monkeypatch.setitem(mcp._TOOL_HANDLERS, "cfactory_dummy_write", lambda _: {"ok": True})
+    monkeypatch.setitem(mcp._TOOL_HANDLERS, "cfactory_dummy_write", lambda _a, _c: {"ok": True})
 
     r = _call_as(scoped_client, "reader-key", "cfactory_dummy_write")
     assert r.status_code == 403
@@ -205,7 +213,7 @@ def test_unknown_key_is_rejected(scoped_client):
 def test_legacy_mcp_secret_is_full_scope(mcp_client, monkeypatch):
     """The live prod credential keeps working — and counts as read AND write."""
     monkeypatch.setitem(mcp.TOOL_SCOPES, "cfactory_dummy_write", auth.WRITE)
-    monkeypatch.setitem(mcp._TOOL_HANDLERS, "cfactory_dummy_write", lambda _: {"ok": True})
+    monkeypatch.setitem(mcp._TOOL_HANDLERS, "cfactory_dummy_write", lambda _a, _c: {"ok": True})
 
     assert _call_as(mcp_client, "test-secret", "cfactory_get_rollups").status_code == 200
     assert _call_as(mcp_client, "test-secret", "cfactory_dummy_write").status_code == 200

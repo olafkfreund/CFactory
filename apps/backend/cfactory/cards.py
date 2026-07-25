@@ -198,6 +198,21 @@ class CardStore:
             row = self._get_row(session, card_key)
             return Card.model_validate(row) if row is not None else None
 
+    def get_by_correlation_key(self, correlation_key: str) -> Card | None:
+        """The card joined to a work item, if any (RFC-0019 §3.2 write-back).
+
+        The reverse of :attr:`CardRow.correlation_key`'s forward join, used by
+        the event ingress to find which card a PARR event belongs to. Returns
+        the oldest match — the column is not unique (nothing stops two cards
+        being pointed at one correlation), so this is deliberately first-wins
+        rather than an error.
+        """
+        stmt = self._select().where(CardRow.correlation_key == correlation_key)
+        stmt = stmt.order_by(CardRow.created_at.asc())
+        with self._session() as session:
+            row = session.scalars(stmt).first()
+            return Card.model_validate(row) if row is not None else None
+
     def create(self, data: CardCreate) -> Card:
         """Insert a card, assigning a key when the caller omitted one.
 

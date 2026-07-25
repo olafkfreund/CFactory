@@ -91,6 +91,7 @@ Source: `apps/backend/cfactory/cards.py`.
 | `card_key` | string, max 128 | auto-assigned `FCT-<n>` | Omit it and the store assigns the next `FCT-<n>` **for this tenant** (highest existing numeric suffix + 1). Supply one that is already taken and you get a **loud 409** (`card already exists`), never a silent overwrite. Immutable after creation — `PATCH` ignores it. | Omit it. Let CFactory number the board. Supply one only when mirroring an id from an external tracker. |
 | `tenant_id` | string, max 64 | `default` | Never set by the caller — it is stamped from the resolved tenant. In single-tenant mode (the default) it is always `default`. See [Multi-Tenant Mode](multi-tenant.md). | Leave it to the server. |
 | `title` | string, 1–512 | **required** | Empty or missing is a **loud 422** from Pydantic validation. | One line of intent, the way you would title a GitHub issue. It becomes the `# heading` of the brief sent upstream. |
+| `description` | string, nullable | `null` | Free-form markdown body (RFC-0020 section 3.6). Where an imported issue's **body** lands. **Mirrored**: the host owns it exactly as it owns the title, so a local edit to a card that tracks an issue is overwritten on the next sync. | Use it for context and links. Do not put the acceptance criteria here and expect them to be verified — they are a separate, structured field, and import deliberately never parses one into the other. |
 | `acceptance_criteria` | list of strings | `[]` | Empty is legal and common for a rough backlog entry. It becomes an `## Acceptance Criteria` bullet list in the dispatched brief — **an empty list means the factory gets a title and nothing else to build against**. Silent, and it will show up as a vague build. | Fill it in before you set a tier. This is the only field that tells the factory what "done" means. |
 | `status` | `backlog` \| `ready` \| `in_progress` \| `blocked` \| `done` | `backlog` | Anything outside the five is a **loud 422**. There is no other status space. `ready` **with a tier** is the intake trigger. | `backlog` on create. Promote to `ready` only when the acceptance criteria are real. |
 | `priority` | integer | `0` | **Lower sorts first** — 0 is the top of the backlog, and negatives are legal if you want something above everything. No validation, no range: any int is accepted. Every card at the default `0` means the board falls back to oldest-first. | Leave `0` until ordering matters, then use gaps of 10 (`10`, `20`, `30`) so you can insert between them without renumbering. |
@@ -166,7 +167,8 @@ appends an entry to the tamper-evident HMAC audit chain** — the same chain
 | `POST` | `/api/cards` | write | Create. `card_key` optional. **201** on success, **409** if the tenant already holds that key. Runs the intake hook. |
 | `GET` | `/api/cards/{card_key}` | read | One card. **404** if it does not exist *in your tenant scope*. |
 | `PATCH` | `/api/cards/{card_key}` | write | Partial update — also how you move and reprioritise. **404** if unknown. Runs the intake hook. |
-| `DELETE` | `/api/cards/{card_key}` | write | Permanent. **404** if unknown. Returns `{"card_key": ..., "deleted": true}`. |
+| `POST` | `/api/cards/import` | write | Import the connected repository's **existing** issues as cards (RFC-0020 section 3.6). Idempotent, incremental (`?full=true` re-reads everything), and imported cards are **never `ready`**. **200** with `ok: false` when the provider is unreachable. See [github-card-sync.md](github-card-sync.md#importing-a-repos-existing-issues-rfc-0020-section-36). |
+| `DELETE` | `/api/cards/{card_key}` | write | Takes the card off the board. **404** if unknown. Returns `{"card_key": ..., "deleted": true}`. A **soft** delete since RFC-0020 section 3.6: every read hides it, the issue on the host is untouched, and the next import does not resurrect it. |
 
 Filters are AND-ed and each is exact-match, not a search. An unknown filter value
 (`?status=doing`) is a **loud 422** because the enum is validated; an unknown
@@ -246,7 +248,8 @@ exactly as a human's PATCH would.
 | `cfactory_update_card` | write | `card_key` (required) + `title`, `acceptance_criteria`, `tier`, `assignee`, `milestone` | Content edits only — the schema deliberately does not expose `status` or `priority`. |
 | `cfactory_move_card` | write | `card_key`, `status` (both required) | The board move. Moving to `ready` **with a tier** is the intake trigger. |
 | `cfactory_reprioritise_card` | write | `card_key`, `priority` (both required) | Reordering only. |
-| `cfactory_delete_card` | write | `card_key` (required) | Permanent. |
+| `cfactory_import_cards` | write | `project`, `full` (both optional) | Import the connected repository's **existing** issues as cards (RFC-0020 section 3.6). Idempotent; imported cards are **never `ready`**; pull requests are never imported; poll-based, not live. |
+| `cfactory_delete_card` | write | `card_key` (required) | Takes the card off the board (a soft delete — the issue on the host is untouched and the next import does not bring it back). |
 
 `update`, `move` and `reprioritise` are three tool names over **one** handler —
 they are the same partial update, differing only in which field the agent-facing
@@ -556,6 +559,9 @@ contract an agent actually discovers.
 | `POST` a `card_key` that already exists in your tenant | 409 / `card already exists` | Loud |
 | `PATCH` or `GET` an unknown card key | 404 | Loud |
 | Send an invalid `status` or `tier` | 422 from validation | Loud |
+| Point a second card at an issue another card already tracks | 409 / `another card already tracks issue ...` — one issue, one card, enforced by a unique index | Loud |
+| Import from a repo with more issues than `CFACTORY_IMPORT_MAX` | `truncated: true` in the result and in the board's import summary | Loud |
+| Expect an issue filed a moment ago to be on the board | It appears on the next import/poll, not instantly — import is **not live** (no webhook receiver) | Documented, and `last_synced_at` shows the staleness |
 | Promote to `ready` with **no tier** | Nothing. Card sits in `ready`. | **Silent — and intended.** It is a real triage state. |
 | Promote a `low`/`medium` card with `CFACTORY_INTAKE_PROJECT_ID` unset | Card moves to `blocked`, reason names the variable, `ok=false` audit entry | Loud |
 | Promote with a wrong-but-valid-looking project id | Upstream rejects; card moves to `blocked` with the upstream status in the audit entry | Loud (one hop away) |

@@ -32,6 +32,7 @@ from .audit import AuditStore
 from .card_intake import maybe_dispatch
 from .cards import Card, CardCreate, CardStore, CardUpdate
 from .github_sync import maybe_sync, sync_card
+from .issue_import import import_issues
 
 # Audit rows carry a ``target_service``; a card mutation never leaves CFactory,
 # so it is attributed to CFactory itself rather than to an upstream factory.
@@ -241,6 +242,42 @@ def sync_card_github(
     result = sync_card(store, card, transport=transport)
     _record_sync(ctx, card_key, result)
     return {"sync": result, "card": (store.get(card_key) or card).model_dump(mode="json")}
+
+
+def import_cards(
+    store: CardStore,
+    ctx: AuditContext,
+    *,
+    project: str | None = None,
+    full: bool = False,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, object]:
+    """Import the configured repository's EXISTING issues as cards (RFC-0020 §3.6).
+
+    The other direction from :func:`sync_card_github`: that one takes a card and
+    finds it an issue, this one takes a repository and fills the board. Runs
+    incrementally once a watermark exists (``full=True`` re-reads everything);
+    both are safe to repeat, because the import is an upsert against the unique
+    ``(tenant_id, issue_ref)`` index rather than an insert.
+
+    Imported cards land in ``backlog`` (or ``done`` if the issue is closed) and
+    **never** in ``ready`` — see :mod:`cfactory.issue_import`.
+
+    Audited like every other card mutation, with ``ok`` carried from the result:
+    an unreachable provider is a visible ``ok=False`` entry on the chain, not a
+    gap in it and not a 500.
+    """
+    result = import_issues(store, project=project, full=full, transport=transport)
+    ctx.audit.record(
+        actor=ctx.actor,
+        kind="import_cards",
+        correlation_key=str(result.get("project") or "-"),
+        target_service="git_provider",
+        endpoint=f"{ctx.endpoint}/import",
+        status_code=int(HTTPStatus.OK) if result.get("ok") else 0,
+        ok=bool(result.get("ok", False)),
+    )
+    return result
 
 
 def delete_card(store: CardStore, ctx: AuditContext, card_key: str) -> dict[str, object]:

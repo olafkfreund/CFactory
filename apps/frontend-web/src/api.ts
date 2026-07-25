@@ -1033,6 +1033,8 @@ export const CardSchema = z
     card_key: z.string(),
     tenant_id: z.string(),
     title: z.string(),
+    // Free-form markdown body; where an imported issue's body lands (RFC-0020 §3.6).
+    description: z.string().nullish(),
     acceptance_criteria: z.array(z.string()),
     status: CardStatusSchema,
     // Lower is higher priority (1 sorts above 2).
@@ -1090,6 +1092,27 @@ export async function createCard(card: CardCreate): Promise<Card> {
 
 export async function patchCard(cardKey: string, patch: CardPatch): Promise<Card> {
   return sendJson("PATCH", `/api/cards/${encodeURIComponent(cardKey)}`, patch, CardSchema);
+}
+
+// Importing a repository's EXISTING issues (RFC-0020 §3.6). Poll-based, NOT
+// live: `last_synced_at` says how fresh the board is, and `truncated` says the
+// run hit CFACTORY_IMPORT_MAX so the board is NOT the whole backlog.
+export const CardImportSchema = z
+  .object({
+    ok: z.boolean(),
+    project: z.string(),
+    imported: z.number(),
+    updated: z.number(),
+    skipped: z.number(),
+    truncated: z.boolean(),
+    last_synced_at: z.string().nullish(),
+    reason: z.string().nullish(),
+  })
+  .passthrough();
+export type CardImport = z.infer<typeof CardImportSchema>;
+
+export async function importCards(): Promise<CardImport> {
+  return sendJson("POST", "/api/cards/import", {}, CardImportSchema);
 }
 
 export async function deleteCard(cardKey: string): Promise<void> {

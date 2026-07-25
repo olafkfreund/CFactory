@@ -344,6 +344,11 @@ def test_rest_and_mcp_sync_the_same_way(client, cards, github):
     mcp_card = cards.create(CardCreate(title="Widget throughput"))
 
     rest = client.post(f"/api/cards/{rest_card.card_key}/sync-github").json()
+    # A second card cannot adopt the SAME issue — RFC-0020 §3.6's unique
+    # (tenant, issue_ref) index is what makes the import idempotent, and it
+    # binds every writer, not only the importer. So the fake opens a fresh
+    # issue for the second card, which is what a real host would do.
+    github.issue = {**github.issue, "number": 43}
     mcp = client.post(
         "/mcp",
         json={

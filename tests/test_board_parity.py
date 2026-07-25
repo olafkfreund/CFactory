@@ -63,6 +63,7 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
         "/api/cards/{card_key}/sync-github",
         "cfactory_sync_card_github",
     ),
+    BoardOperation("import", "POST", "/api/cards/import", "cfactory_import_cards"),
     BoardOperation("delete", "DELETE", "/api/cards/{card_key}", "cfactory_delete_card"),
 )
 

@@ -5,8 +5,9 @@ board is a planning projection.** Everything in this module follows from that on
 sentence, so it is worth stating the consequences explicitly rather than leaving
 them to be inferred from the code:
 
-*Mirrored fields* — ``title``, ``issue_state`` (open/closed), ``labels``, and the
-``done`` end of ``status``. These are the provider's. On a conflict — both sides
+*Mirrored fields* — ``title``, ``description`` (the issue body, RFC-0020 §3.6),
+``issue_state`` (open/closed), ``labels``, and the ``done`` end of ``status``.
+These are the provider's. On a conflict — both sides
 changed since the last sync — **the provider wins** (on a GitHub deploy, that is
 Phase 6's "GitHub wins" verbatim): the card is overwritten, the local edit is
 lost, and that is the intended semantics, not a bug. A planner who renames a card
@@ -68,7 +69,7 @@ from typing import Any
 import httpx
 from runners.github.providers.protocol import IssueData
 
-from .cards import Card, CardStore
+from .cards import Card, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
 from .git_providers import IssueProvider, build_provider, provider_token, run_sync
 
@@ -173,6 +174,16 @@ def _fetch_issue(
     return run_sync(_provider(ref.project, settings, transport).fetch_issue(ref.number))
 
 
+def _is_missing(exc: Exception) -> bool:
+    """True when the host said the issue is not there (RFC-0020 §3.6).
+
+    Only a 404 counts. A 403, a timeout or a malformed payload mean "we could not
+    read it", which is a stale card, not a gone issue — recording ``missing`` for
+    those would turn a rate limit into a board full of phantom deletions.
+    """
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404  # noqa: PLR2004
+
+
 def _status_for(issue_state: str, card_status: str) -> str | None:
     """The card status the issue's state implies, or ``None`` to leave it be.
 
@@ -216,6 +227,10 @@ def _mirror(card: Card, ref: IssueRef, issue: IssueData) -> dict[str, Any]:
 
     if issue.title:
         changes["title"] = issue.title  # Provider wins: the issue's title is the title.
+
+    # Provider wins: the issue's body is the card's description (RFC-0020 §3.6
+    # classifies it mirrored, exactly like the title, so no field has two owners).
+    changes["description"] = issue.body or None
 
     # Provider wins: labels are the issue's.
     changes["labels"] = [name for name in issue.labels if isinstance(name, str)]
@@ -265,12 +280,25 @@ def sync_card(
         # board shows it), in the log, and in the return value the caller audits.
         reason = f"{type(exc).__name__}: {exc}"[:512]
         logger.warning("issue sync failed for %s: %s", card.card_key, reason)
-        store.update(card.card_key, {"github_sync_error": reason})
+        changes: dict[str, Any] = {"github_sync_error": reason}
+        if _is_missing(exc):
+            # Deleted or transferred on the host (RFC-0020 §3.6). The card is
+            # marked, NOT deleted: human planning data is not destroyed by a 404.
+            changes["issue_state"] = "missing"
+        store.update(card.card_key, changes)
         return {"synced": False, "ok": False, "created": False, "error": reason}
 
     changes = _mirror(card, ref, issue)
-    if changes:
-        store.update(card.card_key, changes)
+    try:
+        if changes:
+            store.update(card.card_key, changes)
+    except DuplicateIssueRefError:
+        # Another card in this tenant already holds this issue (RFC-0020 §3.6's
+        # unique index). One issue, one card — so this sync stops rather than
+        # producing a second projection of the same work.
+        reason = f"another card already tracks {ref}"
+        store.update(card.card_key, {"github_sync_error": reason})
+        return {"synced": False, "ok": False, "created": created, "error": reason}
     return {
         "synced": True,
         "ok": True,

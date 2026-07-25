@@ -58,12 +58,14 @@ from .api_deps import (  # noqa: F401 — public re-export surface
     store_dep,
 )
 from .auth import READ, authorize_headers, get_keystore
+from .cards import get_cards_store
 from .config import (
     check_audit_secret,
     get_settings,
     load_copilot_overrides,
     load_service_overrides,
 )
+from .issue_import import poll_forever
 from .progress import get_progress_hub, start_progress, stop_progress
 from .store import get_store
 from .upstream_ws import start_subscribers
@@ -83,6 +85,10 @@ async def lifespan(_app: FastAPI):
     tasks: list[asyncio.Task[None]] = []
     if settings.subscribe_upstreams:
         tasks = start_subscribers(get_store(), get_manager(), settings)
+    if settings.import_poll:
+        # Poll-based issue reconciliation (RFC-0020 §3.6). NOT live — see
+        # cfactory.issue_import. Off unless CFACTORY_IMPORT_POLL is set.
+        tasks.append(asyncio.create_task(poll_forever(get_cards_store(settings), settings)))
     progress_tasks = start_progress(get_progress_hub(), get_manager(), settings)
     try:
         yield

@@ -1,32 +1,42 @@
-"""Card <-> GitHub issue sync (RFC-0019 §3.5, Phase 6).
+"""Card <-> git-provider issue sync (RFC-0019 §3.5 Phase 6; RFC-0020 phase 1).
 
-**The governing law: GitHub is the record of truth (RFC-0003). The board is a
-planning projection.** Everything in this module follows from that one sentence,
-so it is worth stating the consequences explicitly rather than leaving them to be
-inferred from the code:
+**The governing law: the git provider is the record of truth (RFC-0003). The
+board is a planning projection.** Everything in this module follows from that one
+sentence, so it is worth stating the consequences explicitly rather than leaving
+them to be inferred from the code:
 
 *Mirrored fields* — ``title``, ``issue_state`` (open/closed), ``labels``, and the
-``done`` end of ``status``. These are GitHub's. On a conflict — both sides
-changed since the last sync — **GitHub wins**: the card is overwritten, the local
-edit is lost, and that is the intended semantics, not a bug. A planner who
-renames a card and then finds the issue's title back after a sync is seeing the
-rule work.
+``done`` end of ``status``. These are the provider's. On a conflict — both sides
+changed since the last sync — **the provider wins** (on a GitHub deploy, that is
+Phase 6's "GitHub wins" verbatim): the card is overwritten, the local edit is
+lost, and that is the intended semantics, not a bug. A planner who renames a card
+and then finds the issue's title back after a sync is seeing the rule work.
 
 *Planning-only fields* — ``priority``, ``tier``, ``milestone``,
-``acceptance_criteria``, ``assignee``, ``correlation_key``. GitHub has no opinion
-on these (they are the board's reason to exist), so a sync never touches them.
-There is no field that both sides own, which is what keeps "GitHub wins" a
-one-line rule instead of a merge algorithm.
+``acceptance_criteria``, ``assignee``, ``correlation_key``. The provider has no
+opinion on these (they are the board's reason to exist), so a sync never touches
+them. There is no field that both sides own, which is what keeps "the provider
+wins" a one-line rule instead of a merge algorithm.
 
 Direction of travel:
 
-* **card -> issue**: one write, ``POST /repos/{owner}/{repo}/issues``, and only
-  when the card has no issue yet. Nothing else is ever pushed — a later local
-  title edit is NOT propagated, because propagating it would make the board a
-  second writer of an authoritative field and re-open the conflict we just
-  closed.
-* **issue -> card**: ``GET`` the issue and mirror it down. This is the half that
-  keeps the board from lying about work that moved on GitHub.
+* **card -> issue**: one write, ``create_issue``, and only when the card has no
+  issue yet. Nothing else is ever pushed — a later local title edit is NOT
+  propagated, because propagating it would make the board a second writer of an
+  authoritative field and re-open the conflict we just closed.
+* **issue -> card**: ``fetch_issue`` and mirror it down. This is the half that
+  keeps the board from lying about work that moved on the host.
+
+**Which host (RFC-0020 phase 1).** Both verbs above are the fleet's canonical
+``GitProvider`` protocol, vendored at ``apps/backend/runners/github/`` and
+drift-gated — not GitHub URLs. Nothing below this line knows what a repo path or
+an issue state looks like on any particular host: ``CFACTORY_GIT_PROVIDER``
+selects github (default) / gitlab / azure_devops, and the provider hands back
+normalised ``IssueData`` where the number is the host's own identifier (a GitLab
+IID, say) and the state is ``open``/``closed`` whatever the host calls it. The
+card's columns keep their ``github_*`` names — renaming a column is a migration
+with no behavioural payoff, and the RFC-0020 phases that own the settings UI can
+carry that if it is ever wanted.
 
 Idempotency has no new column, exactly as with the §3.2 intake: ``issue_ref``
 non-NULL *is* "this card already has an issue", so a second sync adopts and
@@ -34,7 +44,7 @@ mirrors instead of opening a duplicate. Adopting an issue somebody else filed is
 the same code path — set ``issue_ref`` on the card and sync.
 
 Fail-safe, same contract as ``card_intake.dispatch_card``: nothing here raises.
-A GitHub outage records the reason on the card (``github_sync_error``) and
+A provider outage records the reason on the card (``github_sync_error``) and
 returns ``ok=False`` for the caller to audit. The board keeps serving, the card
 does not silently look synced, and no card field is half-written — the mirror is
 computed in full and applied as one update, or not applied at all.
@@ -56,36 +66,42 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from runners.github.providers.protocol import IssueData
 
 from .cards import Card, CardStore
 from .config import Settings, get_settings
+from .git_providers import IssueProvider, build_provider, provider_token, run_sync
 
 logger = logging.getLogger(__name__)
 
-# "owner/repo" and "owner/repo#123". Anchored and character-restricted because
-# these strings are interpolated into a request PATH: an unvalidated ref carrying
-# "../" or a host would let a card write choose which GitHub resource we call.
-_SEGMENT = "[A-Za-z0-9_.-]+"
-_REPO_RE = re.compile(rf"^({_SEGMENT})/({_SEGMENT})$")
-_ISSUE_REF_RE = re.compile(rf"^({_SEGMENT})/({_SEGMENT})#([0-9]+)$")
-
-_TIMEOUT_SECONDS = 10.0
+# A project path ("owner/repo", or "group/sub/project" on a GitLab with
+# subgroups) and a ref to an issue in one ("owner/repo#123"). Anchored and
+# character-restricted because these strings end up interpolated into a request
+# PATH by the provider: an unvalidated ref carrying "../" or a host would let a
+# card write choose which resource we call. Every segment must contain at least
+# one alphanumeric, which is what keeps ".." out now that a path may be deeper
+# than two segments.
+_SEGMENT = "[A-Za-z0-9_.-]*[A-Za-z0-9][A-Za-z0-9_.-]*"
+_PROJECT = rf"{_SEGMENT}(?:/{_SEGMENT})+"
+_PROJECT_RE = re.compile(rf"^({_PROJECT})$")
+_ISSUE_REF_RE = re.compile(rf"^({_PROJECT})#([0-9]+)$")
 
 
 @dataclass(frozen=True)
 class IssueRef:
-    """A parsed, validated ``owner/repo#number``."""
+    """A parsed, validated ``<project path>#<number>``.
 
-    owner: str
-    repo: str
+    Provider-neutral: ``project`` is whatever path the configured host addresses
+    a repository by, and ``number`` is whatever integer that host names an issue
+    by — a GitHub issue number, a GitLab IID. The board stores and compares it;
+    only the provider interprets it.
+    """
+
+    project: str
     number: int
 
     def __str__(self) -> str:
-        return f"{self.owner}/{self.repo}#{self.number}"
-
-    @property
-    def path(self) -> str:
-        return f"/repos/{self.owner}/{self.repo}/issues/{self.number}"
+        return f"{self.project}#{self.number}"
 
     @classmethod
     def parse(cls, text: str | None) -> IssueRef | None:
@@ -93,30 +109,19 @@ class IssueRef:
         match = _ISSUE_REF_RE.match((text or "").strip())
         if match is None:
             return None
-        return cls(match.group(1), match.group(2), int(match.group(3)))
+        return cls(match.group(1), int(match.group(2)))
 
 
 def sync_enabled(settings: Settings) -> bool:
-    """True when GitHub sync is configured at all.
+    """True when issue sync is configured at all.
 
     Unconfigured is the default and means OFF: a card write makes no network
-    call and opens no issue. This is what keeps Phase 6 inert for every deploy
-    that has not opted in.
+    call and opens no issue. This is what keeps the sync inert for every deploy
+    that has not opted in — and note what "configured" means: an explicitly set
+    ``CFACTORY_GIT_PROVIDER_TOKEN``/``CFACTORY_GITHUB_TOKEN``, never the ambient
+    ``GITHUB_TOKEN``/``GH_TOKEN`` a logged-in ``gh`` leaves lying around.
     """
-    return bool(settings.github_token)
-
-
-def _client(settings: Settings, transport: httpx.BaseTransport | None) -> httpx.Client:
-    return httpx.Client(
-        base_url=settings.github_api_url,
-        timeout=_TIMEOUT_SECONDS,
-        transport=transport,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Authorization": f"Bearer {settings.github_token}",
-        },
-    )
+    return bool(provider_token(settings))
 
 
 def _issue_body(card: Card) -> str:
@@ -128,58 +133,61 @@ def _issue_body(card: Card) -> str:
     return "\n".join(lines)
 
 
+def _provider(
+    project: str, settings: Settings, transport: httpx.BaseTransport | None
+) -> IssueProvider:
+    """The configured provider, pointed at *project*."""
+    return build_provider(settings, project, transport=transport)
+
+
 def _open_issue(
     card: Card, *, settings: Settings, transport: httpx.BaseTransport | None
-) -> tuple[IssueRef, dict[str, Any]]:
-    """Open a new issue for a card in the configured repo.
+) -> tuple[IssueRef, IssueData]:
+    """Open a new issue for a card in the configured project.
 
     Deliberately sends NO labels. The fleet's issue-driven intake (RFC-0011)
     triggers on a ``factory:<tier>`` label, and the card has already been (or is
     about to be) dispatched by the §3.2 intake hook — labelling the issue would
-    build the same card twice.
+    build the same card twice. That rule is provider-independent: every host's
+    ``create_issue`` takes labels, and we pass none to all of them.
     """
-    match = _REPO_RE.match((settings.github_repo or "").strip())
+    match = _PROJECT_RE.match((settings.github_repo or "").strip())
     if match is None:
         raise ValueError(
-            "cannot open an issue: set CFACTORY_GITHUB_REPO to 'owner/repo', or "
-            "set the card's issue_ref to adopt an existing issue"
+            "cannot open an issue: set CFACTORY_GITHUB_REPO to the provider's "
+            "project path (e.g. 'owner/repo'), or set the card's issue_ref to "
+            "adopt an existing issue"
         )
-    owner, repo = match.group(1), match.group(2)
-    with _client(settings, transport) as client:
-        resp = client.post(
-            f"/repos/{owner}/{repo}/issues",
-            json={"title": card.title, "body": _issue_body(card)},
-        )
-        resp.raise_for_status()
-        issue = dict(resp.json())
-    number = issue.get("number")
-    if not isinstance(number, int):
-        raise ValueError(f"GitHub returned no issue number for {card.card_key!r}")
-    return IssueRef(owner, repo, number), issue
+    project = match.group(1)
+    issue = run_sync(
+        _provider(project, settings, transport).create_issue(card.title, _issue_body(card))
+    )
+    if not isinstance(issue.number, int):
+        raise ValueError(f"provider returned no issue number for {card.card_key!r}")
+    return IssueRef(project, issue.number), issue
 
 
 def _fetch_issue(
     ref: IssueRef, *, settings: Settings, transport: httpx.BaseTransport | None
-) -> dict[str, Any]:
-    with _client(settings, transport) as client:
-        resp = client.get(ref.path)
-        resp.raise_for_status()
-        return dict(resp.json())
+) -> IssueData:
+    return run_sync(_provider(ref.project, settings, transport).fetch_issue(ref.number))
 
 
 def _status_for(issue_state: str, card_status: str) -> str | None:
-    """The card status GitHub's issue state implies, or ``None`` to leave it be.
+    """The card status the issue's state implies, or ``None`` to leave it be.
 
-    Only the two states GitHub actually asserts are mapped:
+    Only the two states a provider actually asserts are mapped — and they are the
+    same two everywhere, because the protocol normalises them (GitLab's "opened"
+    arrives here as ``open``):
 
     * **closed** -> ``done``. The work is finished wherever it was finished.
     * **open** while the card says ``done`` -> ``in_progress``. This is the
-      conflict case, and GitHub wins: a reopened issue means the work is NOT
-      done, so the board must stop claiming it is.
+      conflict case, and the provider wins: a reopened issue means the work is
+      NOT done, so the board must stop claiming it is.
 
     Every other open-issue status (backlog / ready / in_progress / blocked) is
-    the board's own planning column, about which GitHub has no opinion, so it is
-    left exactly as the planner set it.
+    the board's own planning column, about which the provider has no opinion, so
+    it is left exactly as the planner set it.
     """
     if issue_state == "closed":
         return "done"
@@ -188,13 +196,17 @@ def _status_for(issue_state: str, card_status: str) -> str | None:
     return None
 
 
-def _mirror(card: Card, ref: IssueRef, issue: dict[str, Any]) -> dict[str, Any]:
-    """The card fields GitHub's issue overwrites — the GitHub-wins rule, in code.
+def _mirror(card: Card, ref: IssueRef, issue: IssueData) -> dict[str, Any]:
+    """The card fields the issue overwrites — the provider-wins rule, in code.
 
     Every mirrored value is taken from the issue unconditionally — that IS the
     conflict rule; a local edit is not consulted, so it cannot win. The final
     comparison against the card only drops no-op writes, it never protects a
     local value.
+
+    Reads only normalised ``IssueData``, so nothing host-shaped reaches a card:
+    GitHub's ``[{"name": "bug"}]`` and GitLab's ``["bug"]`` have both already
+    become ``["bug"]``, and GitLab's ``opened`` has already become ``open``.
 
     Note what is NOT here: priority, tier, milestone, acceptance_criteria,
     assignee, correlation_key. Those are planning-only and survive a sync
@@ -202,22 +214,17 @@ def _mirror(card: Card, ref: IssueRef, issue: dict[str, Any]) -> dict[str, Any]:
     """
     changes: dict[str, Any] = {"github_sync_error": None, "issue_ref": str(ref)}
 
-    title = issue.get("title")
-    if isinstance(title, str) and title:
-        changes["title"] = title  # GitHub wins: the issue's title is the title.
+    if issue.title:
+        changes["title"] = issue.title  # Provider wins: the issue's title is the title.
 
-    changes["labels"] = [  # GitHub wins: labels are the issue's.
-        name
-        for label in issue.get("labels") or []
-        if isinstance(name := (label.get("name") if isinstance(label, dict) else label), str)
-    ]
+    # Provider wins: labels are the issue's.
+    changes["labels"] = [name for name in issue.labels if isinstance(name, str)]
 
-    state = issue.get("state")
-    if isinstance(state, str) and state:
-        changes["issue_state"] = state
-        status = _status_for(state, card.status)
+    if issue.state:
+        changes["issue_state"] = issue.state
+        status = _status_for(issue.state, card.status)
         if status is not None:
-            changes["status"] = status  # GitHub wins on open/closed.
+            changes["status"] = status  # Provider wins on open/closed.
 
     return {field: v for field, v in changes.items() if getattr(card, field) != v}
 
@@ -248,11 +255,16 @@ def sync_card(
             ref, issue = _open_issue(card, settings=settings, transport=transport)
         else:
             issue = _fetch_issue(ref, settings=settings, transport=transport)
-    except (httpx.HTTPError, ValueError) as exc:
-        # Surfaced, never swallowed: the reason lands on the card (so the board
-        # shows it), in the log, and in the return value the caller audits.
+    except Exception as exc:  # noqa: BLE001 — the never-raises contract IS the
+        # feature, and the blast radius widened with RFC-0020: behind the protocol
+        # sits third-party provider code we do not control (a malformed GitLab
+        # payload is a KeyError, an unimplemented host surface a
+        # NotImplementedError). Naming a list of exception types would mean an
+        # unlisted one 500s the board — precisely the outcome this clause exists
+        # to prevent. Nothing is swallowed: the reason lands on the card (so the
+        # board shows it), in the log, and in the return value the caller audits.
         reason = f"{type(exc).__name__}: {exc}"[:512]
-        logger.warning("github sync failed for %s: %s", card.card_key, reason)
+        logger.warning("issue sync failed for %s: %s", card.card_key, reason)
         store.update(card.card_key, {"github_sync_error": reason})
         return {"synced": False, "ok": False, "created": False, "error": reason}
 

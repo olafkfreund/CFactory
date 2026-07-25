@@ -4,6 +4,12 @@ Every test here runs against a MOCKED GitHub — an ``httpx.MockTransport``
 injected through the same ``action_transport_dep`` seam the intake dispatch
 uses. Nothing in this file touches the network.
 
+RFC-0020 phase 1 moved the board onto the fleet's ``GitProvider`` protocol, and
+this module is **unchanged** by that — which is the strongest statement available
+that Phase 6's contract survived the rewiring intact: the same assertions, over
+the same GitHub REST calls, now travel through the protocol. The proof that the
+contract is not GitHub-specific is next door in ``test_git_providers.py``.
+
 Contract points covered:
 
 * a card opens an issue and records the reference (card -> issue);

@@ -110,6 +110,29 @@ class Settings(BaseSettings):
     # (`github_api_url` for GitHub, https://gitlab.com, https://dev.azure.com).
     git_provider_url: str | None = None
 
+    # ── Importing a repo's EXISTING issues (RFC-0020 §3.6) ───────────────────
+    # Which issues a backfill asks for: "open" (the default), "closed" or "all".
+    # The default is deliberately the WIDE one — "connect my repo" means "show me
+    # my backlog", and a filter that quietly hides most of it produces the worst
+    # failure this feature has, with no error to diagnose. The incremental pass
+    # always uses "all" regardless, so closures and reopenings are not missed.
+    import_state: str = "open"
+    # Optional comma-separated label filter for the backfill. Empty (the default)
+    # means no filter. Opt-in narrowing, never the default.
+    import_labels: str = ""
+    # Ceiling on how many issues one import brings in. Truncation is REPORTED in
+    # the result, never silent — a board holding the first 1000 of 3000 issues
+    # looks complete and is not.
+    import_max: int = 1000
+    # Background reconciliation. Import is POLL-BASED, not live: there is no
+    # webhook receiver, so an issue filed after the last pass appears at the next
+    # one. Off unless switched on, like every other background loop here
+    # (subscribe_upstreams, live_progress); the cadence default is the RFC's five
+    # minutes — fast enough that a board is rarely more than a coffee out of
+    # date, slow enough that a hundred tenants do not exhaust a rate limit.
+    import_poll: bool = False
+    import_poll_seconds: float = 300.0
+
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None
 

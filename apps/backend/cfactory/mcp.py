@@ -60,7 +60,13 @@ from .api_deps import action_transport_dep, cards_store_dep
 from .audit import get_audit_store
 from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
 from .card_ops import CardNotFoundError, StageRefusedError
-from .cards import CardCreate, CardStore, CardUpdate, DuplicateCardKeyError
+from .cards import (
+    CardCreate,
+    CardStore,
+    CardUpdate,
+    DuplicateCardKeyError,
+    DuplicateIssueRefError,
+)
 from .config import get_settings
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
@@ -360,6 +366,35 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "cfactory_import_cards",
+        "description": (
+            "Import the connected repository's EXISTING issues into the planning backlog "
+            "— the way a board gets populated from a repo that already has a backlog. "
+            "Works on GitHub, GitLab and Azure DevOps alike. Imported cards land in "
+            "'backlog' (closed issues in 'done') and NEVER in 'ready', so importing a "
+            "repo does not dispatch a build per issue. Re-running never duplicates: it "
+            "updates the cards it already created. Pull requests are never imported. "
+            "Incremental by default — pass full=true to re-read every issue. NOT live: "
+            "this is a poll, so an issue filed since the last run appears on the next one."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Project path to import from ('owner/repo'); defaults to the "
+                        "configured repository."
+                    ),
+                },
+                "full": {
+                    "type": "boolean",
+                    "description": "Ignore the last-synced watermark and re-read every issue.",
+                },
+            },
+        },
+    },
+    {
         "name": "cfactory_delete_card",
         "description": "Remove a card from the planning backlog for good.",
         "inputSchema": {
@@ -390,6 +425,7 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_move_card": WRITE,
     "cfactory_reprioritise_card": WRITE,
     "cfactory_sync_card_github": WRITE,
+    "cfactory_import_cards": WRITE,
     # Stage actions dispatch work into the factory, so every one is a WRITE.
     "cfactory_plan_card": WRITE,
     "cfactory_code_card": WRITE,
@@ -572,6 +608,16 @@ def _tool_sync_card_github(args: dict[str, Any], ctx: ToolContext) -> Any:
     )
 
 
+def _tool_import_cards(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return card_ops.import_cards(
+        ctx.cards,
+        ctx.audit,
+        project=args.get("project"),
+        full=bool(args.get("full", False)),
+        transport=ctx.transport,
+    )
+
+
 def _tool_delete_card(args: dict[str, Any], ctx: ToolContext) -> Any:
     return card_ops.delete_card(ctx.cards, ctx.audit, args.get("card_key", ""))
 
@@ -610,12 +656,33 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_move_card": _tool_update_card,
     "cfactory_reprioritise_card": _tool_update_card,
     "cfactory_sync_card_github": _tool_sync_card_github,
+    "cfactory_import_cards": _tool_import_cards,
     "cfactory_plan_card": _tool_stage_card("plan"),
     "cfactory_code_card": _tool_stage_card("code"),
     "cfactory_test_card": _tool_stage_card("test"),
     "cfactory_run_card": _tool_stage_card(""),
     "cfactory_delete_card": _tool_delete_card,
 }
+
+
+# How each transport-neutral domain error is rendered over JSON-RPC. A table
+# rather than a ladder of ``except`` clauses because every entry says the same
+# thing in the same shape, and the ladder grew one rung per phase.
+_TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...] = (
+    (CardNotFoundError, lambda exc: {"error": f"no card {exc.args[0]!r}"}),
+    (DuplicateCardKeyError, lambda exc: {"error": f"card already exists: {exc.args[0]!r}"}),
+    (
+        DuplicateIssueRefError,
+        lambda exc: {"error": f"another card already tracks issue {exc.args[0]!r}"},
+    ),
+    # The REST twin answers 409 {reason, message}; over JSON-RPC the same two
+    # fields, so an agent can branch on the code and quote the sentence.
+    (StageRefusedError, lambda exc: {"error": exc.message, "reason": exc.code}),
+    (
+        ValidationError,
+        lambda exc: {"error": "invalid arguments", "details": exc.errors(include_url=False)},
+    ),
+)
 
 
 def _dispatch_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> Any:
@@ -630,16 +697,8 @@ def _dispatch_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> An
         return {"error": f"unknown tool: {name}"}
     try:
         return handler(arguments, ctx)
-    except CardNotFoundError as exc:
-        return {"error": f"no card {exc.args[0]!r}"}
-    except DuplicateCardKeyError as exc:
-        return {"error": f"card already exists: {exc.args[0]!r}"}
-    except StageRefusedError as exc:
-        # The REST twin answers 409 {reason, message}; over JSON-RPC the same two
-        # fields, so an agent can branch on the code and quote the sentence.
-        return {"error": exc.message, "reason": exc.code}
-    except ValidationError as exc:
-        return {"error": "invalid arguments", "details": exc.errors(include_url=False)}
+    except tuple(kind for kind, _ in _TOOL_ERRORS) as exc:
+        return next(render(exc) for kind, render in _TOOL_ERRORS if isinstance(exc, kind))
 
 
 # ---------------------------------------------------------------------------

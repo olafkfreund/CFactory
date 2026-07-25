@@ -105,6 +105,8 @@ def test_initialize_and_tools_list(mcp_client):
         "cfactory_create_card",
         # RFC-0019 Phase 6 GitHub sync.
         "cfactory_sync_card_github",
+        # RFC-0020 Phase 6 issue import.
+        "cfactory_import_cards",
         "cfactory_update_card",
         "cfactory_move_card",
         "cfactory_reprioritise_card",

@@ -14,7 +14,10 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
   // Status is the column here, so it is never a server-side filter on this view.
   const [filters, setFilters] = useState<CardFilters>({});
   const [query, setQuery] = useState("");
-  const { cards, loading, error, notice, mutate, runStage } = useCards(filters, reloadSignal);
+  const { cards, loading, error, notice, mutate, runStage, importing, importIssues } = useCards(
+    filters,
+    reloadSignal,
+  );
 
   const shown = cards.filter((c) => matchesQuery(c, query)).sort(byPriority);
 
@@ -27,6 +30,16 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
           push it into plan, code or test (or all three) with its stage buttons. Every change is
           written straight through to the card API.
         </p>
+        <button
+          className="card-btn"
+          type="button"
+          onClick={() => {
+            void importIssues();
+          }}
+          disabled={importing}
+        >
+          {importing ? "Importing…" : "Import repo issues"}
+        </button>
       </div>
 
       <CardFilterBar

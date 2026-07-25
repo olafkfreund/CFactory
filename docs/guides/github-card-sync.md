@@ -117,3 +117,90 @@ stored and displayed rather than inferred.
 Live inbound sync needs a public webhook endpoint with signature verification,
 which this deployment does not have. That is the follow-up, deliberately not
 half-built here.
+
+## Importing a repo's existing issues (RFC-0020 section 3.6)
+
+Sync above is *card-first*: a card can open or adopt an issue, but connecting a
+repo brings nothing in. Import is the other direction — the repository's
+**existing** issues become cards, so a board that starts empty does not stay
+empty for anyone who already has a backlog.
+
+```
+POST /api/cards/import            # the whole configured project
+POST /api/cards/import?full=true  # ignore the watermark, re-read everything
+```
+
+The MCP twin is `cfactory_import_cards` (same arguments, same result), and the
+planning board has an **Import repo issues** button. Every import is audited like
+any other card write.
+
+It goes through the same provider protocol as the sync, so it works on GitHub,
+GitLab and Azure DevOps alike.
+
+### What you get
+
+| Issue | Card | Owner |
+|---|---|---|
+| `title` | `title` | mirrored (host wins) |
+| `body` | `description` | mirrored |
+| `factory:<tier>` label | `tier` (`low`/`medium`/`hard` — note `hard`, not `high`) | mirrored |
+| other labels | `labels` | mirrored |
+| `assignees[0]` | `assignee` | mirrored |
+| `milestone` | `milestone` (the title) | mirrored |
+| `state` | `issue_state`, and `status` per the rule below | mirrored |
+| — | `acceptance_criteria` | **left empty, never parsed from the body** |
+| — | `priority` | planning-only, `100` on import |
+
+The body does **not** become acceptance criteria. Those are the testable
+statements dispatch turns into the RFC-0002 task contract; parsing prose into
+them would fabricate the thing the factory verifies against. An imported card
+therefore has none, which is a legal planning state — fill them in before you
+promote it.
+
+### An imported card never dispatches
+
+An open issue imports as `backlog`, a closed one as `done`. **Never `ready`.**
+`ready` + a tier is the intake trigger and real repositories are full of issues
+already labelled `factory:low`, so an importer able to produce `ready` would fire
+a build per issue from one click. This is a safety property with a test named
+after it, not a default you can configure away.
+
+### Re-running is safe
+
+Import is an upsert against a UNIQUE `(tenant_id, issue_ref)` index, so running
+it twice — or twice at the same moment — updates the cards it already created
+rather than duplicating them. A card edited locally keeps its planning fields
+(priority, acceptance criteria) and loses its mirrored ones to the host, which is
+the same "the host wins" rule as the sync.
+
+Pull requests are never imported. `include_prs` is pinned off and is not
+configurable: a pull request is not a plan.
+
+### It is a poll. It is not live.
+
+There is still no webhook receiver, so:
+
+- the first import backfills every open issue (up to `CFACTORY_IMPORT_MAX` —
+  truncation is reported, never silent);
+- after that a `last_synced_at` watermark exists, and each run asks only for
+  issues updated since it, minus a 60-second overlap for clock skew, with the
+  state widened to `all` so closures and reopenings are caught;
+- set `CFACTORY_IMPORT_POLL=true` to have that run every
+  `CFACTORY_IMPORT_POLL_SECONDS` (default 300) in the background.
+
+An issue filed a second ago is on the board somewhere between zero and one poll
+interval later — never instantly. The import summary shows `last_synced_at` for
+exactly that reason.
+
+### Closing, deleting, disappearing
+
+- Issue closed on the host -> card `done`; reopened -> back to `backlog`.
+- A card already **in the factory** (non-NULL `correlation_key`) keeps its
+  `status`: a run in flight owns it, and a poll must not stomp it back to
+  `backlog` because somebody reopened the issue. Everything else still mirrors.
+- Deleting a card is a **soft delete**. The issue is not touched — deleting a
+  card means "not on my board", never "destroy the record of truth" — and the
+  next import does not resurrect it.
+- An issue deleted or transferred on the host answers 404, which sets
+  `issue_state: missing`. The card stays: human planning data is not destroyed
+  by a 404.

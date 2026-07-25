@@ -32,7 +32,15 @@ from .api_deps import action_transport_dep, audit_dep, cards_store_dep
 from .audit import AuditStore
 from .auth import require_scope
 from .card_ops import AuditContext, CardNotFoundError, StageRefusedError, UnknownStageError
-from .cards import Card, CardCreate, CardStore, CardTier, CardUpdate, DuplicateCardKeyError
+from .cards import (
+    Card,
+    CardCreate,
+    CardStore,
+    CardTier,
+    CardUpdate,
+    DuplicateCardKeyError,
+    DuplicateIssueRefError,
+)
 from .cards import CardStatus as CardStatusT
 from .enterprise import identity_dep
 
@@ -116,6 +124,49 @@ def create_card(
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT, detail=f"card already exists: {exc.args[0]!r}"
         ) from None
+    except DuplicateIssueRefError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail=f"another card already tracks issue {exc.args[0]!r}",
+        ) from None
+
+
+@router.post("/api/cards/import")
+def import_cards(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; see
+    # update_card below. The injected seams are wiring, not a call-site argument
+    # list, so splitting them would only hide it.
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+    project: str | None = None,
+    full: bool = False,
+) -> dict[str, object]:
+    """Import the repository's EXISTING issues into the backlog (RFC-0020 §3.6).
+
+    Connecting a repo should bring the work with it. This lists the configured
+    project's issues through the provider protocol (so it works on GitLab and
+    Azure DevOps too) and upserts each one as a card.
+
+    Imported cards land in `backlog` — a closed issue in `done` — and **never**
+    in `ready`: `ready` + a tier is the dispatch trigger, and a repo full of
+    `factory:low` issues would otherwise fire a build per issue.
+
+    Idempotent: re-running updates the same cards rather than duplicating them.
+    Incremental after the first run (`full=true` re-reads everything). Pull
+    requests are never imported.
+
+    **Not live.** There is no webhook receiver, so this is a poll: an issue filed
+    since the last run appears on the next one. The result carries
+    `last_synced_at`, and `truncated` when `CFACTORY_IMPORT_MAX` capped the run.
+
+    A provider outage returns 200 with `ok == false` and the reason, rather than
+    failing the board.
+    """
+    return card_ops.import_cards(
+        store, AuditContext(audit, actor), project=project, full=full, transport=transport
+    )
 
 
 @router.get("/api/cards/{card_key}")
@@ -158,6 +209,11 @@ def update_card(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; the
         )
     except CardNotFoundError:
         raise _not_found(card_key) from None
+    except DuplicateIssueRefError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail=f"another card already tracks issue {exc.args[0]!r}",
+        ) from None
 
 
 @router.post("/api/cards/{card_key}/sync-github")

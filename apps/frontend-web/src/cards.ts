@@ -10,10 +10,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   fetchCards,
+  importCards,
   patchCard,
   runCardStage,
   type Card,
   type CardFilters,
+  type CardImport,
   type CardPatch,
   type CardStage,
   type CardStatus,
@@ -88,6 +90,23 @@ export function stageNotice(cardKey: string, result: StageActionResult): string 
   return warnings?.length ? `${cardKey}: ${warnings.join(" ")}` : null;
 }
 
+/**
+ * The one-line summary an import leaves in the notice banner (RFC-0020 §3.6).
+ *
+ * Says three things the human cannot see from the board itself: how much came
+ * in, whether `CFACTORY_IMPORT_MAX` truncated the run (a board holding the first
+ * 1000 of 3000 issues looks complete and is not), and how stale it is — import
+ * is a poll, never live.
+ */
+export function importNotice(result: CardImport): string {
+  const truncated = result.truncated ? " (truncated — raise CFACTORY_IMPORT_MAX)" : "";
+  return (
+    `Imported ${String(result.imported)}, updated ${String(result.updated)}, ` +
+    `skipped ${String(result.skipped)} from ${result.project}${truncated}. ` +
+    `Last synced ${result.last_synced_at ?? "never"} — polled, not live.`
+  );
+}
+
 /** Priority order: lower number first, then card_key so the sort is stable. */
 export function byPriority(a: Card, b: Card): number {
   return a.priority - b.priority || a.card_key.localeCompare(b.card_key);
@@ -146,6 +165,10 @@ export type CardsState = {
   mutate: (cardKey: string, patch: CardPatch) => Promise<void>;
   /** Push one card into a stage, or through the whole sequence (RFC-0020 §3.7). */
   runStage: (cardKey: string, action: StageAction) => Promise<void>;
+  /** True while an import is in flight, so the trigger can disable itself. */
+  importing: boolean;
+  /** Pull the connected repo's EXISTING issues onto the board (RFC-0020 §3.6). */
+  importIssues: () => Promise<void>;
   /** Re-run the list query (after a create/delete). */
   reload: () => void;
   setError: (message: string | null) => void;
@@ -160,6 +183,7 @@ export function useCards(filters: CardFilters, reloadSignal: number): CardsState
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const [tick, setTick] = useState(0);
   // Serialise the filter object so the effect re-runs on value (not identity).
   const filterKey = JSON.stringify(filters);
@@ -218,5 +242,38 @@ export function useCards(filters: CardFilters, reloadSignal: number): CardsState
   const reload = useCallback(() => {
     setTick((t) => t + 1);
   }, []);
-  return { cards, loading, error, notice, mutate, runStage, reload, setError };
+
+  // Like `runStage` and unlike `mutate`, this is not optimistic: how many issues
+  // a repository has is not knowable in advance, so the board is re-read from
+  // the server once the import reports what it did. A backend that answers
+  // `ok: false` (unreachable or unconfigured provider) is an error, not a
+  // notice — it is a 200 on the wire but a failure to the human.
+  const importIssues = useCallback(async () => {
+    setImporting(true);
+    try {
+      const result = await importCards();
+      if (!result.ok) throw new Error(result.reason ?? "import failed");
+      setError(null);
+      setNotice(importNotice(result));
+      setTick((t) => t + 1);
+    } catch (e) {
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
+  return {
+    cards,
+    loading,
+    error,
+    notice,
+    mutate,
+    runStage,
+    importing,
+    importIssues,
+    reload,
+    setError,
+  };
 }

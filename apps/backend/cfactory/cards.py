@@ -22,11 +22,12 @@ in real deployments).
 from __future__ import annotations
 
 import copy
+import logging
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import DateTime, Index, Integer, Select, String, select
+from sqlalchemy import DateTime, Index, Integer, Select, String, Text, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
@@ -34,6 +35,8 @@ from sqlalchemy.types import JSON
 
 from .config import DEFAULT_TENANT, Settings, get_settings
 from .db import Base, make_engine
+
+logger = logging.getLogger(__name__)
 
 # The board columns. A card moves between these; there is no other status space.
 CardStatus = Literal["backlog", "ready", "in_progress", "blocked", "done"]
@@ -49,6 +52,18 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """A stored timestamp as an aware UTC one.
+
+    SQLite hands back naive datetimes from a ``DateTime`` column even when an
+    aware one went in, and the watermark is compared against provider timestamps
+    that are always aware — so a naive read would raise on the comparison.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
 class CardRow(Base):
     __tablename__ = "cards"
 
@@ -60,6 +75,10 @@ class CardRow(Base):
         String(64), default=DEFAULT_TENANT, server_default=DEFAULT_TENANT, index=True
     )
     title: Mapped[str] = mapped_column(String(512))
+    # Free-form markdown body (RFC-0020 §3.6). Where an imported issue's body
+    # lands — and a MIRRORED field, so the host owns it exactly as it owns the
+    # title. Deliberately NOT acceptance_criteria: see cfactory.issue_import.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     acceptance_criteria: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(32), default="backlog", server_default="backlog")
     # Lower = higher priority, so the backlog sorts ascending and a reprioritise
@@ -99,10 +118,24 @@ class CardRow(Base):
     # about the fact that it may now be stale.
     github_sync_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    # Soft delete (RFC-0020 §3.6). Deleting a card means "not on my board", never
+    # "destroy the record of truth" — the issue is untouched. The row stays for
+    # two reasons: the unique index below keeps doing its job, and the next
+    # import sees the tombstone and does NOT resurrect the card.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
-    __table_args__ = (Index("ix_cards_tenant_id_card_key", "tenant_id", "card_key", unique=True),)
+    __table_args__ = (
+        Index("ix_cards_tenant_id_card_key", "tenant_id", "card_key", unique=True),
+        # Import idempotency, enforced by the DATABASE rather than by an
+        # application-level "does this exist?" check (RFC-0020 §3.6). The check
+        # loses a race between two concurrent polls; the constraint does not.
+        # NULLs are distinct in both SQLite and PostgreSQL, so the unconstrained
+        # majority of cards — the ones with no issue — are unaffected.
+        Index("ix_cards_tenant_id_issue_ref", "tenant_id", "issue_ref", unique=True),
+    )
 
 
 class Card(BaseModel):
@@ -113,6 +146,7 @@ class Card(BaseModel):
     card_key: str
     tenant_id: str
     title: str
+    description: str | None = None
     acceptance_criteria: list[str]
     status: CardStatus
     priority: int
@@ -128,6 +162,10 @@ class Card(BaseModel):
     # the factory was actually asked to do, so a caller must not be able to
     # assert a dispatch that never happened. Absent from CardCreate/CardUpdate.
     stage_runs: dict[str, Any]
+    # Always NULL on anything a read hands back — a soft-deleted card is off the
+    # board. It is on the model because the import asks for a card BY ISSUE and
+    # has to be able to see the tombstone (RFC-0020 §3.6).
+    deleted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -138,6 +176,8 @@ class CardCreate(BaseModel):
 
     card_key: str | None = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=512)
+    # Free-form markdown (RFC-0020 §3.6). An imported issue's body lands here.
+    description: str | None = None
     acceptance_criteria: list[str] = Field(default_factory=list)
     status: CardStatus = "backlog"
     priority: int = 0
@@ -162,6 +202,7 @@ class CardUpdate(BaseModel):
     """
 
     title: str | None = Field(default=None, min_length=1, max_length=512)
+    description: str | None = None
     acceptance_criteria: list[str] | None = None
     status: CardStatus | None = None
     priority: int | None = None
@@ -174,21 +215,69 @@ class CardUpdate(BaseModel):
     issue_ref: str | None = Field(default=None, max_length=256)
 
 
+class ImportStateRow(Base):
+    """The poll watermark for one (tenant, project) — RFC-0020 §3.6.
+
+    One row per repository a tenant imports from, holding the ``since`` the next
+    incremental pass asks the provider for. Kept beside the cards rather than in
+    a service table because it is *about* this tenant's cards and shares their
+    lifetime; there is no separate git-config table to hang it off yet.
+    """
+
+    __tablename__ = "card_import_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_TENANT, server_default=DEFAULT_TENANT
+    )
+    project: Mapped[str] = mapped_column(String(256))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_card_import_state_tenant_project", "tenant_id", "project", unique=True),
+    )
+
+
 class DuplicateCardKeyError(Exception):
     """Raised by :meth:`CardStore.create` when the tenant already has that key."""
 
 
+class DuplicateIssueRefError(Exception):
+    """Raised by :meth:`CardStore.create` when the tenant already has a card for
+    that issue — the unique (tenant_id, issue_ref) index firing.
+
+    Distinct from :class:`DuplicateCardKeyError` because the callers differ: a
+    duplicate key is a 409 for the human who chose it, while a duplicate issue
+    ref is the import's *normal* concurrent-poll outcome, handled by switching
+    from insert to update.
+    """
+
+
 # Columns added to ``cards`` after Phase 1, and the DDL that adds each to a live
-# table: the Phase 6 GitHub mirror plus the Phase 7 per-stage dispatch record.
-# Every one is nullable or defaulted, so backfilling an existing board is a
-# no-op: a pre-Phase-6 card simply has no issue, a pre-Phase-7 one no stage runs.
+# table: the Phase 6 GitHub mirror, the §3.6 import columns, and the Phase 7
+# per-stage dispatch record. Every one is nullable or defaulted, so backfilling
+# an existing board is a no-op: a pre-Phase-6 card simply has no issue and no
+# body, a pre-Phase-7 one no stage runs.
 _LATE_COLUMNS = {
     "issue_ref": "VARCHAR(256)",
     "issue_state": "VARCHAR(16)",
     "labels": "JSON NOT NULL DEFAULT '[]'",
     "github_sync_error": "VARCHAR(512)",
     "stage_runs": "JSON NOT NULL DEFAULT '{}'",
+    "description": "TEXT",
+    # TIMESTAMP, not DATETIME: PostgreSQL has no DATETIME, and SQLite accepts
+    # any type name.
+    "deleted_at": "TIMESTAMP",
 }
+
+# Indexes the late columns need. The unique one is the RFC-0020 §3.6 import
+# idempotency guard and must exist on a live DB too, not only on a fresh
+# create_all — without it two concurrent polls duplicate every card.
+_LATE_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS ix_cards_issue_ref ON cards (issue_ref)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_cards_tenant_id_issue_ref"
+    " ON cards (tenant_id, issue_ref)",
+)
 
 
 def _ensure_late_columns(engine: Engine) -> None:
@@ -207,12 +296,23 @@ def _ensure_late_columns(engine: Engine) -> None:
         return
     existing = {c["name"] for c in inspector.get_columns(CardRow.__tablename__)}
     missing = {name: ddl for name, ddl in _LATE_COLUMNS.items() if name not in existing}
-    if not missing:
-        return
+    # No early return when nothing is missing: the indexes below still have to be
+    # ensured on a board whose columns were added by an earlier release.
     with engine.begin() as conn:
         for name, ddl in missing.items():
             conn.execute(text(f"ALTER TABLE cards ADD COLUMN {name} {ddl}"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cards_issue_ref ON cards (issue_ref)"))
+    for statement in _LATE_INDEXES:
+        # Each in its own transaction: a board that already holds two cards
+        # pointing at ONE issue (nothing forbade it before this index) cannot
+        # take the unique one, and that must not abort the others — nor take the
+        # board down at boot. It is logged loudly instead, because until the
+        # duplicates are merged the import falls back to its application-level
+        # check and a concurrent poll can duplicate a card.
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(statement))
+        except Exception as exc:  # noqa: BLE001 — see above; boot must survive.
+            logger.warning("could not create card index (%s): %s", statement.split()[-1], exc)
 
 
 class CardStore:
@@ -244,11 +344,19 @@ class CardStore:
         view._tenant = tenant
         return view
 
-    def _select(self) -> Select[tuple[CardRow]]:
-        """Base SELECT honouring the tenant scope (no filter when unscoped)."""
+    def _select(self, *, include_deleted: bool = False) -> Select[tuple[CardRow]]:
+        """Base SELECT honouring the tenant scope (no filter when unscoped).
+
+        Soft-deleted cards are invisible by default — a deleted card is off the
+        board for every read. Two callers pass ``include_deleted``: the import,
+        which must SEE the tombstone so it does not resurrect the card, and key
+        assignment, which must not hand out a key a tombstone still holds.
+        """
         stmt = select(CardRow)
         if self._tenant is not None:
             stmt = stmt.where(CardRow.tenant_id == self._tenant)
+        if not include_deleted:
+            stmt = stmt.where(CardRow.deleted_at.is_(None))
         return stmt
 
     def _get_row(self, session: Session, card_key: str) -> CardRow | None:
@@ -296,12 +404,26 @@ class CardStore:
             row = session.scalars(stmt).first()
             return Card.model_validate(row) if row is not None else None
 
+    def get_by_issue_ref(self, issue_ref: str) -> Card | None:
+        """The card for a provider issue, **including a soft-deleted one**.
+
+        The import's lookup half (RFC-0020 §3.6). A tombstone must come back
+        here: it is the answer to "should this issue become a card?" and the
+        answer is no, the human took it off the board.
+        """
+        stmt = self._select(include_deleted=True).where(CardRow.issue_ref == issue_ref)
+        with self._session() as session:
+            row = session.scalars(stmt).first()
+            return Card.model_validate(row) if row is not None else None
+
     def create(self, data: CardCreate) -> Card:
         """Insert a card, assigning a key when the caller omitted one.
 
         Raises :class:`DuplicateCardKeyError` if the tenant already holds that key —
         which also covers the (rare) race where two concurrent auto-assigns pick
-        the same ``FCT-<n>``; the loser retries by asking again.
+        the same ``FCT-<n>``; the loser retries by asking again. Raises
+        :class:`DuplicateIssueRefError` when the tenant already holds a card for
+        this issue, which is how a concurrent import learns to update instead.
         """
         fields = data.model_dump()
         tenant = self._tenant or DEFAULT_TENANT
@@ -314,17 +436,27 @@ class CardStore:
                 session.flush()
                 return Card.model_validate(row)
         except IntegrityError as exc:
+            # Which constraint fired? Asked of the database rather than parsed
+            # out of the driver's message, which differs per backend.
+            ref = fields.get("issue_ref")
+            if ref and self.get_by_issue_ref(str(ref)) is not None:
+                raise DuplicateIssueRefError(ref) from exc
             raise DuplicateCardKeyError(fields["card_key"]) from exc
 
     def _next_card_key(self, session: Session) -> str:
         """Next ``FCT-<n>`` for this tenant: highest existing suffix + 1.
+
+        Counts soft-deleted rows too: their keys are still taken (the
+        (tenant, card_key) index does not care that a card is off the board), so
+        skipping them would hand out a key that then fails to insert.
 
         ponytail: scans the tenant's keys rather than keeping a counter table —
         a planning board is hundreds of rows, not millions. Swap in a sequence
         if a tenant's backlog ever gets big enough to notice.
         """
         highest = 0
-        for (key,) in session.execute(self._select().with_only_columns(CardRow.card_key)):
+        keys = self._select(include_deleted=True).with_only_columns(CardRow.card_key)
+        for (key,) in session.execute(keys):
             suffix = key.removeprefix(_KEY_PREFIX)
             if key.startswith(_KEY_PREFIX) and suffix.isdigit():
                 highest = max(highest, int(suffix))
@@ -335,25 +467,83 @@ class CardStore:
 
         ``changes`` is the PATCH body with unset fields excluded, so an absent
         field is left alone and an explicit ``null`` clears it.
+
+        Raises :class:`DuplicateIssueRefError` when the update would point a
+        second card at an issue this tenant already has one for — the same
+        unique index the import relies on, which a PATCH can now also hit.
+        """
+        try:
+            with self._session.begin() as session:
+                row = self._get_row(session, card_key)
+                if row is None:
+                    return None
+                for field, value in changes.items():
+                    setattr(row, field, value)
+                row.updated_at = _now()
+                session.flush()
+                return Card.model_validate(row)
+        except IntegrityError as exc:
+            raise DuplicateIssueRefError(changes.get("issue_ref")) from exc
+
+    def delete(self, card_key: str) -> bool:
+        """Take a card off the board. True if one was deleted, False if none matched.
+
+        A **soft** delete (RFC-0020 §3.6): the row is tombstoned, not removed.
+        Every read hides it, so the board behaves exactly as before, but the
+        issue it came from stays claimed — which is what stops the next import
+        resurrecting a card the human deliberately removed, and what keeps the
+        unique (tenant, issue_ref) index meaningful. The issue on the host is
+        never touched: deleting a card means "not on my board", not "destroy the
+        record of truth".
         """
         with self._session.begin() as session:
             row = self._get_row(session, card_key)
             if row is None:
-                return None
-            for field, value in changes.items():
-                setattr(row, field, value)
-            row.updated_at = _now()
-            session.flush()
-            return Card.model_validate(row)
-
-    def delete(self, card_key: str) -> bool:
-        """Remove a card. Returns True if a row was deleted, False if none matched."""
-        with self._session.begin() as session:
-            row = self._get_row(session, card_key)
-            if row is None:
                 return False
-            session.delete(row)
+            row.deleted_at = _now()
             return True
+
+    # ── Import watermark (RFC-0020 §3.6) ─────────────────────────────────────
+
+    def get_watermark(self, project: str) -> datetime | None:
+        """The ``since`` the next incremental import asks the provider for.
+
+        ``None`` means "never imported": the caller does a full backfill.
+        """
+        stmt = select(ImportStateRow).where(
+            ImportStateRow.tenant_id == (self._tenant or DEFAULT_TENANT),
+            ImportStateRow.project == project,
+        )
+        with self._session() as session:
+            row = session.scalars(stmt).first()
+            return _as_utc(row.last_synced_at) if row is not None else None
+
+    def set_watermark(self, project: str, when: datetime) -> None:
+        """Record how far this project's import has read.
+
+        Two concurrent first-ever imports both find no row and both insert; the
+        unique index rejects the loser, which then updates instead. Same
+        check-then-act race as the card upsert, and it is resolved the same way —
+        by the constraint, not by hoping.
+        """
+        tenant = self._tenant or DEFAULT_TENANT
+        stmt = select(ImportStateRow).where(
+            ImportStateRow.tenant_id == tenant, ImportStateRow.project == project
+        )
+        for attempt in range(2):
+            try:
+                with self._session.begin() as session:
+                    row = session.scalars(stmt).first()
+                    if row is None:
+                        session.add(
+                            ImportStateRow(tenant_id=tenant, project=project, last_synced_at=when)
+                        )
+                    else:
+                        row.last_synced_at = when
+                return
+            except IntegrityError:
+                if attempt:  # pragma: no cover — the row exists by the retry
+                    raise
 
 
 _cards_store: CardStore | None = None

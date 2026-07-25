@@ -40,11 +40,13 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 
 import httpx
 from runners.github.providers.factory import get_provider
-from runners.github.providers.protocol import IssueData, ProviderType
+from runners.github.providers.protocol import IssueData, IssueFilters, ProviderType
 
 from .config import Settings
 
 _TIMEOUT_SECONDS = 10.0
+# GitHub's maximum page size for a list endpoint.
+_GITHUB_PAGE_SIZE = 100
 
 _T = TypeVar("_T")
 
@@ -67,8 +69,9 @@ class IssueProvider(Protocol):
     """The slice of the canonical ``GitProvider`` the board actually uses.
 
     Deliberately narrow. The full protocol covers pull requests, reviews, merges,
-    labels and repo metadata; a planning board opens an issue and reads it back,
-    and nothing else. Naming that subset means :class:`HttpGitHubProvider` does
+    labels and repo metadata; a planning board opens an issue, reads it back, and
+    lists the project's issues to import them (RFC-0020 §3.6), and nothing else.
+    Naming that subset means :class:`HttpGitHubProvider` does
     not have to carry fifteen ``NotImplementedError`` stubs to satisfy a type,
     while every canonical provider satisfies this structurally — which is checked,
     not assumed: ``build_provider`` returns canonical instances through it and the
@@ -90,6 +93,8 @@ class IssueProvider(Protocol):
     ) -> IssueData: ...
 
     async def fetch_issue(self, number: int) -> IssueData: ...
+
+    async def fetch_issues(self, filters: IssueFilters | None = None) -> list[IssueData]: ...
 
 
 def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
@@ -191,6 +196,57 @@ class HttpGitHubProvider:
             resp.raise_for_status()
             return self._parse_issue(resp.json())
 
+    async def fetch_issues(self, filters: IssueFilters | None = None) -> list[IssueData]:
+        """List the repo's issues, **paging to completion** up to ``limit``.
+
+        The one provider here that pages. GitHub's list endpoint caps a page at
+        100, so a repo with 300 open issues needs three calls, and taking only
+        the first page would silently import a third of a backlog — the exact
+        "where are my issues?" failure RFC-0020 §3.6 calls the worst outcome this
+        feature has. The canonical providers do NOT page (see
+        :func:`cfactory.issue_import.import_issues` for what that means there).
+
+        ``/issues`` returns pull requests too — they carry a ``pull_request``
+        key — so they are dropped unless explicitly asked for. A PR is not a
+        plan.
+        """
+        filters = filters or IssueFilters()
+        params: dict[str, Any] = {"state": filters.state, "per_page": _GITHUB_PAGE_SIZE}
+        if filters.labels:
+            params["labels"] = ",".join(filters.labels)
+        if filters.assignee:
+            params["assignee"] = filters.assignee
+        if filters.author:
+            params["creator"] = filters.author
+        if filters.since is not None:
+            # GitHub's `since` is "updated at or after", which is precisely the
+            # watermark semantics the incremental pass wants.
+            params["since"] = filters.since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        issues: list[IssueData] = []
+        async with self._client() as client:
+            page = 1
+            while len(issues) < filters.limit:
+                resp = await client.get(
+                    f"/repos/{self._repo}/issues", params={**params, "page": page}
+                )
+                resp.raise_for_status()
+                batch = resp.json()
+                if not isinstance(batch, list) or not batch:
+                    break
+                for item in batch:
+                    if (
+                        not filters.include_prs
+                        and isinstance(item, dict)
+                        and "pull_request" in item
+                    ):
+                        continue
+                    issues.append(self._parse_issue(item))
+                if len(batch) < _GITHUB_PAGE_SIZE:
+                    break
+                page += 1
+        return issues[: filters.limit]
+
     def _parse_issue(self, issue: Any) -> IssueData:
         """GitHub's issue JSON as provider-neutral :class:`IssueData`.
 
@@ -223,9 +279,18 @@ class HttpGitHubProvider:
                 for user in issue.get("assignees") or []
                 if isinstance(login := (user.get("login") if isinstance(user, dict) else user), str)
             ],
+            milestone=_milestone_title(issue.get("milestone")),
             provider=ProviderType.GITHUB,
             raw_data=issue,
         )
+
+
+def _milestone_title(milestone: Any) -> str | None:
+    """GitHub's milestone object as the title the card stores (RFC-0020 §3.6)."""
+    if isinstance(milestone, dict):
+        title = milestone.get("title")
+        return title if isinstance(title, str) else None
+    return milestone if isinstance(milestone, str) else None
 
 
 def _parse_datetime(value: Any) -> datetime:

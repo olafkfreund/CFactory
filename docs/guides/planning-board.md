@@ -370,7 +370,7 @@ ever plans `hard` work never needs this set.
 | **Type** | string — an AIFactory project id (a UUID in practice) |
 | **Default** | unset |
 | **Required?** | Yes, if any `low` or `medium` card will ever be promoted to `ready` |
-| **Set via** | `CFACTORY_INTAKE_PROJECT_ID` env var. It has **no dedicated key in the Helm chart** — inject it through `config.extraEnv` in `charts/cfactory/values.yaml`. |
+| **Set via** | `CFACTORY_INTAKE_PROJECT_ID` env var. Two deployment paths, and it matters which one you are on: **Helm** consumers have no dedicated key, so inject it through `config.extraEnv` in `charts/cfactory/values.yaml`. **This fleet does not use the chart** — it deploys raw manifests from `factory-gitops`, so the value lives in the `env:` list of `apps/cfactory/manifests/manifests.yaml` there and ArgoCD syncs it. Editing the chart values on this fleet changes nothing. |
 | **Read at** | dispatch time, from `Settings.intake_project_id` |
 
 **What happens when it is unset.** The dispatch is not attempted. The card is

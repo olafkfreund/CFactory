@@ -91,6 +91,12 @@
             export CFACTORY_PFACTORY_API_URL="''${CFACTORY_PFACTORY_API_URL:-http://localhost:3105}"
             export CFACTORY_TFACTORY_API_URL="''${CFACTORY_TFACTORY_API_URL:-http://localhost:3103}"
 
+            # POST /mcp fails CLOSED when no credential is configured (RFC-0019
+            # Phase 2a). The dev shell opts explicitly back into open mode so
+            # local MCP clients keep working without a token; hosted deploys set
+            # CFACTORY_MCP_SECRET / CFACTORY_API_KEYS instead and never this.
+            export CFACTORY_MCP_DEV_OPEN="''${CFACTORY_MCP_DEV_OPEN:-true}"
+
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
               pkgs.stdenv.cc.cc.lib
               pkgs.zlib

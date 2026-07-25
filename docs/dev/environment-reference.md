@@ -48,7 +48,8 @@ Conventions in the tables below:
 | `CFACTORY_OLLAMA_CLOUD_BASE_URL` | `https://ollama.com/v1` | no | OpenAI-compatible copilot base URL (includes `/v1`). Also accepts the bare `OLLAMA_CLOUD_BASE_URL`. Only used when provider is not `claude`. |
 | `CFACTORY_OLLAMA_API_KEY` | _(unset)_ | if provider is ollama | Bearer key for the OpenAI-compatible copilot endpoint. Also accepts the bare `OLLAMA_API_KEY` (shared factory secret). Server-side only. |
 | `CFACTORY_API_KEYS` | _(unset)_ | in hosted | Scoped API keys `<key>:read,write;<key2>:read`. Unset = auth OPEN (single-user local mode); set = requests must carry a known key with the required scope. Server-side only. |
-| `CFACTORY_MCP_SECRET` | _(unset)_ | in hosted | Bearer token the MCP transport (`POST /mcp`) requires. Unset = MCP accepts all requests (dev). Set in any hosted/shared deploy. Server-side only. |
+| `CFACTORY_MCP_SECRET` | _(unset)_ | in hosted | LEGACY full-scope bearer for the MCP transport (`POST /mcp`) — a caller presenting it holds `read` and `write`. Still the supported prod credential; scoped `CFACTORY_API_KEYS` work alongside it. Server-side only. |
+| `CFACTORY_MCP_DEV_OPEN` | `false` | no | Explicit local-dev opt-in that reopens `/mcp` when NO credential is configured. Unconfigured otherwise means DENY (RFC-0019 Phase 2a) — never set this in a hosted deploy. Ignored once `CFACTORY_MCP_SECRET` or `CFACTORY_API_KEYS` is set. |
 | `CFACTORY_PUBLIC_API_URL` | _(unset)_ | no | Public base URL of the token-gated API shown on `/settings/token` for editor/external clients. Display only. |
 | `CFACTORY_MULTI_TENANT` | `false` | no | On: resolve tenant per request from the `X-Tenant-Id` header (hosted, injected by oauth2-proxy from the Keycloak tenant claim). Off: single `default` tenant. |
 | `CFACTORY_AUDIT_HMAC_SECRET` | dev secret (`dev-insecure-...`) | in hosted | HMAC secret anchoring the tamper-evident audit chain. MUST be overridden in any hosted/shared deploy (API keys or multi-tenant set) — the default is a clearly-labelled dev value and startup hard-warns if it is left in place in a non-local posture. Server-side only. |
@@ -94,7 +95,7 @@ Set these to real values in any hosted/shared deployment — never commit them:
 - `CFACTORY_AUDIT_HMAC_SECRET` — overrides the clearly-labelled dev default; startup hard-warns if the default is left in a non-local posture.
 - `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_AIFACTORY_TOKEN` — upstream factory auth.
 - `CFACTORY_API_KEYS` — scoped keys that gate the cockpit API.
-- `CFACTORY_MCP_SECRET` — gates the MCP transport.
+- `CFACTORY_MCP_SECRET` — legacy full-scope credential for the MCP transport (`CFACTORY_API_KEYS` also gates `/mcp`, per declared tool scope).
 - `CFACTORY_OLLAMA_API_KEY` / `ANTHROPIC_API_KEY` — copilot credentials.
 
 ## Notes

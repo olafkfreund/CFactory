@@ -7,11 +7,22 @@ factory's state by ``correlation_key`` (the GitHub issue number); this exposes
 that aggregation read-only as MCP tools instead of forcing the agent to poll
 three separate factories.
 
-Read-only by design — no actions, no mutation (CFactory's advise-and-confirm
-action surface stays on the REST API behind its own auth).
+Read-only today — every tool below declares ``READ``. RFC-0019 Phase 2b adds
+board WRITE tools, so the scope model lands first (Phase 2a).
 
-Enabled when ``CFACTORY_MCP_SECRET`` is set (the bearer token the client sends).
-If absent the server accepts all requests (dev convenience); set it in prod.
+Auth (three credentials, in precedence order):
+
+1. ``CFACTORY_MCP_SECRET`` — the LEGACY full-scope bearer. Live in prod; a caller
+   presenting it holds read AND write, exactly as before.
+2. ``CFACTORY_API_KEYS`` — the same scoped keystore that gates ``/api`` and
+   ``/connect`` (``"<key>:read;<key2>:read,write"``). A key may call a tool only
+   if it carries that tool's declared scope. This is the additive part.
+3. Nothing configured — DENIED. It used to be open; hanging write tools off a
+   fail-open surface is how a backlog gets mutated by anyone. Set
+   ``CFACTORY_MCP_DEV_OPEN=true`` for local dev to opt back into open mode.
+
+Unregistered tool names default to WRITE, so a tool added without a scope entry
+fails closed rather than inheriting read.
 
 Configure in an MCP client:
     {
@@ -35,7 +46,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .auth import secret_matches
+from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
 from .config import get_settings
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
@@ -111,18 +122,69 @@ MCP_TOOLS: list[dict[str, Any]] = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
+# The scope each tool requires. Kept beside the catalog rather than inside the
+# tool dicts so ``tools/list`` stays byte-for-byte the MCP shape clients already
+# parse. Every tool today is read-only; Phase 2b board tools land here as WRITE.
+TOOL_SCOPES: dict[str, str] = {
+    "cfactory_list_workitems": READ,
+    "cfactory_get_workitem": READ,
+    "cfactory_get_timeline": READ,
+    "cfactory_get_rollups": READ,
+    "cfactory_get_anomalies": READ,
+}
 
 
-def _verify_mcp_token(request: Request) -> None:
-    expected = get_settings().mcp_secret
-    if not expected:
-        return  # no secret configured — open (dev mode)
-    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not secret_matches(token, expected):
+# ---------------------------------------------------------------------------
+# Auth — scope model (RFC-0019 Phase 2a)
+# ---------------------------------------------------------------------------
+
+FULL_SCOPE = frozenset({READ, WRITE})
+
+
+def _authenticate(request: Request) -> frozenset[str]:
+    """Return the scopes the caller holds, or raise 401.
+
+    Fails CLOSED: with no credential configured at all the request is denied
+    unless ``CFACTORY_MCP_DEV_OPEN`` is explicitly set.
+    """
+    settings = get_settings()
+    token = extract_key(request.headers.get("authorization"), request.headers.get("x-api-key"))
+
+    # 1. Legacy full-scope bearer — unchanged behaviour for existing prod clients.
+    if settings.mcp_secret and secret_matches(token, settings.mcp_secret):
+        return FULL_SCOPE
+
+    # 2. Scoped API keys — the same keystore that gates /api and /connect.
+    keystore = get_keystore()
+    if keystore.configured:
+        scopes = keystore.scopes_for(token)
+        if scopes is not None:
+            return frozenset(scopes)
+
+    # 3. Nothing matched. If something IS configured this is a bad token;
+    #    if nothing is configured it is an unconfigured server (deny, not open).
+    if settings.mcp_secret or keystore.configured:
         raise HTTPException(status_code=401, detail="Invalid MCP token")
+    if settings.mcp_dev_open:
+        return FULL_SCOPE
+    raise HTTPException(
+        status_code=401,
+        detail=(
+            "MCP is not configured: set CFACTORY_MCP_SECRET or CFACTORY_API_KEYS "
+            "(or CFACTORY_MCP_DEV_OPEN=true for local dev)"
+        ),
+    )
+
+
+def _require_tool_scope(tool_name: str, granted: frozenset[str]) -> None:
+    """Raise 403 unless ``granted`` covers the scope ``tool_name`` declares.
+
+    Unknown tools require WRITE — a tool added without a TOOL_SCOPES entry fails
+    closed instead of silently inheriting read access.
+    """
+    required = TOOL_SCOPES.get(tool_name, WRITE)
+    if required not in granted:
+        raise HTTPException(status_code=403, detail=f"MCP token lacks required scope: {required!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +272,7 @@ def _error(code: int, message: str, rpc_id: Any) -> dict:
 @router.post("/mcp")
 async def mcp_endpoint(request: Request) -> JSONResponse:
     """JSON-RPC 2.0 MCP endpoint. Handles initialize, tools/list, tools/call."""
-    _verify_mcp_token(request)
+    granted = _authenticate(request)
 
     try:
         body = await request.json()
@@ -239,6 +301,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
     if method == "tools/call":
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {}) or {}
+        _require_tool_scope(tool_name, granted)
         try:
             payload = _dispatch_tool(tool_name, arguments)
         except Exception:

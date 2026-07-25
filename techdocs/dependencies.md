@@ -94,7 +94,8 @@ the table gives the effect of each state.
 | `CFACTORY_OLLAMA_CLOUD_BASE_URL` | `https://ollama.com/v1` | no | OpenAI-compatible copilot base URL (includes `/v1`). Also accepts the bare `OLLAMA_CLOUD_BASE_URL`. Only used when provider is not `claude`. | `config.py` `ollama_cloud_base_url` | env / Helm `config.ollamaCloudBaseUrl` |
 | `CFACTORY_OLLAMA_API_KEY` | `None` | if provider is ollama | Bearer key for the OpenAI-compatible copilot endpoint. Also accepts the bare `OLLAMA_API_KEY` (shared factory secret). Server-side only. | `config.py` `ollama_api_key` | env / Helm `ollamaApiKey` (Secret) |
 | `CFACTORY_API_KEYS` | `None` | in hosted | Scoped API keys `<key>:read,write;<key2>:read`. Unset = auth OPEN (single-user local mode); set = requests must carry a known key with the required scope. | `config.py` `api_keys` | env / Helm `apiKeys` (Secret) |
-| `CFACTORY_MCP_SECRET` | `None` | in hosted | Bearer token the MCP transport (`POST /mcp`) requires (#113). Unset = MCP accepts all requests (dev). Set in any hosted/shared deploy. Server-side only. | `config.py` `mcp_secret` | env only — **no Helm knob** (add via `config.extraEnv`) |
+| `CFACTORY_MCP_SECRET` | `None` | in hosted | LEGACY full-scope bearer for the MCP transport (`POST /mcp`) (#113) — a caller presenting it holds `read` and `write`. Still the supported prod credential; scoped `CFACTORY_API_KEYS` work alongside it (#302). | `config.py` `mcp_secret` | env only — **no Helm knob** (add via `config.extraEnv`) |
+| `CFACTORY_MCP_DEV_OPEN` | `false` | no | Explicit local-dev opt-in reopening `/mcp` when NO credential is configured; unconfigured otherwise DENIES (#302). Never set in a hosted deploy. | `config.py` `mcp_dev_open` | env only — **no Helm knob** (add via `config.extraEnv`) |
 | `CFACTORY_PUBLIC_API_URL` | `None` | no | Public base URL of the token-gated API shown on `/settings/token` for editor/external clients. Display only. | `config.py` `public_api_url` | env / Helm `config.publicApiUrl` |
 | `CFACTORY_MULTI_TENANT` | `false` | no | On: resolve tenant per request from the `X-Tenant-Id` header (hosted). Off: single `default` tenant. Per-tenant data scoping still deferred. | `config.py` `multi_tenant` | env / Helm `config.multiTenant` |
 | `CFACTORY_AUDIT_HMAC_SECRET` | dev secret (`dev-insecure-...`) | in hosted | HMAC secret anchoring the tamper-evident audit chain (#21). MUST be overridden in any hosted/shared deploy (API keys or multi-tenant set) — the default is a clearly-labelled dev value and startup hard-warns if left in place. | `config.py` `audit_hmac_secret` | env / Helm `config.extraEnv` (Secret) |
@@ -140,7 +141,7 @@ today; set them through `config.extraEnv` (backend) until a knob is added:
   local dev default in-cluster unless set.
 - `CFACTORY_AIFACTORY_TOKEN` — live-agent console WS token; without it the console
   falls back to `CFACTORY_UPSTREAM_TOKEN`.
-- `CFACTORY_MCP_SECRET` — the MCP transport is unauthenticated until set.
+- `CFACTORY_MCP_SECRET` / `CFACTORY_API_KEYS` — the MCP transport DENIES every request until one of them is set (#302).
 - `CFACTORY_STALL_DEADLINE_SECONDS`, `CFACTORY_POLL_INTERVAL_SECONDS`,
   `CFACTORY_LIVE_PROGRESS`, `CFACTORY_FRONTEND_PORT`, `ANTHROPIC_API_KEY` — no
   first-class knob; use `config.extraEnv`.
@@ -153,7 +154,8 @@ Set these to real values in any hosted/shared deployment (never commit them):
   startup hard-warns if the default is left in a non-local posture.
 - `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_AIFACTORY_TOKEN` — upstream factory auth.
 - `CFACTORY_API_KEYS` — scoped keys that gate the cockpit API.
-- `CFACTORY_MCP_SECRET` — gates the MCP transport.
+- `CFACTORY_MCP_SECRET` — legacy full-scope credential for the MCP transport
+  (`CFACTORY_API_KEYS` also gates `/mcp`, per declared tool scope).
 - `CFACTORY_OLLAMA_API_KEY` / `ANTHROPIC_API_KEY` — copilot credentials.
 
 ## Completeness

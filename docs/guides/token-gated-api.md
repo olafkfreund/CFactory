@@ -118,7 +118,9 @@ curl -so /dev/null -w '%{http_code}\n' \
 
 ### What stays open
 The keystore middleware enforces `/api/*` and `/connect/*` only. Exempt: `/health`
-(k8s probes), `/mcp` (its own `CFACTORY_MCP_SECRET`), `/api/events*` (the idempotent
+(k8s probes), `/mcp` (guarded by its own scope check — the legacy `CFACTORY_MCP_SECRET`
+full-scope bearer or a scoped key from this same keystore; it denies when neither is
+set), `/api/events*` (the idempotent
 inbound webhook from the sibling factories). Write endpoints additionally require a
 `write`-scoped key.
 

@@ -9,11 +9,13 @@ tamper-evident HMAC chain — EVERY mutation here appends an audit entry, same a
 There is no separate move/reprioritise endpoint: a move is
 ``PATCH {"status": ...}`` and a reprioritise is ``PATCH {"priority": ...}``.
 
-The operations themselves live in :mod:`cfactory.card_ops`, shared byte-for-byte
-with the MCP board tools (RFC-0019 §3.3 — programmatic equivalence has to be a
-property of one implementation, not a coincidence between two). What is left
-here is purely HTTP: dependency wiring and mapping the domain errors onto status
-codes.
+The operations themselves live in :mod:`cfactory.card_ops`, shared with the MCP
+board tools (RFC-0019 §3.3 — programmatic equivalence has to be a property of
+one implementation, not a coincidence between two). That includes the §3.2
+intake dispatch, so there is no separate hook to call here: a write that leaves
+a card ``ready`` with a tier enters it into the factory whichever surface made
+the write. What is left in this module is purely HTTP — dependency wiring and
+mapping the domain errors onto status codes.
 """
 
 from __future__ import annotations
@@ -21,10 +23,11 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from . import card_ops
-from .api_deps import audit_dep, cards_store_dep
+from .api_deps import action_transport_dep, audit_dep, cards_store_dep
 from .audit import AuditStore
 from .auth import require_scope
 from .card_ops import AuditContext, CardNotFoundError
@@ -64,14 +67,19 @@ def create_card(
     req: CardCreate,
     store: Annotated[CardStore, Depends(cards_store_dep)],
     audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
     _scope: Annotated[str | None, Depends(require_scope("write"))],
     actor: Annotated[str, Depends(identity_dep)],
 ) -> Card:
     """Create a card. Omit ``card_key`` to have the next ``FCT-<n>`` assigned.
 
+    A card created straight into ``ready`` with a tier is dispatched into the
+    factory exactly as a promotion would be (RFC-0019 §3.2) — the intake trigger
+    is the card's state, not which verb produced it.
+
     409 if the tenant already holds that key."""
     try:
-        return card_ops.create_card(store, AuditContext(audit, actor), req)
+        return card_ops.create_card(store, AuditContext(audit, actor), req, transport=transport)
     except DuplicateCardKeyError as exc:
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT, detail=f"card already exists: {exc.args[0]!r}"
@@ -91,21 +99,31 @@ def get_card(
 
 
 @router.patch("/api/cards/{card_key}")
-def update_card(
+def update_card(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; the
+    # params are injected seams (store/audit/transport/scope/actor), not a
+    # call-site argument list, so splitting them would only hide the wiring.
     card_key: str,
     req: CardUpdate,
     store: Annotated[CardStore, Depends(cards_store_dep)],
     audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
     _scope: Annotated[str | None, Depends(require_scope("write"))],
     actor: Annotated[str, Depends(identity_dep)],
 ) -> Card:
     """Update any mutable field. This is also how a card MOVES between board
     columns (``status``) and how it is REPRIORITISED (``priority``).
 
+    Promoting a card to ``ready`` with a tier is the RFC-0019 §3.2 intake
+    trigger: it dispatches into the factory and comes back joined to a work item
+    (``correlation_key`` set, status ``in_progress``). Re-promoting an
+    already-joined card does NOT dispatch again.
+
     Only fields present in the body are applied; an explicit ``null`` clears a
     nullable field."""
     try:
-        return card_ops.update_card(store, AuditContext(audit, actor), card_key, req)
+        return card_ops.update_card(
+            store, AuditContext(audit, actor), card_key, req, transport=transport
+        )
     except CardNotFoundError:
         raise _not_found(card_key) from None
 

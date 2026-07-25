@@ -10,9 +10,11 @@ three separate factories.
 Read-only for the PARR pipeline view; the RFC-0019 Phase 2b **board tools** add
 the write half, so an agent manages the planning backlog exactly as a human does
 in the cockpit (§3.3, programmatic equivalence). Those tools do not reimplement
-anything: they call :mod:`cfactory.card_ops`, the same store + audit path the
-REST routes use, so a card created over MCP is byte-identical to one created
-over ``POST /api/cards``.
+anything: they call :mod:`cfactory.card_ops`, the same store + audit + intake
+path the REST routes use, so a card created over MCP is byte-identical to one
+created over ``POST /api/cards`` — and an agent moving a card to ``ready`` with
+a tier dispatches it into the factory (RFC-0019 §3.2) exactly as a human's PATCH
+would.
 
 Auth (three credentials, in precedence order):
 
@@ -48,12 +50,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from . import card_ops
-from .api_deps import cards_store_dep
+from .api_deps import action_transport_dep, cards_store_dep
 from .audit import get_audit_store
 from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
 from .card_ops import CardNotFoundError
@@ -208,7 +211,8 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Add a card to the planning backlog. Omit card_key to have the next "
             "'FCT-<n>' assigned. Use this to plan work into the board rather than "
-            "filing a bare GitHub issue."
+            "filing a bare GitHub issue. Creating it straight into 'ready' with a tier "
+            "dispatches it into the factory immediately, same as a later promotion."
         ),
         "inputSchema": {
             "type": "object",
@@ -245,7 +249,10 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         "name": "cfactory_move_card",
         "description": (
             "Move a card between board columns (backlog / ready / in_progress / blocked / "
-            "done) — the programmatic equivalent of dragging it in the cockpit."
+            "done) — the programmatic equivalent of dragging it in the cockpit. Moving a "
+            "card to 'ready' WITH a tier set is the intake trigger: it dispatches into the "
+            "factory (low/medium build in AIFactory, hard plans in PFactory first) and "
+            "comes back joined to a work item. Dispatching twice is not possible."
         ),
         "inputSchema": {
             "type": "object",
@@ -415,7 +422,8 @@ _MCP_ENDPOINT = "/mcp"
 
 @dataclass(frozen=True)
 class ToolContext:
-    """Per-call state a board tool needs: the card store and the audit provenance.
+    """Per-call state a board tool needs: the card store, the audit provenance,
+    and the HTTP transport the RFC-0019 §3.2 intake dispatch goes out over.
 
     Resolved once in the endpoint from the request, so the handlers stay pure
     functions of (arguments, context) and never touch the Request.
@@ -423,6 +431,7 @@ class ToolContext:
 
     cards: CardStore
     audit: card_ops.AuditContext
+    transport: httpx.BaseTransport | None = None
 
 
 def _tool_list_cards(args: dict[str, Any], ctx: ToolContext) -> Any:
@@ -440,7 +449,7 @@ def _tool_get_card(args: dict[str, Any], ctx: ToolContext) -> Any:
 
 
 def _tool_create_card(args: dict[str, Any], ctx: ToolContext) -> Any:
-    card = card_ops.create_card(ctx.cards, ctx.audit, CardCreate(**args))
+    card = card_ops.create_card(ctx.cards, ctx.audit, CardCreate(**args), transport=ctx.transport)
     return card.model_dump(mode="json")
 
 
@@ -454,7 +463,11 @@ def _tool_update_card(args: dict[str, Any], ctx: ToolContext) -> Any:
     """
     fields = {k: v for k, v in args.items() if k != "card_key"}
     card = card_ops.update_card(
-        ctx.cards, ctx.audit, args.get("card_key", ""), CardUpdate(**fields)
+        ctx.cards,
+        ctx.audit,
+        args.get("card_key", ""),
+        CardUpdate(**fields),
+        transport=ctx.transport,
     )
     return card.model_dump(mode="json")
 
@@ -515,10 +528,12 @@ def _error(code: int, message: str, rpc_id: Any) -> dict:
 def _tool_context(request: Request) -> ToolContext:
     """Resolve the caller and the stores a board tool operates on.
 
-    Reuses the REST seams as plain functions rather than re-deriving either:
-    ``identity_dep`` for the audit actor (the presented key, else "local") and
-    ``cards_store_dep`` for the tenant-scoped card store — so an MCP write lands
-    in the same partition an ``X-Tenant-Id``-bearing REST write would.
+    Reuses the REST seams as plain functions rather than re-deriving any of
+    them: ``identity_dep`` for the audit actor (the presented key, else
+    "local"), ``cards_store_dep`` for the tenant-scoped card store — so an MCP
+    write lands in the same partition an ``X-Tenant-Id``-bearing REST write
+    would — and ``action_transport_dep`` for the intake dispatch's transport,
+    the same seam ``/api/cards`` and ``/api/actions/execute`` go out over.
     """
     actor = identity_dep(
         request.headers.get("authorization"),
@@ -528,6 +543,7 @@ def _tool_context(request: Request) -> ToolContext:
     return ToolContext(
         cards=cards_store_dep(request.headers.get("X-Tenant-Id")),
         audit=card_ops.AuditContext(get_audit_store(), actor, endpoint=_MCP_ENDPOINT),
+        transport=action_transport_dep(),
     )
 
 

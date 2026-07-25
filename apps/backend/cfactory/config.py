@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     # server-side — it is never sent to the browser.
     aifactory_token: str | None = None
 
+    # AIFactory project a dispatched planning card is built in (RFC-0019 §3.2).
+    # AIFactory's `/api/tasks/from-issue` requires a project_id and a card
+    # carries none, so it is deployment config. Unset means low/medium cards
+    # cannot be dispatched — the card is blocked with that reason rather than
+    # silently accepted. `hard` cards route through PFactory and need no project.
+    intake_project_id: str | None = None
+
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None
 

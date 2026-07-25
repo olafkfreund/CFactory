@@ -12,7 +12,9 @@ from fastapi import APIRouter, Depends
 from starlette.concurrency import run_in_threadpool
 
 from .adapters import AdapterError, BaseHTTPAdapter, hydrate
-from .api_deps import adapters_dep, store_dep
+from .api_deps import adapters_dep, cards_store_dep, store_dep
+from .card_intake import apply_status
+from .cards import CardStore
 from .models import CompletionEvent
 from .store import WorkItemStore
 from .ws import get_manager
@@ -25,14 +27,20 @@ router = APIRouter(tags=["events"])
 async def ingest_event(
     event: CompletionEvent,
     store: Annotated[WorkItemStore, Depends(store_dep)],
+    cards: Annotated[CardStore, Depends(cards_store_dep)],
 ) -> dict[str, str]:
     """Ingest an RFC-0001 completion event. Idempotent by the CloudEvents
     ``id`` (#471 cutover): a re-delivery of the same ``id`` is accepted but is
     a no-op (no timeline append, no re-broadcast), while a legitimate re-run
     carries a new ``id`` and is recorded. Both ``/api/events`` and the
-    RFC-documented ``/api/events/completion`` resolve here."""
+    RFC-documented ``/api/events/completion`` resolve here.
+
+    An applied event is also written back onto the planning card joined to this
+    correlation, if there is one (RFC-0019 §3.2) — the board is the live view of
+    the same stream, not a second copy of it."""
     work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
     if applied:
+        await run_in_threadpool(apply_status, cards, work_item)
         manager = get_manager()
         await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
     return {

@@ -8,13 +8,13 @@
 import { useState, type CSSProperties } from "react";
 import type { CardFilters } from "./api";
 import { byPriority, CARD_STATUSES, matchesQuery, useCards } from "./cards";
-import { CardBody, CardFilterBar } from "./CardParts";
+import { CardBanners, CardBody, CardFilterBar } from "./CardParts";
 
 export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }) {
   // Status is the column here, so it is never a server-side filter on this view.
   const [filters, setFilters] = useState<CardFilters>({});
   const [query, setQuery] = useState("");
-  const { cards, loading, error, mutate } = useCards(filters, reloadSignal);
+  const { cards, loading, error, notice, mutate, runStage } = useCards(filters, reloadSignal);
 
   const shown = cards.filter((c) => matchesQuery(c, query)).sort(byPriority);
 
@@ -23,8 +23,9 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
       <div className="page-head">
         <h1>Planning board</h1>
         <p>
-          Cards by planning status — move a card with its status control, reorder it with ▲/▼. Every
-          change is written straight through to the card API.
+          Cards by planning status — move a card with its status control, reorder it with ▲/▼, and
+          push it into plan, code or test (or all three) with its stage buttons. Every change is
+          written straight through to the card API.
         </p>
       </div>
 
@@ -36,7 +37,7 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
         hideStatus
       />
 
-      {error && <div className="banner banner--error">{error}</div>}
+      <CardBanners error={error} notice={notice} />
 
       <section
         className="board"
@@ -63,6 +64,9 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
                       busy={false}
                       onMutate={(patch) => {
                         void mutate(card.card_key, patch);
+                      }}
+                      onStage={(action) => {
+                        void runStage(card.card_key, action);
                       }}
                     />
                   ))

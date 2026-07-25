@@ -23,13 +23,15 @@ is precisely the failure §3.3 exists to prevent.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import Any
 
 import httpx
 
 from .audit import AuditStore
-from .card_intake import maybe_dispatch
+from .card_intake import dispatch_stage, maybe_dispatch, parse_stage, start_sequence
 from .cards import Card, CardCreate, CardStore, CardUpdate
 from .github_sync import maybe_sync, sync_card
 
@@ -41,9 +43,32 @@ _SELF = "cfactory"
 # transport passes its own so the trail says which surface it came in through.
 REST_ENDPOINT = "/api/cards"
 
+# Audit actor for a dispatch nobody typed: a sequenced card advancing to its next
+# stage on the completion event that finished the previous one (RFC-0020 §3.7).
+SEQUENCE_ACTOR = "cfactory-sequence"
+
 
 class CardNotFoundError(Exception):
     """No card with that key exists *in the caller's tenant scope*."""
+
+
+class StageRefusedError(Exception):
+    """A stage action that must not be dispatched (RFC-0020 §3.7).
+
+    Carries the machine-readable ``code`` and the human ``message``: the REST
+    route renders it as a 409, MCP as an ``{"error": ..., "reason": ...}``
+    payload. Transport-neutral like :class:`CardNotFoundError`, so the refusal
+    rules live in one place and both surfaces are refused identically.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class UnknownStageError(Exception):
+    """The caller named something that is not a plan/code/test stage."""
 
 
 @dataclass(frozen=True)
@@ -100,16 +125,38 @@ def _intake(
     result = maybe_dispatch(store, card, transport=transport)
     if result is None:
         return card
+    record_dispatch(ctx, card.card_key, result)
+    return store.get(card.card_key) or card
+
+
+def record_dispatch(ctx: AuditContext, card_key: str, result: dict[str, Any]) -> None:
+    """Audit one dispatch into the factory — implicit promotion, explicit stage
+    action, or a sequence advancing itself on a completion event.
+
+    Attributed to the UPSTREAM factory and may carry ``ok=False``, which are the
+    two things :func:`_record` fixes, so it is a separate writer. One
+    implementation for all three sources: an auto-advanced stage leaves exactly
+    the entry a human's button press would.
+    """
     ctx.audit.record(
         actor=ctx.actor,
         kind="dispatch_card",
-        correlation_key=str(result.get("correlation_key") or card.card_key),
+        correlation_key=str(result.get("correlation_key") or card_key),
         target_service=str(result.get("target_service", _SELF)),
-        endpoint=f"{ctx.endpoint}/{card.card_key}",
+        endpoint=f"{ctx.endpoint}/{card_key}",
         status_code=int(result.get("status_code", 0)),
         ok=bool(result.get("ok", False)),
     )
-    return store.get(card.card_key) or card
+
+
+def dispatch_recorder(ctx: AuditContext) -> Callable[[str, dict[str, Any]], None]:
+    """The audit sink for a dispatch nobody typed: the event ingress hands this to
+    ``card_intake.apply_status`` so a sequence's own advance is audit-chained too."""
+
+    def sink(card_key: str, result: dict[str, Any]) -> None:
+        record_dispatch(ctx, card_key, result)
+
+    return sink
 
 
 def _github(
@@ -241,6 +288,68 @@ def sync_card_github(
     result = sync_card(store, card, transport=transport)
     _record_sync(ctx, card_key, result)
     return {"sync": result, "card": (store.get(card_key) or card).model_dump(mode="json")}
+
+
+def _finish_stage_action(
+    store: CardStore, ctx: AuditContext, card_key: str, result: dict[str, Any]
+) -> dict[str, object]:
+    """Turn a stage-action result into the response both surfaces return.
+
+    A REFUSAL becomes :class:`StageRefusedError` (409 over REST, an error payload
+    over MCP) — the card was not touched, so there is nothing to audit. Anything
+    that reached (or deliberately skipped) an upstream is audited and answered
+    with both halves: what the dispatch did, and what the board now says.
+    """
+    refused = result.get("refused")
+    if refused:
+        raise StageRefusedError(str(refused), str(result.get("reason", "")))
+    record_dispatch(ctx, card_key, result)
+    card = store.get(card_key)
+    return {"stage": result, "card": card.model_dump(mode="json") if card else None}
+
+
+def run_card_stage(
+    store: CardStore,
+    ctx: AuditContext,
+    card_key: str,
+    stage: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, object]:
+    """Push one card into ONE named stage — ``plan``, ``code`` or ``test``.
+
+    Deliberately overrides tier routing for the DESTINATION (a ``low`` card can be
+    planned, a ``hard`` one built straight away) while the tier still supplies the
+    payload. Refuses rather than dispatching into nothing: no tier, a stage already
+    in flight, ``test`` with no completed build, or no configured intake project.
+    Idempotent — a stage already recorded complete is skipped with a reason.
+    """
+    parsed = parse_stage(stage)
+    if parsed is None:
+        raise UnknownStageError(stage)
+    card = get_card(store, card_key)
+    result = dispatch_stage(store, card, parsed, transport=transport)
+    return _finish_stage_action(store, ctx, card_key, result)
+
+
+def run_card_sequence(
+    store: CardStore,
+    ctx: AuditContext,
+    card_key: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, object]:
+    """Push one card through plan -> code -> test.
+
+    Only the FIRST stage still owed is dispatched now; each later one goes out when
+    the previous reaches terminal success on the work-item timeline (see
+    ``card_intake.apply_status``), so there is no second orchestrator to keep in
+    step. Stages already complete are skipped, so this resumes a part-finished or
+    failed card instead of restarting it.
+    """
+    card = get_card(store, card_key)
+    result = start_sequence(store, card, transport=transport)
+    return _finish_stage_action(store, ctx, card_key, result)
 
 
 def delete_card(store: CardStore, ctx: AuditContext, card_key: str) -> dict[str, object]:

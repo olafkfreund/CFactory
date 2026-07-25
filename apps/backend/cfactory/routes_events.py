@@ -6,13 +6,17 @@ WebSocket manager.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends
 from starlette.concurrency import run_in_threadpool
 
+from . import card_ops
 from .adapters import AdapterError, BaseHTTPAdapter, hydrate
-from .api_deps import adapters_dep, cards_store_dep, store_dep
+from .api_deps import action_transport_dep, adapters_dep, audit_dep, cards_store_dep, store_dep
+from .audit import AuditStore
 from .card_intake import apply_status
 from .cards import CardStore
 from .models import CompletionEvent
@@ -28,6 +32,8 @@ async def ingest_event(
     event: CompletionEvent,
     store: Annotated[WorkItemStore, Depends(store_dep)],
     cards: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
 ) -> dict[str, str]:
     """Ingest an RFC-0001 completion event. Idempotent by the CloudEvents
     ``id`` (#471 cutover): a re-delivery of the same ``id`` is accepted but is
@@ -37,10 +43,23 @@ async def ingest_event(
 
     An applied event is also written back onto the planning card joined to this
     correlation, if there is one (RFC-0019 §3.2) — the board is the live view of
-    the same stream, not a second copy of it."""
+    the same stream, not a second copy of it. That write-back is also where an
+    explicitly-driven sequence advances (RFC-0020 §3.7): the stage that just
+    finished is settled and the next queued one dispatched, which is why the
+    transport and the audit chain are threaded in here rather than a second
+    orchestrator existing to do it."""
     work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
     if applied:
-        await run_in_threadpool(apply_status, cards, work_item)
+        ctx = card_ops.AuditContext(audit, card_ops.SEQUENCE_ACTOR, endpoint="/api/events")
+        await run_in_threadpool(
+            partial(
+                apply_status,
+                cards,
+                work_item,
+                transport=transport,
+                on_dispatch=card_ops.dispatch_recorder(ctx),
+            )
+        )
         manager = get_manager()
         await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
     return {

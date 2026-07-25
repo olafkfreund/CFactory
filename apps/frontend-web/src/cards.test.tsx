@@ -1,8 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CardSchema, fetchCards, patchCard, type Card, type CardPatch } from "./api";
-import { byPriority, matchesQuery, optimisticPatch, replaceCard } from "./cards";
+import { CardSchema, fetchCards, patchCard, runCardStage, type Card, type CardPatch } from "./api";
+import {
+  byPriority,
+  matchesQuery,
+  optimisticPatch,
+  replaceCard,
+  stageBlocker,
+  stageNotice,
+} from "./cards";
 import { CardBody } from "./CardParts";
 import BacklogView from "./BacklogView";
 import PlanningBoard from "./PlanningBoard";
@@ -22,6 +29,7 @@ const CARD: Card = {
   assignee: "olaf",
   milestone: "m1",
   correlation_key: null,
+  stage_runs: {},
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
 };
@@ -204,6 +212,147 @@ describe("card components", () => {
     }
     // status IS the column here, so the status filter must not be offered
     expect(html).not.toContain("Filter by status");
+  });
+});
+
+// ── Stage actions (RFC-0020 §3.7, #369) ─────────────────────────────────────
+
+const BUILT: Card = {
+  ...CARD,
+  correlation_key: "task-7",
+  stage_runs: { code: { service: "aifactory", status: "done" } },
+};
+
+describe("runCardStage", () => {
+  it("POSTs to the named stage action and validates the response", async () => {
+    const spy = stubFetch(() => json({ stage: { dispatched: true, stage: "code" }, card: CARD }));
+    const result = await runCardStage("FCT-42", "code");
+    expect(spy.mock.calls[0][0]).toBe("/api/cards/FCT-42/actions/code");
+    expect(spy.mock.calls[0][1]?.method).toBe("POST");
+    expect(result.stage.dispatched).toBe(true);
+  });
+
+  it("posts the sequence to /actions/run", async () => {
+    const spy = stubFetch(() =>
+      json({ stage: { sequence: ["plan", "code", "test"] }, card: CARD }),
+    );
+    const result = await runCardStage("FCT-42", "run");
+    expect(spy.mock.calls[0][0]).toBe("/api/cards/FCT-42/actions/run");
+    expect(result.stage.sequence).toEqual(["plan", "code", "test"]);
+  });
+
+  it("surfaces a refusal's human sentence, not just its status code", async () => {
+    stubFetch(() =>
+      json({ detail: { reason: "no_build_to_verify", message: "nothing built to verify" } }, 409),
+    );
+    await expect(runCardStage("FCT-42", "test")).rejects.toThrow("nothing built to verify");
+  });
+
+  it("still surfaces a plain string detail (every other endpoint's shape)", async () => {
+    stubFetch(() => json({ detail: "no card 'FCT-9'" }, 404));
+    await expect(runCardStage("FCT-9", "plan")).rejects.toThrow("no card 'FCT-9'");
+  });
+});
+
+describe("stageBlocker (the backend's preconditions, mirrored for the UI)", () => {
+  it("blocks everything on a card with no tier", () => {
+    const untiered = { ...CARD, tier: null };
+    for (const action of ["plan", "code", "test", "run"] as const) {
+      expect(stageBlocker(untiered, action)).toMatch(/tier/);
+    }
+  });
+
+  it("blocks test until a build has completed", () => {
+    expect(stageBlocker(CARD, "test")).toMatch(/nothing built/);
+    const running = {
+      ...CARD,
+      correlation_key: "task-7",
+      stage_runs: { code: { status: "dispatched" as const } },
+    };
+    expect(stageBlocker(running, "test")).toMatch(/nothing built/);
+    expect(stageBlocker(BUILT, "test")).toBeNull();
+  });
+
+  it("blocks a stage that is already running, and only that stage", () => {
+    const planning = { ...CARD, stage_runs: { plan: { status: "dispatched" as const } } };
+    expect(stageBlocker(planning, "plan")).toMatch(/already running/);
+    expect(stageBlocker(planning, "code")).toBeNull();
+    // ...but `run` is blocked by ANY live stage: the sequence is already in motion.
+    expect(stageBlocker(planning, "run")).toMatch(/already running/);
+  });
+
+  it("blocks a completed stage (pressing it would be a no-op)", () => {
+    expect(stageBlocker(BUILT, "code")).toMatch(/already completed/);
+    expect(stageBlocker(BUILT, "run")).toBeNull(); // run resumes at the next stage
+  });
+
+  it("allows plan on a low/medium card — the override is the point", () => {
+    expect(stageBlocker({ ...CARD, tier: "low" }, "plan")).toBeNull();
+  });
+});
+
+describe("stageNotice", () => {
+  const result = (stage: Record<string, unknown>) => ({ stage, card: CARD });
+
+  it("says nothing when a dispatch simply worked", () => {
+    expect(stageNotice("FCT-42", result({ dispatched: true, ok: true }))).toBeNull();
+  });
+
+  it("reports a skipped stage", () => {
+    const notice = stageNotice(
+      "FCT-42",
+      result({
+        dispatched: false,
+        ok: true,
+        skipped: "stage_already_complete",
+        reason: "the code stage has already completed",
+      }),
+    );
+    expect(notice).toContain("FCT-42");
+  });
+
+  it("reports a failed dispatch even though the request itself succeeded", () => {
+    expect(
+      stageNotice("FCT-42", result({ ok: false, reason: "dispatch failed: HTTP 500" })),
+    ).toContain("dispatch failed");
+  });
+
+  it("passes warnings through so an override is never silent", () => {
+    const notice = stageNotice(
+      "FCT-42",
+      result({ dispatched: true, ok: true, warnings: ["plan_skipped: tier 'hard' …"] }),
+    );
+    expect(notice).toContain("plan_skipped");
+  });
+});
+
+describe("stage action buttons", () => {
+  const noop = () => undefined;
+
+  it("renders all four buttons only when a stage handler is supplied", () => {
+    const bare = renderToStaticMarkup(<CardBody card={CARD} busy={false} onMutate={noop} />);
+    expect(bare).not.toContain("Plan FCT-42");
+    const staged = renderToStaticMarkup(
+      <CardBody card={CARD} busy={false} onMutate={noop} onStage={noop} />,
+    );
+    for (const label of ["Plan FCT-42", "Code FCT-42", "Test FCT-42", "Run all FCT-42"]) {
+      expect(staged).toContain(label);
+    }
+  });
+
+  it("disables a blocked action and puts the reason on it", () => {
+    const html = renderToStaticMarkup(
+      <CardBody card={CARD} busy={false} onMutate={noop} onStage={noop} />,
+    );
+    // No build yet, so Test must be unpressable with the reason visible.
+    expect(html).toMatch(/nothing built to verify yet[^>]*disabled|disabled[^>]*nothing built/);
+  });
+
+  it("shows each stage's dispatch record so the state is readable", () => {
+    const html = renderToStaticMarkup(
+      <CardBody card={BUILT} busy={false} onMutate={noop} onStage={noop} />,
+    );
+    expect(html).toContain("code · done");
   });
 });
 

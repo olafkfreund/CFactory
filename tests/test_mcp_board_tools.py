@@ -56,6 +56,12 @@ MUTATIONS = [
     # Phase 6. Inert here (no CFACTORY_GITHUB_TOKEN in these Settings), which is
     # the point: it must still be refused to a read-scoped key.
     ("cfactory_sync_card_github", {"card_key": "FCT-1"}),
+    # Phase 7 stage actions (RFC-0020 §3.7). These dispatch work into the factory,
+    # so a read-scoped key must be unable to reach any of them.
+    ("cfactory_plan_card", {"card_key": "FCT-1"}),
+    ("cfactory_code_card", {"card_key": "FCT-1"}),
+    ("cfactory_test_card", {"card_key": "FCT-1"}),
+    ("cfactory_run_card", {"card_key": "FCT-1"}),
     ("cfactory_delete_card", {"card_key": "FCT-1"}),
 ]
 
@@ -161,9 +167,19 @@ def test_mutation_refused_to_read_scoped_key(client, tool, args):
 
 @pytest.mark.parametrize(("tool", "args"), MUTATIONS, ids=[t for t, _ in MUTATIONS])
 def test_mutation_accepted_for_write_scoped_key(client, tool, args):
-    payload(client, WRITER, "cfactory_create_card", {"card_key": "FCT-1", "title": "seed"})
+    # Seeded WITH a tier so the Phase 7 stage actions have a payload to build; the
+    # card stays in `backlog`, so seeding still dispatches nothing.
+    payload(
+        client, WRITER, "cfactory_create_card", {"card_key": "FCT-1", "title": "seed", "tier": "low"}
+    )
     result = payload(client, WRITER, tool, args)
-    assert "error" not in result, result
+    if tool == "cfactory_test_card":
+        # The one mutation that cannot succeed on a fresh card: there is nothing
+        # built to verify. That is a domain refusal, not an authorization one —
+        # ``payload`` already asserted the write scope got through.
+        assert result["reason"] == "no_build_to_verify", result
+    else:
+        assert "error" not in result, result
 
 
 def test_read_tools_work_with_read_scope_alone(client):

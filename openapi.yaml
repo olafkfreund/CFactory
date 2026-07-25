@@ -383,6 +383,92 @@ paths:
         "401": { description: Missing or invalid API key (when keys configured). }
         "403": { description: API key lacks the write scope. }
 
+  /api/cards:
+    get:
+      tags: [Cards]
+      summary: List planning cards (the backlog), highest priority first
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/CardStatus" } }
+        - { name: milestone, in: query, schema: { type: string } }
+        - { name: assignee, in: query, schema: { type: string } }
+        - { name: tier, in: query, schema: { $ref: "#/components/schemas/CardTier" } }
+      responses:
+        "200":
+          description: This tenant's cards.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  cards:
+                    type: array
+                    items: { $ref: "#/components/schemas/Card" }
+    post:
+      tags: [Cards]
+      summary: Create a planning card (requires the `write` scope)
+      description: >-
+        Omit `card_key` to have the next `FCT-<n>` assigned for the tenant.
+        Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Card" }
+      responses:
+        "201":
+          description: The created card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Card" }
+        "409": { description: The tenant already holds that card_key. }
+
+  /api/cards/{card_key}:
+    parameters:
+      - { name: card_key, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Cards]
+      summary: Get one planning card
+      responses:
+        "200":
+          description: The card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Card" }
+        "404": { description: No card for the key (in this tenant). }
+    patch:
+      tags: [Cards]
+      summary: Update a card — also how it MOVES (status) and is REPRIORITISED (priority)
+      description: >-
+        Partial update: only fields present in the body are applied. Requires
+        the `write` scope. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Card" }
+      responses:
+        "200":
+          description: The updated card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Card" }
+        "404": { description: No card for the key (in this tenant). }
+    delete:
+      tags: [Cards]
+      summary: Delete a planning card (requires the `write` scope). Audited.
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card_key: { type: string }
+                  deleted: { type: boolean }
+        "404": { description: No card for the key (in this tenant). }
+
   /api/audit:
     get:
       tags: [Audit]
@@ -411,6 +497,36 @@ components:
       in: header
       name: X-API-Key
   schemas:
+    CardStatus:
+      type: string
+      enum: [backlog, ready, in_progress, blocked, done]
+    CardTier:
+      type: string
+      description: RFC-0011 difficulty tier.
+      enum: [low, medium, hard]
+    Card:
+      type: object
+      description: >-
+        RFC-0019 §3.1 planning card. Lives in its own `cards` table, NOT on
+        work_items (whose rows the reconcile/prune machinery rewrites and
+        deletes from upstream polling). `correlation_key` is null while the
+        card is only planned and joins work_items once it enters the factory.
+      properties:
+        card_key: { type: string, description: "Stable human id, e.g. FCT-42. Unique per tenant." }
+        tenant_id: { type: string }
+        title: { type: string }
+        acceptance_criteria: { type: array, items: { type: string } }
+        status: { $ref: "#/components/schemas/CardStatus" }
+        priority: { type: integer, description: "Lower = higher priority." }
+        tier: { $ref: "#/components/schemas/CardTier" }
+        assignee:
+          type: string
+          nullable: true
+          description: A human handle or a factory runtime (e.g. "aifactory").
+        milestone: { type: string, nullable: true }
+        correlation_key: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     TokenUsage:
       type: object
       description: RFC-0001 v1.1 additive per-stage token/cost usage.

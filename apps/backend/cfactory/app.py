@@ -29,6 +29,7 @@ from . import (
     routes_health,
     routes_live_agents,
     routes_services,
+    routes_well_known,
     routes_workitems,
     routes_ws,
 )
@@ -141,6 +142,9 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     app.include_router(routes_health.router)
+    # Public capability manifest (RFC-0019 §3.4) — unauthenticated by design; it
+    # sits outside the guarded /api//connect prefixes, like /health and /mcp.
+    app.include_router(routes_well_known.router)
     app.include_router(routes_events.router)
     app.include_router(routes_services.router)
     app.include_router(routes_workitems.router)

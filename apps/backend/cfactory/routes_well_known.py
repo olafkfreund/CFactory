@@ -125,9 +125,14 @@ def reset_fleet_cache() -> None:
 
 async def _fetch_entry(
     name: str, base_url: str, transport: httpx.AsyncBaseTransport | None
-) -> dict[str, Any] | None:
-    """Fetch one sibling's manifest and fold it into a fleet entry, or return
-    None if the origin is unreachable or does not serve a usable manifest."""
+) -> tuple[dict[str, Any] | None, str]:
+    """Fetch one sibling's manifest and fold it into a fleet entry.
+
+    Returns ``(entry, "")`` on success, or ``(None, reason)`` when the origin is
+    unreachable or does not serve a usable manifest. The reason is deliberately
+    coarse — it is published on a public endpoint, so the exception detail stays
+    in the log and never reaches the response.
+    """
     manifest_url = base_url.rstrip("/") + WELL_KNOWN_AGENT_SKILLS_PATH
     try:
         async with httpx.AsyncClient(
@@ -138,38 +143,44 @@ async def _fetch_entry(
             body = resp.json()
     except (httpx.HTTPError, ValueError) as exc:  # ValueError covers a non-JSON body
         logger.info("[cfactory] fleet manifest fetch failed service=%s: %s", name, exc)
-        return None
+        return None, "unreachable"
     if not isinstance(body, dict) or any(f not in body for f in _REQUIRED_BODY_FIELDS):
         logger.info("[cfactory] fleet manifest incomplete service=%s", name)
-        return None
+        return None, "manifest incomplete"
     entry: dict[str, Any] = {"manifest_url": manifest_url, "fetched_at": _now_iso()}
     entry.update({f: body[f] for f in _SERVICE_BODY_FIELDS if f in body})
-    return entry
+    return entry, ""
 
 
 async def _entry_for(
     name: str, base_url: str, transport: httpx.AsyncBaseTransport | None
-) -> dict[str, Any]:
+) -> tuple[str, dict[str, Any]]:
+    """One sibling, tagged with the array it belongs in: ``"service"`` for an
+    entry carrying a manifest body, ``"unavailable"`` for one that has none."""
     cached = _entry_cache.get(name)
     if cached is not None and time.monotonic() - cached[0] < _FLEET_CACHE_TTL_SECONDS:
-        return cached[1]
-    entry = await _fetch_entry(name, base_url, transport)
+        return "service", cached[1]
+    entry, reason = await _fetch_entry(name, base_url, transport)
     if entry is not None:
         _entry_cache[name] = (time.monotonic(), entry)
-        return entry
+        return "service", entry
     if cached is not None:
-        # The origin is down, not wrong: last-good copy, flagged stale.
-        return {**cached[1], "reachable": False}
-    # Never successfully fetched (origin down, or not serving a manifest yet). The
-    # service is still announced — an agent should learn it exists and is
-    # currently unavailable, not that the fleet is three services wide. Only what
-    # configuration genuinely knows is stated: no invented version, endpoint or
-    # skills. This entry is deliberately thinner than the schema's service body,
-    # which assumes a cached copy always exists.
-    return {
+        # The origin is down, not wrong: last-good copy, flagged stale. It still
+        # belongs in services[] — it has a full body a consumer can use.
+        return "service", {**cached[1], "reachable": False}
+    # Never successfully fetched (origin down since startup, or not serving a
+    # manifest yet), so there is no body to fold in. Announced rather than
+    # omitted, so an agent learns the service exists and is temporarily
+    # undiscoverable instead of concluding the fleet is smaller than it is —
+    # and announced in `unavailable[]`, which keeps services[] strictly
+    # conformant (Factory apis/agent-skills-manifest.schema.json §4.1).
+    # Only what configuration knows: no invented version, endpoint or skills.
+    return "unavailable", {
+        "name": name,
+        "title": _SERVICE_TITLES.get(name, name),
         "manifest_url": base_url.rstrip("/") + WELL_KNOWN_AGENT_SKILLS_PATH,
-        "reachable": False,
-        "service": {"name": name, "title": _SERVICE_TITLES.get(name, name)},
+        "reason": reason,
+        "checked_at": _now_iso(),
     }
 
 
@@ -216,13 +227,17 @@ async def agent_skills_fleet(
 ) -> dict[str, object]:
     """The whole Factory's capabilities in one unauthenticated GET.
 
-    Best-effort by construction: an unreachable sibling is marked
-    ``reachable: false`` and the other three are still served.
+    Best-effort by construction. A sibling that was fetched before and is down
+    now keeps its cached body in ``services`` marked ``reachable: false``; one
+    that has never been reached is announced in ``unavailable`` instead, so
+    every ``services`` entry really does carry a usable manifest.
     """
     bases = _sibling_base_urls()
     siblings = await asyncio.gather(
         *(_entry_for(name, url, transport) for name, url in bases.items())
     )
+    with_body = [entry for kind, entry in siblings if kind == "service"]
+    unavailable = [entry for kind, entry in siblings if kind == "unavailable"]
     response.headers["Cache-Control"] = "public, max-age=60"
     # A browser-based agent is a first-class consumer of a public manifest, and
     # the app's CORS middleware only allows the cockpit's own dev origin.
@@ -240,7 +255,10 @@ async def agent_skills_fleet(
             ),
             "aggregator": "cfactory",
         },
-        # PARR order: prepare, act, reflect, then the review host that aggregated them.
-        "services": [*siblings, await _own_entry()],
+        # PARR order: prepare, act, reflect, then the review host that aggregated
+        # them. CFactory's own entry is always present, so services[] is never
+        # empty even with all three siblings down.
+        "services": [*with_body, await _own_entry()],
+        "unavailable": unavailable,
         "generated_at": _now_iso(),
     }

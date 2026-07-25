@@ -177,7 +177,7 @@ def test_fleet_manifest_shape(fleet_client):
 
     by_name = {s["service"]["name"]: s for s in body["services"]}
     assert set(by_name) == {"pfactory", "aifactory", "tfactory", "cfactory"}
-    for name, entry in by_name.items():
+    for entry in by_name.values():
         assert entry["manifest_url"].endswith(WELL_KNOWN_AGENT_SKILLS_PATH)
         assert "reachable" not in entry  # absent means reachable
         assert entry["fetched_at"].endswith("Z")
@@ -205,7 +205,7 @@ def test_fleet_manifest_folds_in_nothing_beyond_the_contract():
     reset_fleet_cache()
     app = create_app()
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(_request: httpx.Request) -> httpx.Response:
         body = _sibling_manifest("pfactory") | {"upstream_token": "s3cret", "tenant": "acme"}
         return httpx.Response(200, json=body)
 
@@ -218,14 +218,18 @@ def test_fleet_manifest_folds_in_nothing_beyond_the_contract():
 
 
 def test_fleet_manifest_survives_a_sibling_being_down(fleet_client):
-    body = fleet_client(down={"aifactory"}).get(FLEET_AGENT_SKILLS_PATH).json()
+    resp = fleet_client(down={"aifactory"}).get(FLEET_AGENT_SKILLS_PATH)
+    assert resp.status_code == 200  # degrading is not erroring
+    body = resp.json()
 
     by_name = {s["service"]["name"]: s for s in body["services"]}
-    assert set(by_name) == {"pfactory", "aifactory", "tfactory", "cfactory"}
-    # The dead sibling is announced as unavailable, not dropped and not fatal ...
-    assert by_name["aifactory"]["reachable"] is False
-    assert "skills" not in by_name["aifactory"]
-    # ... and the rest of the fleet is still fully usable.
+    # A sibling never fetched has no manifest body, so it is announced under
+    # `unavailable` rather than half-filled into `services` — that keeps every
+    # services[] entry usable, and the document schema-valid.
+    assert set(by_name) == {"pfactory", "tfactory", "cfactory"}
+    assert [u["name"] for u in body["unavailable"]] == ["aifactory"]
+    assert body["unavailable"][0]["reason"] == "unreachable"
+    # The rest of the fleet is still fully usable.
     assert by_name["pfactory"]["skills"]
     assert by_name["tfactory"]["skills"]
     assert by_name["cfactory"]["skills"]

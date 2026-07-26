@@ -28,6 +28,48 @@ loss to be fixed: the board is not allowed to assert something GitHub never said
 The rule is implemented once, in `apps/backend/cfactory/github_sync.py`, and used
 by both the REST route and the MCP tool.
 
+### The import mirrors MORE than the per-card sync
+
+The table above is the per-card sync (`POST /api/cards/{card_key}/sync-github`).
+The repository import — and therefore the background poll, which is the same code
+— owns a wider set, because it is populating cards from issues rather than
+reconciling one card a human already owns:
+
+| Field | Per-card sync | Import / poll |
+|---|---|---|
+| `title`, `description`, `labels`, `issue_state` | host wins | host wins |
+| `status` | host wins at the open/closed ends | host wins, **except** on a card the factory has touched, which keeps its column |
+| `tier` | untouched | **host wins** — derived from the `factory:<tier>` label, and the labels are the host's |
+| `assignee`, `milestone` | untouched | **host wins** |
+| `priority` | untouched | set once at import, never mirrored again |
+| `acceptance_criteria`, `correlation_key`, `stage_runs` | untouched | untouched |
+
+The mirrored set is one constant in the code —
+`issue_import.MIRRORED_FIELDS` — with a test that fails if the mapping and the
+constant drift apart, so this table is not a hopeful description of the behaviour.
+
+**What this costs you.** An edit made on the board to a mirrored field is
+overwritten on the next poll, silently and by design. Two writers with no merge
+rule means one of them has to lose, and the one that loses is the board: the
+repository is where the issue is discussed, closed and reopened, and a board that
+could win would silently contradict it. Concretely, and worth knowing before it
+surprises you:
+
+- reassign a card on the board while the issue is unassigned, and the next poll
+  clears the assignee — "the host wins" includes the host having nothing to say;
+- set a tier on the board without a `factory:<tier>` label on the issue, and the
+  next poll clears the tier;
+- retitle a card, and the next poll restores the issue's title.
+
+**Edit the issue, not the card**, for anything in the mirrored set. Priority,
+acceptance criteria and the pipeline's own records are the board's and survive
+every pass — which is where board-side planning belongs.
+
+If a deployment genuinely wants board-owned assignment or milestones, the change is
+to remove those fields from `MIRRORED_FIELDS` and from `_mapping` in
+`apps/backend/cfactory/issue_import.py` — a deliberate, reviewable decision to move
+the boundary, not something to discover by finding your edits gone.
+
 ## Enabling it
 
 Two halves, and since RFC-0020 section 3.3 they live in different places.
@@ -194,7 +236,7 @@ the same "the host wins" rule as the sync.
 Pull requests are never imported. `include_prs` is pinned off and is not
 configurable: a pull request is not a plan.
 
-### It is a poll. It is not live.
+### It is a poll. It is not live. It does run on its own.
 
 There is still no webhook receiver, so:
 
@@ -203,12 +245,122 @@ There is still no webhook receiver, so:
 - after that a `last_synced_at` watermark exists, and each run asks only for
   issues updated since it, minus a 60-second overlap for clock skew, with the
   state widened to `all` so closures and reopenings are caught;
-- set `CFACTORY_IMPORT_POLL=true` to have that run every
-  `CFACTORY_IMPORT_POLL_SECONDS` (default 300) in the background.
+- that run happens by itself, per repository, every
+  `CFACTORY_IMPORT_POLL_SECONDS` — see [Automatic sync](#automatic-sync) below.
 
 An issue filed a second ago is on the board somewhere between zero and one poll
-interval later — never instantly. The import summary shows `last_synced_at` for
-exactly that reason.
+interval later — never instantly. The cockpit shows how long ago each repository
+was read for exactly that reason.
+
+## Automatic sync
+
+### The story
+
+> "Do we need to add them, or will they be imported automatically? The point is
+> they should be synced automatically, right?"
+
+Yes. You connect a repository, its issues become cards, and from then on the
+board keeps itself level with the repository: an issue somebody files, closes,
+reopens or retitles turns up on the board without anyone pressing anything. What
+you must never have to wonder is whether the board in front of you is a week out
+of date, so the planning board carries one line saying how long ago it last read
+each repository, plus a **Sync now** button for when you do not want to wait for
+the next cycle.
+
+It is a poll, not a webhook. The board is therefore *recent*, never *live*, and it
+says which.
+
+### What runs, and what you can set
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `CFACTORY_IMPORT_POLL` | `true` | The background reconciliation loop. On by default, unlike the cockpit's other background loops: a board that silently drifts is worse than no import, because it looks current. |
+| `CFACTORY_IMPORT_POLL_SECONDS` | `300` (5 min) | How often each repository is re-read. Also the width of the poll lease and the basis of the staleness threshold. |
+| `CFACTORY_IMPORT_POLL_GAP_SECONDS` | `2` | Pause between two repositories inside one cycle — the rate-limit guard. Forty repositories spread over eighty seconds instead of arriving at the host in one tick. |
+| `CFACTORY_IMPORT_MAX` | `1000` | Ceiling per run. Truncation is reported in the result and in the board's summary. |
+| `CFACTORY_IMPORT_STATE` | `open` | What the first backfill asks for. The incremental pass always uses `all`. |
+| `CFACTORY_IMPORT_LABELS` | *(empty)* | Optional label filter for the backfill. Opt-in narrowing, never a default. |
+
+One cycle does this, per repository the tenant has, one repository at a time:
+
+1. **Claims a lease** on that repository (`card_import_state.poll_leased_until`,
+   held for half a cadence). A second replica waking at the same moment finds the
+   lease taken and skips — the board is unharmed either way, since the unique
+   `(tenant_id, issue_ref)` index makes a double import impossible, but the
+   provider is spared the duplicate read.
+2. **Reads the changes** since that repository's watermark — one API call.
+3. **Records `last_polled_at`**, whether or not anything changed. A quiet
+   repository is still a synced repository.
+4. **Waits `CFACTORY_IMPORT_POLL_GAP_SECONDS`** before the next repository.
+
+A repository whose read fails sits out cycles rather than being asked again at
+full cadence: one cycle, then two, then four, capped at eight (forty minutes at
+the default), cleared by the first success. A `429` or an explicit rate-limit
+refusal starts at four cycles rather than one, because the host has just said
+"fewer requests" and one cycle later is not an answer to that. Recovery needs no
+operator action.
+
+### Seeing whether the board is current
+
+The planning board shows one line above the columns — "Synced 2 min ago — polls
+every 5 min, not live" — and a **Sync now** button beside it that reads every
+connected repository immediately. The same data is available to agents and scripts:
+
+```bash
+curl -s $CFACTORY_URL/api/cards/sync-state | jq
+```
+
+```json
+{
+  "now": "2026-07-26T12:00:00+00:00",
+  "poll": { "enabled": true, "interval_seconds": 300.0, "live": false },
+  "repositories": [
+    {
+      "repository_id": 1,
+      "project": "acme/widgets",
+      "is_default": true,
+      "last_polled_at": "2026-07-26T11:58:04+00:00",
+      "watermark_at": "2026-07-20T10:00:00+00:00",
+      "stale": false
+    }
+  ]
+}
+```
+
+`last_polled_at` is when that repository was last read successfully — the answer to
+"can I trust this board?". `watermark_at` is the incremental cursor and is a
+different thing: on a repository nobody has touched for a month it stays a month
+old however often the poll runs, so do not read staleness off it. `stale` is the
+server's rule (no successful read for more than two cadences) so the cockpit, the
+MCP tool `cfactory_card_sync_state` and anything you write agree on it.
+
+### Unset, off, or wrong
+
+| Situation | What happens | How you find out |
+|---|---|---|
+| `CFACTORY_IMPORT_POLL=false` | Nothing reconciles. Cards are only imported when a human presses Sync now or something calls `POST /api/cards/import`. | The board's sync line says "automatic sync is OFF (CFACTORY_IMPORT_POLL)", and `poll.enabled` is `false`. |
+| No repository configured, or no credential | Every cycle is a no-op: nothing is resolved and no request is made. | The sync line says "No repository connected — nothing to sync". |
+| Provider down, credential rejected, project renamed | The board keeps serving reads with the cards it already has. The import returns HTTP 200 with `ok: false` and the reason; the failing repository backs off and retries. | Nothing turns stale for two cadences, then the sync line says STALE. A manual Sync now returns the reason verbatim. |
+| `CFACTORY_IMPORT_POLL_SECONDS` very low (say 5) | The board is more current and every repository is read twelve times a minute. Rate limits are a real ceiling: GitHub allows 5000 authenticated requests an hour, so 40 repositories at 5 seconds is roughly 29 000 an hour and will be throttled. | 429s, then the backoff, then a board that is *less* current than at the default. |
+| `CFACTORY_IMPORT_POLL_GAP_SECONDS=0` | Pacing off — every repository in a cycle is read back to back. Fine for one or two repositories, a burst at forty. | Nothing, until the host throttles you. |
+| More than one replica | Each cycle, each repository is read by whichever replica claims its lease. Worst case (a lease that expires between two closely spaced replicas) is a duplicated read, never a duplicated card. | `poll_leased_until` on `card_import_state`. |
+| An issue arrives while a cycle is running | It is picked up next cycle. So is a repository connected mid-cycle: the target list is re-read every time, so connecting a repository never needs a restart. | It appears within one cadence. |
+
+### Recommendation
+
+Leave `CFACTORY_IMPORT_POLL=true` and the cadence at `300`. Five minutes is well
+inside what planning work notices, and at one cheap incremental call per
+repository it is nowhere near any provider's limits. If you have many
+repositories, raise `CFACTORY_IMPORT_POLL_SECONDS` before you lower
+`CFACTORY_IMPORT_POLL_GAP_SECONDS` — a slower cycle costs you freshness you can
+measure, while an unpaced burst costs you a throttled credential that makes
+everything else fail too. Turn the poll off only for a deployment that imports
+deliberately, on someone's command, and expect to explain to its users why the
+board is behind.
+
+The poll is the backstop by design. If a webhook receiver is added later it
+becomes the low-latency path and this stays underneath it, because webhook
+deliveries are lost and a board that misses one never recovers without a poll.
 
 ### Closing, deleting, disappearing
 

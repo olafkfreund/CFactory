@@ -17,6 +17,10 @@ data:
   CFACTORY_COPILOT_PROVIDER: {{ .Values.config.copilotProvider | quote }}
   CFACTORY_OLLAMA_CLOUD_BASE_URL: {{ .Values.config.ollamaCloudBaseUrl | quote }}
   CFACTORY_MULTI_TENANT: {{ .Values.config.multiTenant | quote }}
+  # Board issue reconciliation (#374) — see values.yaml for the replica story.
+  CFACTORY_IMPORT_POLL: {{ .Values.config.importPoll | quote }}
+  CFACTORY_IMPORT_POLL_SECONDS: {{ .Values.config.importPollSeconds | quote }}
+  CFACTORY_IMPORT_POLL_GAP_SECONDS: {{ .Values.config.importPollGapSeconds | quote }}
   {{- with .Values.config.publicApiUrl }}
   CFACTORY_PUBLIC_API_URL: {{ . | quote }}
   {{- end }}

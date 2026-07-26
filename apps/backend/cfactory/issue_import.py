@@ -10,11 +10,15 @@ Everything here goes through the fleet's ``GitProvider`` protocol
 (``fetch_issues(IssueFilters)``), so import works on GitLab and Azure DevOps and
 not only on GitHub. Nothing below knows what a host's issue JSON looks like.
 
-**Import is NOT live.** There is no webhook receiver (RFC-0019 Phase 6 deferred
-inbound webhooks and RFC-0020 does not undefer them), so an issue filed a second
-ago appears when someone — a human, the MCP tool, or the optional poller — *asks*
-for an import. A board can be stale; ``last_synced_at`` is returned and stored so
-the staleness is visible rather than assumed away.
+**Import is NOT live, but it does run on its own** (#374). There is still no
+webhook receiver (RFC-0019 Phase 6 deferred inbound webhooks and RFC-0020 does not
+undefer them), so an issue is on the board somewhere between zero and one poll
+cadence after it is filed rather than the moment it is filed. What changed is that
+nobody has to ask: :func:`poll_forever` runs by default, per repository, and
+``last_synced_at`` is surfaced through ``GET /api/cards/sync-state`` so a stale
+board says so instead of looking current.
+
+The direction of truth is deliberate and one-way: see :data:`MIRRORED_FIELDS`.
 
 Three properties are load-bearing, and each has a test named after it:
 
@@ -76,6 +80,42 @@ _OVERLAP = timedelta(seconds=60)
 # Keys a provider's raw payload carries when the "issue" is really a pull /
 # merge request. The belt to the protocol's braces.
 _PR_KEYS = ("pull_request", "merge_request", "merge_requests_count")
+
+# THE DIRECTION OF TRUTH, named rather than implied (#374). RFC-0003 makes the
+# repository the record of truth and RFC-0019 §3.5 made that one line of policy;
+# this is the exact set of card fields it costs, so the consequence is a constant
+# a reader can find and a test can pin rather than a property of whatever
+# :func:`_mapping` happens to return.
+#
+# **An edit made on the board to one of these fields is overwritten by the next
+# poll.** That is intended, not a bug: two writers and no merge rule means one of
+# them has to lose, and the one that loses is the board — the repository is where
+# the issue is discussed, closed and reopened, and a board that could win would
+# silently contradict it. Edit the issue, not the card. Everything NOT in this set
+# is the board's own (priority, acceptance criteria, correlation key, stage runs)
+# and survives every pass; ``status`` is conditionally the board's — see
+# :func:`_changes_for`, which never moves a card the factory has touched.
+MIRRORED_FIELDS = frozenset(
+    {
+        "title",
+        "description",
+        "labels",
+        "tier",
+        "assignee",
+        "milestone",
+        "issue_state",
+        "github_sync_error",
+    }
+)
+
+# Poll backoff bounds (#374). Eight cycles is forty minutes at the default
+# cadence: long enough that a down provider is left alone, short enough that a
+# board recovers on its own once the provider does, with nobody paged.
+_MAX_BACKOFF_CYCLES = 8
+# A rate-limit refusal enters the ladder at the third rung (four cycles), not the
+# first: the host has explicitly said "fewer requests", and one cycle later is not
+# an answer to that.
+_RATE_LIMIT_FAILURES = 3
 
 
 def _is_pull_request(issue: IssueData) -> bool:
@@ -338,6 +378,11 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
     watermark = _next_watermark(issues, since)
     if watermark is not None:
         store.set_watermark(target, watermark)
+    # Recorded on every SUCCESSFUL pass, including one that found nothing: a pass
+    # with no changes still proves the board is current, and the watermark above
+    # cannot say so — it does not move on a repository nobody has touched (#374).
+    polled_at = datetime.now(UTC)
+    store.mark_polled(target, polled_at)
 
     # A truncated import is REPORTED, never silent: a board that quietly holds
     # the first 1000 of 3000 issues looks complete and is not.
@@ -349,48 +394,192 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
         seen=len(issues),
         truncated=truncated,
         import_max=filters.limit,
+        # The incremental cursor, kept under its established name. What a human
+        # means by "last synced" is `polled_at` beside it.
         last_synced_at=watermark.isoformat() if watermark else None,
+        polled_at=polled_at.isoformat(),
         **tally,
     )
 
 
-async def poll_forever(store: CardStore, settings: Settings) -> None:
-    """Re-import on a cadence, so issues filed after connect show up.
+class PollBackoff:
+    """Per-project failure memory, counted in CYCLES rather than in seconds (#374).
 
-    This is the closest thing to "live" that exists without a webhook receiver,
-    and it is not live: an issue is on the board somewhere between zero and
-    ``CFACTORY_IMPORT_POLL_SECONDS`` (default 300) after it is filed. The board
-    shows ``last_synced_at`` for exactly that reason.
+    A provider that is down, rate-limited or misconfigured must not be asked again
+    at the same cadence forever — that is how a poll turns one outage into a
+    sustained hammering. Backoff is counted in whole poll cycles because the loop
+    already has a clock (the cadence itself): a project that failed once sits out
+    one cycle, then two, then four, capped at :data:`_MAX_BACKOFF_CYCLES`, and a
+    single success clears the memory.
 
-    Off unless ``CFACTORY_IMPORT_POLL`` is set, like every other background loop
-    here — a deploy that configured a token opted into syncing cards, not into a
-    background job hitting someone's API every five minutes.
+    A rate-limit refusal is not treated as a first failure but as the third, so the
+    board waits four cycles rather than one before spending another request on a
+    host that has just said no. The provider's own ``Retry-After`` is deliberately
+    NOT parsed: ``import_issues`` flattens every failure to a reason string (its
+    never-raises contract), and inventing a parser for a header this layer cannot
+    see would be guessing dressed up as precision. The cap is the honest bound.
 
-    Since RFC-0020 phase 8 it polls EVERY repository this store's tenant has, one
-    at a time, each on its own connection — so a tenant with repos on GitHub and on
-    a self-hosted GitLab reconciles both. A tenant with none still polls once,
-    which resolves against the deployment's environment variables exactly as before.
-
-    ponytail: this store's tenant only, and sequentially. Multi-tenant polling
-    wants a tenant enumeration this store does not have, and a slow host delays the
-    next repository rather than the next cycle; parallelise only if a deployment
-    ever has enough repositories for that to bite.
+    ponytail: cycles, not wall clock. A monotonic deadline per project would be
+    finer-grained and would need a clock injected into every test for no behavioural
+    gain — the cadence IS the resolution anyone can observe.
     """
+
+    def __init__(self) -> None:
+        self._failures: dict[str, int] = {}
+        self._skip: dict[str, int] = {}
+
+    def due(self, key: str) -> bool:
+        """Is this project due a poll this cycle? Consumes one cycle of backoff."""
+        remaining = self._skip.get(key, 0)
+        if remaining > 0:
+            self._skip[key] = remaining - 1
+            return False
+        return True
+
+    def record(self, key: str, result: dict[str, Any]) -> None:
+        """Fold one import result in: success forgets, failure backs off."""
+        if result.get("ok"):
+            self._failures.pop(key, None)
+            self._skip.pop(key, None)
+            return
+        failures = self._failures.get(key, 0) + 1
+        if _is_rate_limited(result):
+            failures = max(failures, _RATE_LIMIT_FAILURES)
+        self._failures[key] = failures
+        self._skip[key] = min(2 ** (failures - 1), _MAX_BACKOFF_CYCLES)
+
+
+def _is_rate_limited(result: dict[str, Any]) -> bool:
+    """Does this failure look like the host asking us to slow down?"""
+    reason = str(result.get("reason") or "").lower()
+    return "429" in reason or "rate limit" in reason or "too many requests" in reason
+
+
+def _lease_key(project: str | None) -> str:
+    """The lease/backoff identity of one poll target: the project it reads from."""
+    return (project or "").strip()
+
+
+async def poll_once(
+    store: CardStore,
+    settings: Settings,
+    *,
+    backoff: PollBackoff,
+    lease_seconds: float | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> list[dict[str, Any]]:
+    """One reconciliation pass over every repository this tenant has (#374).
+
+    Three properties, and each has a test named after it:
+
+    **One repository at a time.** The loop is sequential and paced by
+    ``CFACTORY_IMPORT_POLL_GAP_SECONDS`` between repositories, so a tenant with
+    forty repositories spreads forty cheap reads across the cycle instead of firing
+    them at one host in one tick. That is the whole stampede guard: a concurrency
+    bound of one, plus a gap. Replace this loop with an ``asyncio.gather`` and
+    ``test_a_tenant_with_many_repositories_does_not_stampede_the_provider`` fails.
+
+    **One poller per project per cycle.** Every target is claimed through
+    :meth:`CardStore.claim_import_lease` first, so a second replica waking at the
+    same moment skips what the first is already reading. Advisory, expiring, and not
+    a correctness boundary — the unique ``(tenant_id, issue_ref)`` index is.
+
+    **Tenant scoping is the store's, not this loop's.** The repositories come from
+    ``store.repositories()`` (tenant-filtered) and each one's host and credential
+    from ``store.git_target_for(repository_id=...)`` (tenant-filtered again), so
+    there is no path here by which one tenant's repository is read with another
+    tenant's credential. Poll an id the store did not hand out and the resolve
+    raises rather than reaching for the default.
+
+    ``lease_seconds`` is the width of THIS cycle's claim window; ``None`` derives it
+    from the cadence (:func:`_lease_seconds`). Zero means "do not hold a lease",
+    which is what a single-replica deployment could run with and what makes each
+    call in a test a fresh cycle rather than a second poller inside one.
+
+    Returns one result per target actually polled — skipped ones are absent — so a
+    caller (and the test suite) can see what a cycle did.
+    """
+    lease = _lease_seconds(settings) if lease_seconds is None else lease_seconds
+    repositories = await run_in_threadpool(store.repositories)
+    # (repository_id, project) per target, and [(None, env project)] when the tenant
+    # has no repositories: one pass that resolves against the deployment's
+    # environment variables, exactly as before RFC-0020 phase 8.
+    targets: list[tuple[int | None, str]] = [
+        (repo.id, _lease_key(repo.intake_project or repo.project)) for repo in repositories
+    ] or [(None, _lease_key(settings.github_repo))]
+
+    results: list[dict[str, Any]] = []
+    for index, (repository_id, key) in enumerate(targets):
+        if not backoff.due(key):
+            logger.debug("issue import poll: backing off %s", key or "(unconfigured)")
+            continue
+        if key and not await run_in_threadpool(store.claim_import_lease, key, lease):
+            logger.debug("issue import poll: %s is another poller's this cycle", key)
+            continue
+        if index and settings.import_poll_gap_seconds > 0:
+            # The pace. Before the call, not after, so the first repository of a
+            # cycle is not delayed and the last one is not followed by dead time.
+            await asyncio.sleep(settings.import_poll_gap_seconds)
+        result = await run_in_threadpool(
+            import_issues,
+            store,
+            settings=settings,
+            repository_id=repository_id,
+            transport=transport,
+        )
+        backoff.record(key, result)
+        logger.info("issue import poll: %s", result)
+        results.append(result)
+    return results
+
+
+def _lease_seconds(settings: Settings) -> float:
+    """How long a claimed cycle is held: HALF a cadence.
+
+    Not a whole one, and the difference matters. A lease as wide as the cadence
+    expires at the exact moment the next cycle begins, so the smallest drift makes a
+    replica skip its own next cycle — the poll would then run at half rate, or at
+    nothing, for reasons no log would explain.
+
+    Half a cadence is what the lease is actually for: two replicas that woke at
+    roughly the same moment must not both read. Replicas offset by more than that are
+    not a stampede — they are one poll per project per cadence, which is the design.
+    """
+    return max(1.0, settings.import_poll_seconds) / 2
+
+
+async def poll_forever(
+    store: CardStore, settings: Settings, *, transport: httpx.BaseTransport | None = None
+) -> None:
+    """Re-import on a cadence, so issues filed after connect show up (#374).
+
+    This is the closest thing to "live" that exists without a webhook receiver, and
+    it is not live: an issue is on the board somewhere between zero and
+    ``CFACTORY_IMPORT_POLL_SECONDS`` (default 300) after it is filed. The cockpit
+    shows ``last_synced_at`` for exactly that reason — a board that might be five
+    minutes stale is fine, a board that is silently five days stale is not.
+
+    ON by default since #374 (``CFACTORY_IMPORT_POLL=false`` stops it), and inert
+    without a configured repository: the pass resolves nothing and calls nobody.
+
+    A pass never raises. ``import_issues`` already flattens a provider outage into
+    ``ok=False`` plus a reason, and anything else this loop can hit is caught below
+    — a background task that dies takes the board's reconciliation with it, and the
+    board must degrade to "stale" rather than to "never syncs again".
+
+    ponytail: this store's tenant only. Multi-tenant polling wants a tenant
+    enumeration this store does not have; a hosted multi-tenant deploy would give
+    each tenant its own loop, or this one a tenant list.
+    """
+    backoff = PollBackoff()
     while True:
         await asyncio.sleep(max(1.0, settings.import_poll_seconds))
         try:
-            repositories = await run_in_threadpool(store.repositories)
-            # [None] when the tenant has none: one pass that resolves against the
-            # deployment's environment variables, exactly as before this phase.
-            targets: list[int | None] = [repo.id for repo in repositories] or [None]
-            for repository_id in targets:
-                result = await run_in_threadpool(
-                    import_issues, store, settings=settings, repository_id=repository_id
-                )
-                logger.info("issue import poll: %s", result)
+            await poll_once(store, settings, backoff=backoff, transport=transport)
         except asyncio.CancelledError:
             raise
         except Exception:
+            # Never let one bad cycle end the loop: without this the task dies with
             # it and the board silently stops reconciling; logged and retried.
             logger.exception("issue import poll failed")
 
@@ -406,6 +595,7 @@ def _result(project: str, *, ok: bool, **extra: Any) -> dict[str, Any]:
         "seen": 0,
         "truncated": False,
         "incremental": False,
+        "polled_at": None,  # Set only on a successful pass — see import_issues.
         "live": False,  # Poll-based, by design. See the module docstring.
         **extra,
     }

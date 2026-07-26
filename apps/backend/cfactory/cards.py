@@ -24,12 +24,12 @@ from __future__ import annotations
 import copy
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime
-from typing import Any, Literal
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import DateTime, Index, Integer, Select, String, Text, select
-from sqlalchemy.engine import Engine
+from sqlalchemy import DateTime, Index, Integer, Select, String, Text, select, update
+from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
@@ -319,11 +319,39 @@ class ImportStateRow(Base):
         String(64), default=DEFAULT_TENANT, server_default=DEFAULT_TENANT
     )
     project: Mapped[str] = mapped_column(String(256))
+    # The incremental CURSOR: the newest issue ``updated_at`` seen, minus a clock
+    # skew overlap. Not "when we last polled" — on a repository whose issues have
+    # not changed in a month this stays a month old however often the poll runs,
+    # which is why ``last_polled_at`` below exists as well (#374).
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # When the provider was last read SUCCESSFULLY, by a poll or by a human. This
+    # is the one the cockpit's staleness reads: it answers "is what I am looking at
+    # current?", which the cursor above cannot.
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Which poller currently owns this project's cycle, until when (#374). The
+    # deployment runs more than one replica at times, and while a double import
+    # cannot duplicate a card — the unique (tenant_id, issue_ref) index sees to
+    # that — it does double the provider calls, which is the one thing the poll
+    # must not do. NULL means unowned. See :meth:`CardStore.claim_import_lease`.
+    poll_leased_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
         Index("ix_card_import_state_tenant_project", "tenant_id", "project", unique=True),
     )
+
+
+class ImportState(BaseModel):
+    """How fresh one project's import is (#374) — the read side of the row above.
+
+    Two timestamps because they answer two questions, and conflating them is what
+    made staleness invisible: ``last_polled_at`` is when the provider was last read
+    successfully (what a human means by "last synced"), ``watermark_at`` is how far
+    that read has got (what the next incremental pass asks the provider for).
+    """
+
+    project: str
+    last_polled_at: datetime | None = None
+    watermark_at: datetime | None = None
 
 
 class DuplicateCardKeyError(Exception):
@@ -365,6 +393,11 @@ _LATE_COLUMNS = {
 # phase 3 gave one more column. A live board created by phase 2 already HAS the
 # table, so ``create_all`` will not add it and every config read would fail.
 _LATE_CONFIG_COLUMNS = {"credential_rejected": "BOOLEAN"}
+
+# And for ``card_import_state``, which #374 gives the poll lease. A board created
+# by §3.6 already HAS the table, so ``create_all`` will not add the column and
+# every watermark read would fail.
+_LATE_IMPORT_STATE_COLUMNS = {"poll_leased_until": "TIMESTAMP", "last_polled_at": "TIMESTAMP"}
 
 # And for ``tenant_git_credential``, which phase 8 moves from per-tenant to
 # per-connection. Both columns are added UNSET, which is exactly what a legacy
@@ -408,6 +441,7 @@ def _ensure_late_columns(engine: Engine) -> None:
     for table, columns in (
         (GitConfigRow.__tablename__, _LATE_CONFIG_COLUMNS),
         (GitCredentialRow.__tablename__, _LATE_CREDENTIAL_COLUMNS),
+        (ImportStateRow.__tablename__, _LATE_IMPORT_STATE_COLUMNS),
     ):
         if not inspector.has_table(table):
             continue
@@ -1751,7 +1785,11 @@ class CardStore:
             return _as_utc(row.last_synced_at) if row is not None else None
 
     def set_watermark(self, project: str, when: datetime) -> None:
-        """Record how far this project's import has read.
+        """Record how far this project's import has read."""
+        self._upsert_import_state(project, last_synced_at=when)
+
+    def _upsert_import_state(self, project: str, **fields: datetime | None) -> None:
+        """Write import-state fields for this (tenant, project), creating the row.
 
         Two concurrent first-ever imports both find no row and both insert; the
         unique index rejects the loser, which then updates instead. Same
@@ -1767,15 +1805,108 @@ class CardStore:
                 with self._session.begin() as session:
                     row = session.scalars(stmt).first()
                     if row is None:
-                        session.add(
-                            ImportStateRow(tenant_id=tenant, project=project, last_synced_at=when)
-                        )
-                    else:
-                        row.last_synced_at = when
+                        row = ImportStateRow(tenant_id=tenant, project=project)
+                        session.add(row)
+                    for name, value in fields.items():
+                        setattr(row, name, value)
                 return
             except IntegrityError:
                 if attempt:  # pragma: no cover — the row exists by the retry
                     raise
+
+    def import_states(self) -> dict[str, ImportState]:
+        """Every project this tenant has imported from, and how fresh each is.
+
+        The read behind ``GET /api/cards/sync-state`` (#374). A project with a
+        configured repository and no row here has never been imported, which the
+        caller renders as "never" rather than as an error — never-synced and
+        synced-long-ago are different states and a board must show which it is in.
+        """
+        stmt = select(ImportStateRow).where(
+            ImportStateRow.tenant_id == (self._tenant or DEFAULT_TENANT)
+        )
+        with self._session() as session:
+            return {
+                row.project: ImportState(
+                    project=row.project,
+                    last_polled_at=_as_utc(row.last_polled_at),
+                    watermark_at=_as_utc(row.last_synced_at),
+                )
+                for row in session.scalars(stmt)
+            }
+
+    def mark_polled(self, project: str, when: datetime | None = None) -> None:
+        """Record a SUCCESSFUL read of this project's issues (#374).
+
+        Separate from :meth:`set_watermark` because a successful pass that found
+        nothing new has no watermark to advance and must still count as synced —
+        without this, a quiet repository would read as permanently stale in the
+        cockpit and every board would look broken between issue filings.
+        """
+        self._upsert_import_state(project, last_polled_at=when or datetime.now(UTC))
+
+    def claim_import_lease(self, project: str, ttl_seconds: float) -> bool:
+        """Claim this project's next poll cycle. True if this caller owns it (#374).
+
+        The multi-replica guard. Two replicas both wake up, both enumerate the same
+        repositories, and both would read the same issues from the same host — a
+        stampede that is invisible on the board (the import is an upsert) and very
+        visible in a rate-limit budget. Whoever claims the lease polls; the other
+        skips this cycle.
+
+        Compare-and-set on the value just read, NOT a ``leased_until < now``
+        predicate: both replicas read the same previous value, both attempt the
+        UPDATE, and the second one's WHERE no longer matches — so the database
+        decides, and the expiry arithmetic stays in Python where the naive/aware
+        timestamp handling is already solved (``_as_utc``). One winner without
+        needing the two backends to agree on how to compare a stored datetime.
+
+        The lease is advisory and expiring: a replica that dies mid-cycle blocks
+        this project for at most ``ttl_seconds``, after which the next poller takes
+        it. It is not a correctness boundary — the unique ``(tenant_id, issue_ref)``
+        index is — so a lost lease costs one duplicate READ, never a duplicate card.
+        """
+        now = datetime.now(UTC)
+        tenant = self._tenant or DEFAULT_TENANT
+        stmt = select(ImportStateRow).where(
+            ImportStateRow.tenant_id == tenant, ImportStateRow.project == project
+        )
+        with self._session.begin() as session:
+            row = session.scalars(stmt).first()
+            if row is None:
+                # First-ever poll of this project. A lost race here is resolved by
+                # the unique index exactly as in set_watermark: the loser sees the
+                # row on its next attempt and takes the UPDATE path.
+                try:
+                    session.add(
+                        ImportStateRow(
+                            tenant_id=tenant,
+                            project=project,
+                            poll_leased_until=now + timedelta(seconds=ttl_seconds),
+                        )
+                    )
+                    session.flush()
+                except IntegrityError:  # pragma: no cover — needs two live pollers
+                    return False
+                return True
+            previous = _as_utc(row.poll_leased_until)
+            if previous is not None and previous > now:
+                return False  # somebody else owns this cycle
+            # Cast because ``Session.execute`` is typed as returning ``Result``,
+            # which has no ``rowcount``; an UPDATE always yields a ``CursorResult``,
+            # and the row count is precisely what decides the winner here.
+            claimed = cast(
+                "CursorResult[Any]",
+                session.execute(
+                    update(ImportStateRow)
+                    .where(
+                        ImportStateRow.id == row.id,
+                        ImportStateRow.poll_leased_until == row.poll_leased_until,
+                    )
+                    .values(poll_leased_until=now + timedelta(seconds=ttl_seconds))
+                ),
+            )
+            return claimed.rowcount == 1
 
 
 _cards_store: CardStore | None = None

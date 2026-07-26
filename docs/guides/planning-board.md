@@ -971,7 +971,10 @@ contract an agent actually discovers.
 | Send an invalid `status` or `tier` | 422 from validation | Loud |
 | Point a second card at an issue another card already tracks | 409 / `another card already tracks issue ...` — one issue, one card, enforced by a unique index | Loud |
 | Import from a repo with more issues than `CFACTORY_IMPORT_MAX` | `truncated: true` in the result and in the board's import summary | Loud |
-| Expect an issue filed a moment ago to be on the board | It appears on the next import/poll, not instantly — import is **not live** (no webhook receiver) | Documented, and `last_synced_at` shows the staleness |
+| Expect an issue filed a moment ago to be on the board | It appears on the next poll cycle (default 5 min), not instantly — import is **not live** (no webhook receiver) | Documented, and the board's sync line shows how long ago it last read |
+| Edit a mirrored field (title, description, labels, tier, assignee, milestone) on the board | The next poll overwrites it from the issue — the repository is the record of truth (RFC-0003) | **Silent — and intended.** Edit the issue. See the sync guide's mirrored-field table |
+| Run more than one replica | Each repository is read by whichever replica claims its poll lease; the worst case is a duplicated read, never a duplicated card | Silent, and safe — the unique `(tenant_id, issue_ref)` index is the guarantee |
+| A provider outage during a poll | The board keeps serving reads with what it has; the failing repository backs off (1, 2, 4 … up to 8 cycles) and recovers on its own | `ok: false` plus the reason on a manual Sync now, and the sync line turns STALE after two cadences |
 | Promote to `ready` with **no tier** | Nothing. Card sits in `ready`. | **Silent — and intended.** It is a real triage state. |
 | Promote a `low`/`medium` card with **no AIFactory project id** | Card moves to `blocked`, reason points at Settings > Git integration, `ok=false` audit entry | Loud |
 | Read or write `/api/tenants/<someone else>/git-config` | 403 — the tenant in the path is checked against the tenant the request resolved to | Loud |

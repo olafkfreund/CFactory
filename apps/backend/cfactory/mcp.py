@@ -221,6 +221,19 @@ _PRIORITY_PROP = {
 
 BOARD_TOOLS: list[dict[str, Any]] = [
     {
+        "name": "cfactory_card_sync_state",
+        "description": (
+            "How CURRENT the board is, per connected repository — read this before "
+            "trusting the backlog. Each entry says when that repository's issues were "
+            "last read successfully (last_polled_at), how far the incremental read has "
+            "got (watermark_at), and whether it is stale (no successful read for more "
+            "than two poll cadences). Reconciliation runs on a background poll, so the "
+            "board is never live: an issue filed a moment ago may not be here yet. "
+            "Stale, or poll.enabled false? Call cfactory_import_cards to sync now."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "cfactory_list_cards",
         "description": (
             "List / search the planning backlog — this tenant's cards, highest priority "
@@ -838,6 +851,7 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_get_rollups": READ,
     "cfactory_get_anomalies": READ,
     "cfactory_list_cards": READ,
+    "cfactory_card_sync_state": READ,
     "cfactory_get_card": READ,
     "cfactory_create_card": WRITE,
     "cfactory_update_card": WRITE,
@@ -1006,6 +1020,10 @@ class ToolContext:
     cards: CardStore
     audit: card_ops.AuditContext
     transport: httpx.BaseTransport | None = None
+
+
+def _tool_card_sync_state(_args: dict[str, Any], ctx: ToolContext) -> Any:
+    return card_ops.sync_state(ctx.cards)
 
 
 def _tool_list_cards(args: dict[str, Any], ctx: ToolContext) -> Any:
@@ -1210,6 +1228,7 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_get_rollups": lambda _a, _c: _tool_get_rollups(),
     "cfactory_get_anomalies": lambda _a, _c: _tool_get_anomalies(),
     "cfactory_list_cards": _tool_list_cards,
+    "cfactory_card_sync_state": _tool_card_sync_state,
     "cfactory_get_card": _tool_get_card,
     "cfactory_create_card": _tool_create_card,
     "cfactory_update_card": _tool_update_card,

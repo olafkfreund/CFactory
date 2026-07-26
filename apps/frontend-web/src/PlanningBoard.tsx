@@ -7,20 +7,31 @@
 // execution stages) and is a different view over different data.
 import { useState, type CSSProperties } from "react";
 import type { CardFilters } from "./api";
-import { byPriority, CARD_STATUSES, matchesQuery, useCards, useIssueUrl } from "./cards";
+import {
+  byPriority,
+  CARD_STATUSES,
+  matchesQuery,
+  syncSummary,
+  useCards,
+  useIssueUrl,
+} from "./cards";
 import { CardBanners, CardBody, CardFilterBar } from "./CardParts";
 
 export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }) {
   // Status is the column here, so it is never a server-side filter on this view.
   const [filters, setFilters] = useState<CardFilters>({});
   const [query, setQuery] = useState("");
-  const { cards, loading, error, notice, mutate, runStage, importing, importIssues } = useCards(
-    filters,
-    reloadSignal,
-  );
+  const { cards, loading, error, notice, mutate, runStage, importing, importIssues, syncState } =
+    useCards(filters, reloadSignal);
   const hrefOf = useIssueUrl();
 
   const shown = cards.filter((c) => matchesQuery(c, query)).sort(byPriority);
+  // Amber only when EVERY connected repository has gone stale, or the poll is off:
+  // a single lagging repository is a caveat in the text, not an alarm on the board.
+  const stale =
+    syncState !== null &&
+    (!syncState.poll.enabled ||
+      (syncState.repositories.length > 0 && syncState.repositories.every((r) => r.stale)));
 
   return (
     <>
@@ -31,16 +42,29 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
           push it into plan, code or test (or all three) with its stage buttons. Every change is
           written straight through to the card API.
         </p>
-        <button
-          className="card-btn"
-          type="button"
-          onClick={() => {
-            void importIssues();
-          }}
-          disabled={importing}
-        >
-          {importing ? "Importing…" : "Import repo issues"}
-        </button>
+        {/* How current the board is, beside the control that makes it current
+            (#374). The board reconciles itself on a background poll, so this line
+            exists to answer "can I trust what I am looking at?" — a stale board
+            used to look identical to a fresh one. */}
+        <div className="card-sync">
+          <span
+            className={`card-sync__age${stale ? " card-sync__age--stale" : ""}`}
+            title="Issues are imported by a background poll, not a webhook — the board is never live."
+          >
+            {syncSummary(syncState)}
+          </span>
+          <button
+            className="card-btn"
+            type="button"
+            onClick={() => {
+              void importIssues();
+            }}
+            disabled={importing}
+            title="Read the connected repositories' issues now, without waiting for the poll"
+          >
+            {importing ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
       </div>
 
       <CardFilterBar

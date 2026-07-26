@@ -1982,6 +1982,15 @@ body {
 .card-btn:disabled { opacity: 0.5; cursor: default; }
 .card-btn--danger:hover { color: var(--red); border-color: var(--red); }
 
+/* The board's sync line (#374): how current the board is, beside Sync now. Muted
+   by default because "a few minutes behind" is the normal state and does not want
+   attention; amber only when the board has actually gone stale. */
+.card-sync {
+  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.6rem;
+}
+.card-sync__age { font: 500 0.76rem var(--font-mono); color: var(--muted); }
+.card-sync__age--stale { color: var(--amber); }
+
 /* Stage actions (RFC-0020 §3.7): plan / code / test / run-all on a card, plus the
    per-stage dispatch-record chip. A disabled button carries the refusal reason as
    its title, so the state is readable and not merely greyed out. */

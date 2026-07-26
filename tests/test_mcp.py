@@ -122,6 +122,10 @@ def test_initialize_and_tools_list(mcp_client):
         "cfactory_get_git_config",
         "cfactory_set_git_config",
         "cfactory_verify_git_config",
+        # Tenant git credential (RFC-0020 §3.4) — write-only, so there is a set
+        # and a delete and deliberately no read.
+        "cfactory_set_git_credential",
+        "cfactory_delete_git_credential",
     }
 
 

@@ -34,7 +34,7 @@ async function getJson<T>(
 // then validates the body against `schema`. Identical behavior to the
 // hand-rolled updateCopilotSettings/updateService blocks it replaces.
 async function sendJson<T>(
-  method: "POST" | "PUT" | "PATCH",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body: unknown,
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
@@ -515,6 +515,19 @@ export async function fetchSettings(): Promise<CopilotSettings & { tenant: strin
 
 // ── Tenant git configuration (RFC-0020 §3.3) ────────────────────────────────
 
+// The MASKED credential indicator (RFC-0020 §3.4). Whether this tenant has a
+// credential, when it was stored, and which key wraps it — and deliberately no
+// field for the credential itself, not even a masked prefix. The cockpit cannot
+// render what it is never sent, which is the point: a value that never reaches
+// the browser cannot leak from it.
+export const CredentialInfoSchema = z.object({
+  configured: z.boolean(),
+  source: z.string(), // "tenant" | "env" | "none"
+  updated_at: z.string().nullable().optional(),
+  key_version: z.string().nullable().optional(),
+});
+export type CredentialInfo = z.infer<typeof CredentialInfoSchema>;
+
 export const GitConfigSchema = z.object({
   tenant_id: z.string(),
   provider: z.string(), // "github" | "gitlab" | "azure_devops"
@@ -525,6 +538,10 @@ export const GitConfigSchema = z.object({
   default_labels: z.array(z.string()),
   // unconfigured | credential_missing | configured | verified — derived, never stored.
   status: z.string(),
+  // Defaulted rather than required so a cockpit that reaches a backend from
+  // before RFC-0020 phase 3 renders "no credential" instead of failing to parse
+  // the whole configuration — the panel must survive a rolling deploy.
+  credential: CredentialInfoSchema.default({ configured: false, source: "none" }),
   verified_at: z.string().nullable().optional(),
   verify_error: z.string().nullable().optional(),
   source: z.string(), // "stored" once saved, "env" while still seeded from the deployment
@@ -564,6 +581,32 @@ export async function updateGitConfig(
 
 export async function verifyGitConfig(tenant: string): Promise<GitVerify> {
   return sendJson("POST", `${gitConfigPath(tenant)}:verify`, {}, GitVerifySchema);
+}
+
+// ── Tenant git credential (RFC-0020 §3.4) ───────────────────────────────────
+// Write-only. There is no fetch here and there is no endpoint to write one
+// against: the credential goes up, and only the masked indicator comes back.
+
+export const GitCredentialResultSchema = z.object({
+  ok: z.boolean(),
+  removed: z.boolean().optional(),
+  credential: CredentialInfoSchema,
+});
+export type GitCredentialResult = z.infer<typeof GitCredentialResultSchema>;
+
+function gitCredentialPath(tenant: string): string {
+  return `/api/tenants/${encodeURIComponent(tenant)}/git-credential`;
+}
+
+export async function setGitCredential(
+  tenant: string,
+  credential: string,
+): Promise<GitCredentialResult> {
+  return sendJson("PUT", gitCredentialPath(tenant), { credential }, GitCredentialResultSchema);
+}
+
+export async function deleteGitCredential(tenant: string): Promise<GitCredentialResult> {
+  return sendJson("DELETE", gitCredentialPath(tenant), undefined, GitCredentialResultSchema);
 }
 
 export async function updateCopilotSettings(

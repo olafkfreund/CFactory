@@ -374,10 +374,10 @@ from the portal. Now a tenant has exactly one git configuration, it lives in
 opening an issue for a `ready` card, importing a repository's existing issues,
 and dispatching a card into AIFactory.
 
-Credentials are **not** part of it. The token is still the deployment's, from
-the environment; RFC-0020 phases 3 and 4 own credential custody. This follows the
-copilot settings precedent exactly — the provider and the model persist, the API
-key never does — and it is why `credential_missing` is one of the statuses.
+The credential is part of it since RFC-0020 section 3.4, as its own write-only
+resource: encrypted at rest, never returned by anything, and per tenant. See
+[The credential](#the-credential) below. A deployment that has not stored one
+still falls back to the environment credential it has always used.
 
 ### Every setting, in full
 
@@ -389,7 +389,8 @@ key never does — and it is why `credential_missing` is one of the statuses.
 | **Import from** (`intake_project`) | provider path | falls back to **Project** | Where the import **reads** existing issues from, when that differs from the project above. Leave it empty unless you genuinely have two repositories. |
 | **AIFactory project id** | project id (a UUID in practice) | unset | Which AIFactory project a dispatched card is **built** in. Not a repository path — see below. |
 | **Default labels** | list of strings | empty | Labels put on issues the board opens. A `factory:<tier>` label is **refused**: that label is the fleet's own intake trigger (RFC-0011), so it would build the same card a second time. |
-| **Status** | derived, read-only | `unconfigured` | `unconfigured` (no project named) -> `credential_missing` (a project, but the deployment has no usable token) -> `configured` (reachable in principle, never proved) -> `verified` (proved by **Verify**). Never stored as a field: it is a function of the configuration, the credential and the last verification, and a stored copy would go stale. |
+| **Credential** | write-only string | unset (falls back to the deployment's) | What the board authenticates to the host with. Stored encrypted, per tenant, and never displayed again. See [The credential](#the-credential). |
+| **Status** | derived, read-only | `unconfigured` | `unconfigured` (no project named) -> `credential_missing` (a project, but no usable credential — absent, undecryptable, or refused by the host on the last verify) -> `configured` (reachable in principle, never proved) -> `verified` (proved by **Verify**). Never stored as a field: it is a function of the configuration, the credential and the last verification, and a stored copy would go stale. |
 
 ### The AIFactory project id, in full
 
@@ -449,6 +450,93 @@ promotion discipline, and never at a repo whose main branch matters before then.
 For a local run, either leave it empty (and plan `hard` cards, which route to
 PFactory) or set it to a throwaway project id in your local AIFactory.
 
+### The credential
+
+> **As a human planner**, I want to connect my own repository from the portal,
+> **so that** my board actually reaches it without an operator putting my token
+> into a deployment's environment.
+
+> **As an operator running one cockpit for several tenants**, I want each
+> tenant's credential stored separately and encrypted, **so that** tenant A's
+> board cannot file issues into tenant B's repository and a database dump is not
+> a list of everybody's tokens.
+
+> **As the person who has to answer for it**, I want every use of a credential in
+> the audit trail and every credential rotatable, **so that** "who used this, and
+> when" and "we have rotated the key" are questions with answers.
+
+RFC-0020 section 3.4. Before it, one environment variable held one credential for
+the whole deployment: every tenant reached its chosen project with the operator's
+token, which is safe for a single-tenant deployment and is not a boundary of any
+kind for several. Now a tenant stores its own, in **Settings > Git integration**,
+and the board uses it for that tenant and no other.
+
+**It is write-only.** You paste it once. No endpoint returns it, no MCP tool
+returns it, the panel never renders it, and it is not in any log line, error
+message or audit entry. The only thing any read ever says is whether one exists,
+when it was stored, and which encryption key wraps it. Changing it means storing
+a new one; there is no "show".
+
+#### Every option, and its default
+
+| Option | Where | Default | What it decides |
+|---|---|---|---|
+| **Credential** | the panel, `PUT /api/tenants/{tenant}/git-credential`, or `cfactory_set_git_credential` | unset | What the board authenticates with. Any credential the provider issues: a GitHub PAT, a GitLab personal or group access token, an Azure DevOps PAT. Encrypted before it is written. |
+| **Remove** | the panel, `DELETE .../git-credential`, or `cfactory_delete_git_credential` | — | Revokes it from this board. Idempotent: removing one that is not there is a 200, not an error. Removing it at the *provider* is a separate action, and the one that actually matters. |
+| `CFACTORY_CREDENTIAL_KEY` | deployment environment | unset | The key that encrypts every stored credential. Full detail, including how to generate one: [the environment reference](../dev/environment-reference.md). |
+| `CFACTORY_GIT_PROVIDER_TOKEN` | deployment environment | unset | The **fallback**, used only by a tenant that has stored nothing of its own. Unchanged behaviour for every existing deployment. |
+
+**Where the credential goes, and when.** It is decrypted at exactly one moment:
+when a provider is built for one call — opening an issue, importing a backlog,
+running **Verify**. It is not held in a cache, a module global, or on any
+long-lived object, and resolving a configuration for the panel does not decrypt
+anything. Every one of those decryptions appends an entry to the same
+tamper-evident audit chain the card mutations use (`read_git_credential`, keyed
+on `tenant:<id>`), including the failed ones — "the credential could not be read
+at 14:02" is exactly the entry needed after a key rotation goes wrong.
+
+**How it is encrypted.** Envelope encryption. Each stored credential gets its own
+random 256-bit data key and is sealed with AES-256-GCM; that data key is itself
+sealed with the deployment's `CFACTORY_CREDENTIAL_KEY`, and the row records which
+key did the wrapping. The tenant id is bound into both layers as associated data,
+so a record moved between tenants does not decrypt at all — the isolation is
+cryptographic and not only a `WHERE` clause. Rotating the key re-wraps the data
+key and never decrypts the credential.
+
+#### What happens when it is unset or wrong
+
+| Situation | What happens | Loud or quiet |
+|---|---|---|
+| No credential for this tenant, and none in the environment | Status is `credential_missing`. Sync is off entirely: no network call on a card write, no issue opened. **The board keeps serving** — cards, columns, imports and the panel all answer normally. | Quiet on the hook, loud in the panel and when asked |
+| No `CFACTORY_CREDENTIAL_KEY` on the deployment | Storing a credential is **refused** with a 503 naming the variable. Nothing is written, and nothing is written in the clear. | Loud, at the moment you press Store |
+| `CFACTORY_CREDENTIAL_KEY` set to something that is not a key (a passphrase, a truncated value, bad base64) | Refused with an error saying what is wrong and how to generate a real one. It is never hashed or stretched into something key-shaped — that turns a typo into a weaker key nobody notices. | Loud |
+| The key changes and the old one is no longer listed | Stored credentials cannot be decrypted. They read as `credential_missing`, the board keeps serving, and the audit chain records each failed read. Nothing returns garbage: AES-GCM authenticates, so a wrong key fails rather than producing a plausible string. | Loud in the panel, recoverable by restoring the old key |
+| The key is **lost entirely** | Every stored credential is permanently unreadable. There is no recovery — store new ones. | Loud, unrecoverable |
+| The credential is valid but the host refuses it (401/403 on **Verify**) | Status becomes `credential_missing`, not a green `configured`: a token the host will not accept is, from the board's point of view, a token it does not have. Storing a new one clears the rejection. | Loud once you press Verify |
+| The credential is valid but points at the wrong account | Nothing here can detect that. **Verify** succeeds and the board files issues as that identity. | Silent — which is why the recommendation below is what it is |
+| A tenant stored a credential that currently cannot be read | It gets **nothing**. It does not silently fall back to the deployment's environment credential — that fallback would hand one tenant the operator's token the moment its own record became unreadable. | Quiet by design, visible as `credential_missing` |
+
+#### Recommended
+
+**Store a per-tenant credential, and give it the narrowest scope that works.**
+For GitHub that is a fine-grained PAT limited to the one repository, with
+issues: read and write and nothing else; for GitLab, a **group or project access
+token** rather than a personal one, at the `api` scope, so the integration does
+not belong to a person who might leave. Azure DevOps: a PAT scoped to Work Items
+(read and write) on one project.
+
+Do not use a classic GitHub PAT with `repo`: it grants push access to every
+repository you can see, and this board needs to open issues in one.
+
+**Single-tenant, local, or a demo:** leaving `CFACTORY_GIT_PROVIDER_TOKEN` in the
+environment is still supported and still correct. Store a per-tenant credential
+when there is more than one tenant, or when you want the audit trail to say which
+tenant's credential was used.
+
+**Set `CFACTORY_CREDENTIAL_KEY` before you need it.** A deployment without one
+cannot store credentials at all, and the failure arrives at the least convenient
+moment — when somebody is trying to connect their repository.
+
 ### What happens when the rest is unset or wrong
 
 | Situation | What happens | Loud or quiet |
@@ -456,7 +544,7 @@ PFactory) or set it to a throwaway project id in your local AIFactory.
 | No **project** | A `ready` card opens no issue and the sync hook stays quiet — a deployment that named no project has opted into mirroring *adopted* issues, not into filing new ones. Asking explicitly (`POST /api/cards/{key}/sync-github`) says plainly that no project is configured. An import returns `ok: false` with the same reason. | Quiet on the hook, loud when asked |
 | **Project** in a format the provider cannot address | Refused on save with a **400** naming the expected shape. It never reaches the point where every card write fails with an error nobody connects back to this form. | Loud, at save time |
 | **Project** valid but non-existent | Saves fine (nothing can know without asking). **Verify** turns it into a recorded failure; without verifying, the first card write records `github_sync_error` on the card and the board keeps serving. | Loud once you press Verify |
-| No **credential** on the deployment | Status is `credential_missing`. Sync is off entirely: no network call on a card write, no issue opened. | Quiet by design, visible in the panel |
+| No **credential** for this tenant | Status is `credential_missing`. Sync is off entirely: no network call on a card write, no issue opened, and the board keeps serving every read. Full table above: [The credential](#the-credential). | Quiet by design, visible in the panel |
 | **Host** not an http(s) origin | Refused on save with a **400**. It becomes an HTTP client's base URL, so it is validated where it enters rather than trusted. | Loud, at save time |
 | `factory:<tier>` in **default labels** | Refused on save with a **400** explaining that it is the intake trigger. Silently dropping it would look saved and would not be. | Loud, at save time |
 | Wrong **provider** for the host | The provider's own API returns a 404 or a parse failure; the reason lands on the card (`github_sync_error`) or in the verify result. Nothing 500s. | Loud, one hop away |
@@ -482,8 +570,15 @@ An unreachable host is `ok: false` with the reason, never an error page.
 | `GET` | `/api/tenants/{tenant}/git-config` | read | `cfactory_get_git_config` |
 | `PUT` | `/api/tenants/{tenant}/git-config` | write | `cfactory_set_git_config` |
 | `POST` | `/api/tenants/{tenant}/git-config:verify` | write | `cfactory_verify_git_config` |
+| `PUT` | `/api/tenants/{tenant}/git-credential` | write | `cfactory_set_git_credential` |
+| `DELETE` | `/api/tenants/{tenant}/git-credential` | write | `cfactory_delete_git_credential` |
 
-`PUT` is a **full replacement**: an omitted optional field is cleared. Every
+The credential has **no read row**, and that is the point: there is nothing to
+pair a read tool with. Both its operations are `write` scope, so a read-scoped
+key can enumerate the backlog and inspect the configuration and can neither store
+nor remove a credential.
+
+`PUT` on the configuration is a **full replacement**: an omitted optional field is cleared. Every
 mutation appends to the same tamper-evident HMAC audit chain the card mutations
 use, keyed on `tenant:<id>`.
 
@@ -495,11 +590,12 @@ every request resolves to `default`, so naming anything else is a 403 there too.
 The MCP tools take no tenant argument at all — an agent operates on its own
 partition or on nothing.
 
-Until phase 3 lands, a **multi-tenant deployment shares the operator's
-environment credential**: each tenant chooses its own project, and all of them
-reach it with the same token. That is safe for a single-tenant deployment and
-explicitly not a tenant isolation boundary for credentials. Phase 3 (#364) moves
-credentials into the tenant; phase 4 adds OAuth.
+A tenant that has **not** stored a credential still shares the deployment's
+environment one: each such tenant chooses its own project, and all of them reach
+it with the same token. That is correct for a single-tenant deployment and is
+explicitly not a credential isolation boundary — storing a per-tenant credential
+is what makes it one, and phase 4 will fill that store from an OAuth install flow
+instead of a paste box.
 
 ### Migrating from the environment variables
 

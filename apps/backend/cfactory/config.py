@@ -219,6 +219,23 @@ class Settings(BaseSettings):
     # reads/writes are scoped to the resolved tenant via store_dep (#172).
     multi_tenant: bool = False
 
+    # Key-encryption key (KEK) for the per-tenant git credential store (RFC-0020
+    # §3.4, phase 3). It wraps a per-record data key; the credential itself is
+    # sealed with that data key (AES-GCM). Format:
+    #
+    #     <key-id>:<base64 of 32 random bytes>
+    #
+    # comma-separated when rotating, ACTIVE KEY FIRST — every older key stays
+    # listed so records wrapped with it can still be unwrapped (and re-wrapped
+    # onto the active one). A bare base64 value with no ``<key-id>:`` prefix is
+    # read as key id ``v1``.
+    #
+    # UNSET MEANS: storing a credential is REFUSED, loudly. It never falls back
+    # to writing plaintext, and it never invents a key — an unset KEK is an
+    # operator decision not to hold credentials, not a reason to hold them badly.
+    # Losing this value makes every stored credential permanently undecryptable.
+    credential_key: str | None = None
+
     # HMAC secret anchoring the tamper-evident audit chain (#21). Each audit
     # entry's hash is HMAC-SHA256 over its canonical fields chained to the prior
     # entry's hash, so any after-the-fact mutation breaks the chain. The default

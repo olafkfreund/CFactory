@@ -33,7 +33,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
 
+from .audit import AuditStore
 from .config import DEFAULT_TENANT, Settings, get_settings
+from .credentials import (
+    Credential,
+    CredentialError,
+    CredentialInfo,
+    GitCredentialRow,
+    env_credential,
+    load_keyring,
+    require_keyring,
+    rewrap,
+    seal,
+    unseal,
+)
 from .db import Base, make_engine
 from .git_config import (
     GitConfig,
@@ -41,6 +54,7 @@ from .git_config import (
     GitConfigUpdate,
     GitTarget,
     config_view,
+    provider_token,
     target_from_row,
     target_from_settings,
     validated_fields,
@@ -56,6 +70,16 @@ CardTier = Literal["low", "medium", "hard"]
 
 # Auto-assigned key prefix when the caller doesn't supply one (see ``create``).
 _KEY_PREFIX = "FCT-"
+
+# The actor recorded when a credential is read by a path with no human behind it
+# — the card-write sync hook and the background import. Honest rather than
+# flattering: the mutation that TRIGGERED the read is audited separately, with
+# its real actor, immediately beside this entry in the same chain.
+SYSTEM_ACTOR = "system"
+
+# Audit ``target_service`` for a credential access. The same value the git-config
+# mutations use — the thing being reached is the git provider.
+_CREDENTIAL_TARGET = "git_provider"
 
 
 def _now() -> datetime:
@@ -280,6 +304,11 @@ _LATE_COLUMNS = {
     "deleted_at": "TIMESTAMP",
 }
 
+# The same guard for ``tenant_git_config``, which RFC-0020 phase 2 shipped and
+# phase 3 gave one more column. A live board created by phase 2 already HAS the
+# table, so ``create_all`` will not add it and every config read would fail.
+_LATE_CONFIG_COLUMNS = {"credential_rejected": "BOOLEAN"}
+
 # Indexes the late columns need. The unique one is the RFC-0020 §3.6 import
 # idempotency guard and must exist on a live DB too, not only on a fresh
 # create_all — without it two concurrent polls duplicate every card.
@@ -302,6 +331,14 @@ def _ensure_late_columns(engine: Engine) -> None:
     from sqlalchemy import inspect, text  # noqa: PLC0415 — init-time only
 
     inspector = inspect(engine)
+    if inspector.has_table(GitConfigRow.__tablename__):
+        present = {c["name"] for c in inspector.get_columns(GitConfigRow.__tablename__)}
+        with engine.begin() as conn:
+            for name, ddl in _LATE_CONFIG_COLUMNS.items():
+                if name not in present:
+                    conn.execute(
+                        text(f"ALTER TABLE {GitConfigRow.__tablename__} ADD COLUMN {name} {ddl}")
+                    )
     if not inspector.has_table(CardRow.__tablename__):
         return
     existing = {c["name"] for c in inspector.get_columns(CardRow.__tablename__)}
@@ -344,6 +381,8 @@ class CardStore:
         self._engine = make_engine(url)
         self._session = sessionmaker(self._engine, expire_on_commit=False)
         self._tenant: str | None = None  # None = unscoped (single-tenant mode)
+        self._url = url
+        self._audit: AuditStore | None = None
         if create:
             Base.metadata.create_all(self._engine)
             _ensure_late_columns(self._engine)
@@ -539,7 +578,13 @@ class CardStore:
         with self._session() as session:
             return session.scalars(stmt).first()
 
-    def git_target(self, settings: Settings | None = None) -> GitTarget:
+    def git_target(
+        self,
+        settings: Settings | None = None,
+        *,
+        actor: str = SYSTEM_ACTOR,
+        audit: AuditStore | None = None,
+    ) -> GitTarget:
         """This tenant's git target: the stored row if there is one, else the env.
 
         The ONE resolution every consumer uses — ``github_sync`` (which project
@@ -552,12 +597,19 @@ class CardStore:
         It hangs off the store because the store is what knows the tenant: every
         consumer is already handed a tenant-scoped one, so tenant-correct
         configuration needs no tenant id threaded through five call signatures.
+
+        ``actor`` and ``audit`` are stamped onto the audit entry the credential
+        writes IF it is fetched (RFC-0020 §3.4). Resolving a target does not read
+        a credential — the panel asks for a target on every poll and must not
+        decrypt anything to answer — so a target that is never handed to a
+        provider produces no entry.
         """
         settings = settings or get_settings()
+        credential = self.git_credential(settings, actor=actor, audit=audit)
         row = self.git_config_row()
         if row is None:
-            return target_from_settings(settings, self.tenant)
-        return target_from_row(row, settings)
+            return target_from_settings(settings, self.tenant, credential)
+        return target_from_row(row, settings, credential)
 
     def seed_git_config_from_env(self, settings: Settings | None = None) -> GitConfig | None:
         """Materialise this tenant's config from the legacy env vars. Once.
@@ -616,8 +668,235 @@ class CardStore:
         """
         self._upsert_git_config(validated_fields(update), settings)
 
+    # ── Tenant git credential (RFC-0020 §3.4) ────────────────────────────────
+    #
+    # Hung off the card store for exactly the reason the git configuration is
+    # (see the comment above ``git_config_row``): the store is what knows the
+    # tenant, and a credential is the one resource where a second, subtly
+    # different tenant-scoping mechanism would be a cross-tenant read.
+    #
+    # The crypto itself is in :mod:`cfactory.credentials`. What lives here is the
+    # storage, the tenant scope, and the audit entry every read appends.
+
+    def audit_store(self) -> AuditStore:
+        """The audit chain a credential read is appended to.
+
+        The SAME chain (RFC-0001a) every card and config mutation uses, on this
+        store's own database — cards, configurations, credentials and audit
+        entries all share one ``Base``, so a credential read is chained into the
+        same tamper-evident sequence as the action that needed it. Built lazily
+        because most stores never read a credential.
+        """
+        if self._audit is None:
+            self._audit = AuditStore(self._url)
+        return self._audit
+
+    def git_credential_row(self) -> GitCredentialRow | None:
+        """This tenant's sealed credential row, or None if it has none."""
+        stmt = select(GitCredentialRow).where(GitCredentialRow.tenant_id == self.tenant)
+        with self._session() as session:
+            return session.scalars(stmt).first()
+
+    def git_credential(
+        self,
+        settings: Settings | None = None,
+        *,
+        actor: str = SYSTEM_ACTOR,
+        audit: AuditStore | None = None,
+    ) -> Credential:
+        """This tenant's credential handle — never the credential.
+
+        A stored credential is the answer whether or not it can currently be
+        unsealed; it does NOT fall back to the deployment's environment token.
+        Falling back would hand tenant A the operator's credential the moment
+        tenant A's own record became unreadable, which is the cross-tenant leak
+        this whole phase exists to close. Only a tenant that has stored nothing
+        uses the environment one.
+
+        ``configured`` is answered WITHOUT decrypting: a row exists and this
+        process holds the key that wraps it. A key of the right id but the wrong
+        material therefore reads as configured and fails at fetch time, which the
+        board reports as a rejected credential rather than as a green one — the
+        alternative is decrypting a secret to render a boolean on every poll.
+        """
+        settings = settings or get_settings()
+        row = self.git_credential_row()
+        if row is None:
+            return env_credential(provider_token(settings))
+        return Credential(
+            CredentialInfo(
+                configured=self._holds_key(row.key_version, settings),
+                source="tenant",
+                updated_at=_as_utc(row.updated_at),
+                key_version=row.key_version,
+            ),
+            lambda: self._fetch_git_credential(settings, actor=actor, audit=audit),
+        )
+
+    def _holds_key(self, key_version: str, settings: Settings) -> bool:
+        """Whether this process holds the KEK that wraps *key_version*."""
+        try:
+            keyring = load_keyring(settings)
+        except CredentialError as exc:
+            logger.error("credential key is unusable for tenant %s: %s", self.tenant, exc)
+            return False
+        return keyring is not None and keyring.find(key_version) is not None
+
+    def _fetch_git_credential(
+        self, settings: Settings, *, actor: str, audit: AuditStore | None
+    ) -> str | None:
+        """Unseal this tenant's credential for ONE provider call, and audit it.
+
+        Every outcome is chained, including the failures: "the credential could
+        not be read at 14:02" is precisely the entry an operator needs when a
+        board goes quiet after a key rotation, and an audit trail that only
+        records the successes cannot answer that.
+
+        Never raises. A missing key, an unusable key or an altered record yields
+        no credential, which the board renders as ``credential_missing`` and
+        keeps serving — a credential problem degrades the board, it does not take
+        it down.
+        """
+        row = self.git_credential_row()
+        if row is None:
+            return None
+        try:
+            keyring = load_keyring(settings)
+            if keyring is None:
+                # Raised rather than returned so every failure leaves by one
+                # path — logged, audited, and yielding no credential.
+                raise CredentialError(
+                    f"no credential key is configured, so the stored credential for "
+                    f"tenant {self.tenant!r} cannot be read"
+                )
+            secret = unseal(row.sealed(), tenant=self.tenant, keyring=keyring)
+        except CredentialError as exc:
+            # The message names the tenant and the failure, never the record and
+            # never a fragment of the credential.
+            logger.error("credential read failed for tenant %s: %s", self.tenant, exc)
+            self._audit_credential(audit, actor, kind="read_git_credential", ok=False)
+            return None
+        self._audit_credential(audit, actor, kind="read_git_credential", ok=True)
+        self._rewrap_git_credential(row, keyring)
+        return secret
+
+    def _rewrap_git_credential(self, row: GitCredentialRow, keyring: Any) -> None:
+        """Move a record onto the active KEK, if it is not already on it.
+
+        The rotation story: put the new key FIRST in ``CFACTORY_CREDENTIAL_KEY``,
+        keep the old one listed, and records migrate as they are used. The
+        credential is not decrypted to do it — only its data key is re-wrapped
+        (see :func:`cfactory.credentials.rewrap`).
+
+        ponytail: lazy, on read. A tenant whose credential is never used never
+        migrates, so check every tenant reports the new ``key_version`` in the
+        panel before dropping the old key from the environment. Upgrade path if
+        that ever bites: sweep every row at boot.
+        """
+        try:
+            rewrapped = rewrap(row.sealed(), tenant=self.tenant, keyring=keyring)
+            if rewrapped is not None:
+                self._store_sealed(rewrapped)
+                logger.info(
+                    "re-wrapped tenant %s git credential onto key %s",
+                    self.tenant,
+                    rewrapped.key_version,
+                )
+        except CredentialError as exc:  # pragma: no cover — unwrapping just succeeded
+            logger.warning("could not re-wrap tenant %s git credential: %s", self.tenant, exc)
+
+    def set_git_credential(self, secret: str, settings: Settings | None = None) -> CredentialInfo:
+        """Store (or replace) this tenant's credential, encrypted.
+
+        FAILS CLOSED: with no ``CFACTORY_CREDENTIAL_KEY`` configured this raises
+        :class:`~cfactory.credentials.CredentialError` rather than writing
+        anything. There is no plaintext path, not even a degraded one.
+        """
+        settings = settings or get_settings()
+        value = (secret or "").strip()
+        if not value:
+            raise CredentialError("credential must not be empty")
+        sealed = seal(value, tenant=self.tenant, keyring=require_keyring(settings))
+        self._store_sealed(sealed)
+        # A new credential makes any recorded rejection obsolete — it was about
+        # the credential this one replaces. Only touched when a configuration row
+        # already exists: storing a credential must not materialise an empty
+        # configuration that then reads as a deliberate choice.
+        if self.git_config_row() is not None:
+            self._upsert_git_config({"credential_rejected": None}, settings)
+        return CredentialInfo(
+            configured=True,
+            source="tenant",
+            updated_at=_now(),
+            key_version=sealed.key_version,
+        )
+
+    def clear_git_credential(self) -> bool:
+        """Forget this tenant's credential. True if there was one.
+
+        The revocation path: a credential that has leaked has to be removable
+        from the surface that stored it, not by an operator with a SQL client.
+        """
+        stmt = select(GitCredentialRow).where(GitCredentialRow.tenant_id == self.tenant)
+        with self._session.begin() as session:
+            row = session.scalars(stmt).first()
+            if row is None:
+                return False
+            session.delete(row)
+            return True
+
+    def _store_sealed(self, sealed: Any) -> None:
+        """Insert-or-update this tenant's sealed credential.
+
+        Same constraint-not-check rule as ``_upsert_git_config``: two concurrent
+        first-ever writes both find no row and both insert, and the unique index
+        rejects the loser, which then takes the update path.
+        """
+        stmt = select(GitCredentialRow).where(GitCredentialRow.tenant_id == self.tenant)
+        for attempt in range(2):
+            try:
+                with self._session.begin() as session:
+                    row = session.scalars(stmt).first()
+                    if row is None:
+                        session.add(
+                            GitCredentialRow(
+                                tenant_id=self.tenant,
+                                key_version=sealed.key_version,
+                                wrapped_key=sealed.wrapped_key,
+                                ciphertext=sealed.ciphertext,
+                            )
+                        )
+                    else:
+                        row.key_version = sealed.key_version
+                        row.wrapped_key = sealed.wrapped_key
+                        row.ciphertext = sealed.ciphertext
+                        row.updated_at = _now()
+                    session.flush()
+                    return
+            except IntegrityError:
+                if attempt:  # pragma: no cover — the row exists by the retry
+                    raise
+
+    def _audit_credential(
+        self, audit: AuditStore | None, actor: str, *, kind: str, ok: bool
+    ) -> None:
+        """Append a credential access to the shared tamper-evident chain."""
+        (audit or self.audit_store()).record(
+            actor=actor,
+            kind=kind,
+            correlation_key=f"tenant:{self.tenant}",
+            target_service=_CREDENTIAL_TARGET,
+            endpoint=f"/api/tenants/{self.tenant}/git-credential",
+            status_code=200 if ok else 0,
+            ok=ok,
+        )
+
     def record_git_verification(
-        self, *, error: str | None, settings: Settings | None = None
+        self,
+        *,
+        error: str | None,
+        rejected: bool | None = None,
+        settings: Settings | None = None,
     ) -> None:
         """Record the outcome of a verify against this tenant's configuration.
 
@@ -639,7 +918,14 @@ class CardStore:
                 settings,
             )
         self._upsert_git_config(
-            {"verified_at": None if error else _now(), "verify_error": error}, settings
+            {
+                "verified_at": None if error else _now(),
+                "verify_error": error,
+                # A successful verify proves the credential was ACCEPTED, so it
+                # clears any earlier rejection as well as recording the success.
+                "credential_rejected": bool(rejected) if error else None,
+            },
+            settings,
         )
 
     def _upsert_git_config(self, fields: dict[str, Any], _settings: Settings | None = None) -> None:

@@ -41,7 +41,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
@@ -149,7 +149,11 @@ class HttpGitHubProvider:
     """
 
     _repo: str
-    _token: str | None = None
+    # repr=False so the credential cannot ride out in a traceback, a log line or
+    # a debugger dump of this object. A dataclass renders every field by default,
+    # which for a token-carrying object is a leak waiting for the first
+    # ``logger.debug("provider=%s", provider)``.
+    _token: str | None = field(default=None, repr=False)
     _base_url: str = "https://api.github.com"
     _transport: httpx.AsyncBaseTransport | None = None
 
@@ -339,9 +343,18 @@ def build_provider(
     Raises ``ValueError`` on an unknown provider or a project path the provider
     cannot address — both are configuration errors, and the caller turns them into
     a visible ``github_sync_error`` on the card rather than a 500.
+
+    **This is the credential injection point (RFC-0020 §3.4).** The target does
+    not carry a token; it carries a handle, and the plaintext is fetched HERE,
+    once, for the provider about to be built. Nothing above this line has it,
+    nothing holds it after the provider is collected, and the fetch is what
+    writes the audit entry. Every provider takes it as an explicit argument —
+    there is no ambient-auth path in this backend to defend (see the module
+    docstring on why ``gh`` is not used), so the leak surface is logs, exception
+    text and API responses, and that is where the guards are.
     """
     kind = (target.provider or ProviderType.GITHUB.value).strip().lower()
-    token = target.token
+    token = target.credential.token()
     base_url = target.base_url
 
     if kind == ProviderType.GITHUB.value:

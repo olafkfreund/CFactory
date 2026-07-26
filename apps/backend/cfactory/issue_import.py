@@ -269,10 +269,10 @@ def import_issues(
     returns ``ok=False`` with the reason, rather than 500ing the board.
     """
     settings = settings or get_settings()
-    if not sync_enabled(settings):
+    git = store.git_target(settings)
+    if not sync_enabled(git):
         return _result(project or "", ok=True, reason="git provider sync not configured")
 
-    git = store.git_target(settings)
     # The tenant's intake project is where a backfill READS from, falling back to
     # the sync project (RFC-0020 §3.3). An explicit argument still wins — the
     # import endpoint takes a project so a one-off pull from another repo does

@@ -57,14 +57,78 @@ Conventions in the tables below:
 | `CFACTORY_GITHUB_REPO` | _(unset)_ | **DEPRECATED — a one-release seed** | `owner/repo` a `ready` card opens its issue in. RFC-0020 §3.3 retired it as configuration on the same seed rule as `CFACTORY_INTAKE_PROJECT_ID`: it is now the tenant's `project`, editable in Settings > Git integration. Unset and unconfigured = cards can only *adopt* an existing issue (set the card's `issue_ref`), never create one. |
 | `CFACTORY_GITHUB_API_URL` | `https://api.github.com` | no | GitHub API base. Override for GitHub Enterprise. Since RFC-0020 §3.3 it SEEDS a GitHub tenant's `base_url`; the stored value is authoritative thereafter. |
 | `CFACTORY_GIT_PROVIDER` | `github` | **DEPRECATED — a one-release seed** | Which git host the board syncs cards with (RFC-0020 phase 1): `github`, `gitlab` or `azure_devops`. RFC-0020 §3.3 retired it as configuration on the same seed rule: it is now the tenant's `provider`, editable in Settings > Git integration. GitLab/Azure DevOps are served by the fleet's canonical provider layer, vendored at `apps/backend/runners/github/`. |
-| `CFACTORY_GIT_PROVIDER_TOKEN` | _(unset)_ | no | Credential for the selected provider — the provider-neutral name for `CFACTORY_GITHUB_TOKEN`; set either, this one wins. **Still deployment-level, and deliberately so:** RFC-0020 §3.3 stores a tenant's provider and project and never a credential (the copilot precedent), so a tenant with a project and no usable token here reports `credential_missing`. Phases 3-4 move credentials into the tenant. In a multi-tenant deploy every tenant currently shares this one token — safe for single-tenant, explicitly not a credential isolation boundary. Carries the same deliberate omission: the bare `GITHUB_TOKEN`/`GH_TOKEN` are **not** accepted. Server-side only. |
+| `CFACTORY_GIT_PROVIDER_TOKEN` | _(unset)_ | no | Deployment-wide credential for the selected provider — the provider-neutral name for `CFACTORY_GITHUB_TOKEN`; set either, this one wins. Since RFC-0020 §3.4 it is the **fallback**, used only by a tenant that has stored no credential of its own (see `CFACTORY_CREDENTIAL_KEY`), which keeps every existing single-tenant deploy working untouched. Tenants sharing it are not isolated from each other's credential — storing a per-tenant one is what makes them so. Carries the same deliberate omission: the bare `GITHUB_TOKEN`/`GH_TOKEN` are **not** accepted. Server-side only. |
 | `CFACTORY_GIT_PROVIDER_URL` | _(unset)_ | **DEPRECATED — a one-release seed** | Base URL of the provider instance (self-hosted GitLab, Azure DevOps server, GitHub Enterprise). RFC-0020 §3.3 retired it as configuration on the same seed rule: it is now the tenant's `base_url`. Unset and unconfigured = the provider's public default (`CFACTORY_GITHUB_API_URL` for GitHub, `https://gitlab.com`, `https://dev.azure.com`). |
 | `CFACTORY_IMPORT_STATE` | `open` | no | Which issues a *backfill* imports (RFC-0020 section 3.6): `open`, `closed` or `all`. Deliberately the wide default — "connect my repo" means "show me my backlog", and a filter that quietly hides most of it fails with no error to diagnose. The incremental pass always uses `all` regardless, so closures and reopenings are not missed. |
 | `CFACTORY_IMPORT_LABELS` | _(unset)_ | no | Comma-separated label filter for the backfill. Empty = no filter. Opt-in narrowing, never the default. |
 | `CFACTORY_IMPORT_MAX` | `1000` | no | Ceiling on issues brought in by one import. Truncation is **reported** in the result and in the board's import summary, never silent. |
 | `CFACTORY_IMPORT_POLL` | `false` | no | On: re-import on a cadence so issues filed after the first import appear. Off by default like every other background loop here. Import is **poll-based, not live** — there is no webhook receiver. |
 | `CFACTORY_IMPORT_POLL_SECONDS` | `300` | no | Poll cadence when `CFACTORY_IMPORT_POLL` is on. Five minutes: fast enough that a board is rarely more than a coffee out of date, slow enough that a hundred tenants do not exhaust a rate limit. |
+| `CFACTORY_CREDENTIAL_KEY` | _(unset)_ | to store any per-tenant credential | Key-encryption key for the per-tenant git credential store (RFC-0020 §3.4). Format `<key-id>:<base64 of 32 random bytes>`, comma-separated when rotating with the **active key first**. See the full write-up directly below this table. Server-side only. |
 | `CFACTORY_AUDIT_HMAC_SECRET` | dev secret (`dev-insecure-...`) | in hosted | HMAC secret anchoring the tamper-evident audit chain. MUST be overridden in any hosted/shared deploy (API keys or multi-tenant set) — the default is a clearly-labelled dev value and startup hard-warns if it is left in place in a non-local posture. Server-side only. |
+
+## `CFACTORY_CREDENTIAL_KEY`, in full
+
+> **As an operator**, I want per-tenant git credentials encrypted with a key I
+> control and can rotate, **so that** a database dump is not a list of everyone's
+> tokens and "we have rotated" is something I can actually do.
+
+RFC-0020 §3.4. Each tenant's git credential is sealed with its own random
+256-bit data key (AES-256-GCM); that data key is sealed with **this** value, and
+the row records which key version did the wrapping. This is the only thing
+standing between the `tenant_git_credential` table and plaintext credentials, so
+it belongs in the deployment's secret store (agenix -> the `factory-secrets`
+Kubernetes secret), never in a values file or a commit.
+
+**Format.**
+
+```
+CFACTORY_CREDENTIAL_KEY=v1:<base64 of 32 random bytes>
+```
+
+Bare base64 with no `<key-id>:` prefix is read as key id `v1`, so a single-key
+deployment need not invent one. During a rotation, list several — **active key
+first**, every older key still present:
+
+```
+CFACTORY_CREDENTIAL_KEY=v2:<new base64>,v1:<old base64>
+```
+
+**How to generate one.**
+
+```
+python3 -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())"
+```
+
+or, equivalently:
+
+```
+openssl rand -base64 32
+```
+
+It must decode to exactly 32 bytes. A passphrase, a truncated value or bad base64
+is **refused at load** with an error saying so — it is never hashed or stretched
+into something key-shaped, because that would turn a typo into a weaker key
+nobody notices.
+
+**Rotating.** Put the new key first and keep the old one listed. Each stored
+credential is re-wrapped onto the new key the next time it is used, which
+re-encrypts only the data key and never decrypts the credential. Watch the
+`credential.key_version` shown in Settings > Git integration: once every tenant
+reports the new id, the old key can be dropped from the variable. A tenant whose
+credential is never used never migrates, so check before you drop.
+
+**What happens when it is unset.** Storing a credential is **refused** with a 503
+naming the variable, and nothing is written — there is no plaintext fallback and
+no derived-from-nothing key. Existing deployments are unaffected: tenants keep
+using `CFACTORY_GIT_PROVIDER_TOKEN`, exactly as before.
+
+**What happens if it is lost.** Every stored credential becomes permanently
+undecryptable. There is no recovery, no escrow and no backdoor — that is what
+authenticated encryption means. The board does not break: affected tenants report
+`credential_missing`, every read keeps serving, and each failed decryption is
+recorded in the audit chain. The fix is to store the credentials again. Back this
+value up wherever you back up `CFACTORY_AUDIT_HMAC_SECRET`.
 
 ## Copilot external secret
 
@@ -105,6 +169,7 @@ container start. These are container **runtime** env — not `VITE_*`, not backe
 Set these to real values in any hosted/shared deployment — never commit them:
 
 - `CFACTORY_AUDIT_HMAC_SECRET` — overrides the clearly-labelled dev default; startup hard-warns if the default is left in a non-local posture.
+- `CFACTORY_CREDENTIAL_KEY` — encrypts every per-tenant git credential. Without it, no credential can be stored; **lose it and the stored credentials are unrecoverable**. Back it up alongside the audit secret.
 - `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_AIFACTORY_TOKEN` — upstream factory auth.
 - `CFACTORY_API_KEYS` — scoped keys that gate the cockpit API.
 - `CFACTORY_MCP_SECRET` — legacy full-scope credential for the MCP transport (`CFACTORY_API_KEYS` also gates `/mcp`, per declared tool scope).
@@ -126,7 +191,9 @@ Set these to real values in any hosted/shared deployment — never commit them:
   variable.** RFC-0020 §3.3 made it a tenant resource, edited in Settings > Git
   integration and reachable at `/api/tenants/{tenant}/git-config` (with MCP
   twins). The four variables marked DEPRECATED above seed it once on first boot
-  and are removed next release. The credential is the exception: it stays
-  deployment-level until phase 3.
+  and are removed next release. Since RFC-0020 §3.4 the **credential** is a
+  tenant resource too (`/api/tenants/{tenant}/git-credential`, write-only,
+  encrypted with `CFACTORY_CREDENTIAL_KEY`); `CFACTORY_GIT_PROVIDER_TOKEN`
+  remains the fallback for any tenant that has stored none.
 - Deep operator detail — per-variable read location, Helm knobs and chart gaps —
   lives in the in-repo TechDocs at `techdocs/dependencies.md`.

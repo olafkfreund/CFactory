@@ -73,7 +73,7 @@ from runners.github.providers.protocol import IssueData
 
 from .cards import Card, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
-from .git_config import PROJECT_PATTERN, GitTarget, provider_token
+from .git_config import PROJECT_PATTERN, GitTarget
 from .git_providers import IssueProvider, build_provider, run_sync
 
 logger = logging.getLogger(__name__)
@@ -113,16 +113,22 @@ class IssueRef:
         return cls(match.group(1), int(match.group(2)))
 
 
-def sync_enabled(settings: Settings) -> bool:
-    """True when issue sync is configured at all.
+def sync_enabled(target: GitTarget) -> bool:
+    """True when issue sync is configured for THIS TENANT.
 
     Unconfigured is the default and means OFF: a card write makes no network
     call and opens no issue. This is what keeps the sync inert for every deploy
-    that has not opted in — and note what "configured" means: an explicitly set
+    that has not opted in — and note what "configured" means: a credential the
+    tenant stored (RFC-0020 §3.4) or an explicitly set
     ``CFACTORY_GIT_PROVIDER_TOKEN``/``CFACTORY_GITHUB_TOKEN``, never the ambient
     ``GITHUB_TOKEN``/``GH_TOKEN`` a logged-in ``gh`` leaves lying around.
+
+    Takes the resolved target rather than ``Settings`` since phase 3: the answer
+    is now per tenant, and asking the environment would say "off" for a tenant
+    that has a perfectly good credential of its own. Answered WITHOUT decrypting
+    anything — ``configured`` is presence, not plaintext.
     """
-    return bool(provider_token(settings))
+    return target.credential.configured
 
 
 def _issue_body(card: Card) -> str:
@@ -262,9 +268,9 @@ def sync_card(
     returned — the board neither 500s nor pretends the sync happened.
     """
     settings = settings or get_settings()
-    if not sync_enabled(settings):
-        return {"synced": False, "ok": True, "reason": "github sync not configured"}
     target = store.git_target(settings)
+    if not sync_enabled(target):
+        return {"synced": False, "ok": True, "reason": "github sync not configured"}
 
     ref = IssueRef.parse(card.issue_ref)
     created = ref is None
@@ -334,8 +340,9 @@ def maybe_sync(
     MCP tool) still says plainly that no project is configured.
     """
     settings = settings or get_settings()
-    if not sync_enabled(settings):
+    target = store.git_target(settings)
+    if not sync_enabled(target):
         return None
-    if not card.issue_ref and not (card.status == "ready" and store.git_target(settings).project):
+    if not card.issue_ref and not (card.status == "ready" and target.project):
         return None
     return sync_card(store, card, settings=settings, transport=transport)

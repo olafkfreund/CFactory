@@ -41,15 +41,17 @@ doing:
 
 | If you have | Use tier | Extra config |
 |---|---|---|
-| A reachable AIFactory and a project id | `low` or `medium` | `CFACTORY_INTAKE_PROJECT_ID=<project uuid>` |
+| A reachable AIFactory and a project id | `low` or `medium` | An **AIFactory project id** in Settings > Git integration |
 | A reachable PFactory only | `hard` | none |
 | Neither (just exploring the board) | leave tier unset | none — the card will simply never dispatch |
 
-For the hosted deployment the intake project is already set to `aifactory-demo`
-(`5d78d4b9-35f9-4445-92c1-78f3ff60a494`), chosen because it is the sacrificial
-demo repo — an autonomous build writes real code, so the default destination
-should be somewhere a wrong build costs nothing. See
-[`CFACTORY_INTAKE_PROJECT_ID` in full](planning-board.md#cfactory_intake_project_id-in-full).
+For the hosted deployment the AIFactory project is already set to
+`aifactory-demo` (`5d78d4b9-35f9-4445-92c1-78f3ff60a494`), chosen because it is
+the sacrificial demo repo — an autonomous build writes real code, so the default
+destination should be somewhere a wrong build costs nothing. Since RFC-0020
+section 3.3 you set it in the cockpit (**Settings > Git integration**) rather
+than by redeploying with `CFACTORY_INTAKE_PROJECT_ID`; see
+[Git integration: the settings panel](planning-board.md#git-integration-the-settings-panel).
 
 Throughout, `$CF` is your CFactory base URL:
 
@@ -189,7 +191,7 @@ Which door it went through depends on the tier you set:
 
 | Tier | Where it went | What it needed |
 |---|---|---|
-| `low` / `medium` | AIFactory `POST /api/tasks/from-issue` — the skip-planning fast path | `CFACTORY_INTAKE_PROJECT_ID` |
+| `low` / `medium` | AIFactory `POST /api/tasks/from-issue` — the skip-planning fast path | The tenant's AIFactory project id |
 | `hard` | PFactory `POST /api/plan/sessions/ingest-text` — full decomposition first | nothing extra |
 
 ### If the card came back `blocked` instead
@@ -197,11 +199,11 @@ Which door it went through depends on the tier you set:
 That is the loud failure path, and the reason is in the response. The two you
 will actually hit:
 
-- **`no intake project configured — set CFACTORY_INTAKE_PROJECT_ID to dispatch a
-  low/medium card to AIFactory`.** AIFactory's `from-issue` needs a `project_id`
-  and a card carries none, so it comes from deployment config. Set it and PATCH
-  again — the card is still `blocked` with a null `correlation_key`, so it is
-  fully re-promotable.
+- **`no AIFactory project configured — set one in Settings > Git integration to
+  dispatch a low/medium card to AIFactory`.** AIFactory's `from-issue` needs a
+  `project_id` and a card carries none, so it comes from the tenant's git
+  configuration. Set it in the panel and PATCH again — the card is still
+  `blocked` with a null `correlation_key`, so it is fully re-promotable.
 - **An upstream status code in the audit entry.** The dispatch was attempted and
   AIFactory or PFactory rejected it — bad project id, service down, bad
   credential. Check `CFACTORY_UPSTREAM_TOKEN` and that the relevant

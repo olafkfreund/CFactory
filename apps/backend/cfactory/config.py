@@ -68,11 +68,19 @@ class Settings(BaseSettings):
     # server-side — it is never sent to the browser.
     aifactory_token: str | None = None
 
+    # ── DEPRECATED: a one-release SEED, not configuration (RFC-0020 §3.3) ────
     # AIFactory project a dispatched planning card is built in (RFC-0019 §3.2).
     # AIFactory's `/api/tasks/from-issue` requires a project_id and a card
-    # carries none, so it is deployment config. Unset means low/medium cards
-    # cannot be dispatched — the card is blocked with that reason rather than
-    # silently accepted. `hard` cards route through PFactory and need no project.
+    # carries none. This used to be the ONLY way to set it, which is the problem
+    # RFC-0020 §3.3 names: an operator could not tell from the portal what it
+    # was, why it existed, or what to set it to.
+    #
+    # It is now the TENANT's git configuration (`aifactory_project_id`), editable
+    # in Settings > Git integration. This variable survives one release as a
+    # seed: on first boot a tenant with no stored config materialises one from it
+    # (CardStore.seed_git_config_from_env), after which the stored value is
+    # authoritative and edits are never overwritten by a restart. Removed next
+    # release. Note it is an AIFactory project UUID, not a repository path.
     intake_project_id: str | None = None
 
     # GitHub card <-> issue sync (RFC-0019 §3.5, Phase 6). Sync is OFF unless
@@ -85,19 +93,22 @@ class Settings(BaseSettings):
     # it would turn the feature on by accident for every developer, which is
     # exactly what happened the first time this was wired that way.
     github_token: str | None = None
-    # The repository path a card's issue is OPENED in: "owner/repo" on GitHub,
-    # "group/project" (subgroups allowed) on GitLab, "organization/project/repo"
-    # on Azure DevOps. Adopting an existing issue needs no default — the card's
-    # own issue_ref names its project. Unset means cards can only adopt, never
-    # create.
+    # DEPRECATED as configuration, a one-release SEED (RFC-0020 §3.3), exactly
+    # like intake_project_id above: the repository a card's issue is OPENED in is
+    # now the TENANT's `project`, editable in Settings > Git integration. Format
+    # unchanged: "owner/repo" on GitHub, "group/project" (subgroups allowed) on
+    # GitLab, "organization/project/repo" on Azure DevOps. Adopting an existing
+    # issue needs no default — the card's own issue_ref names its project.
     github_repo: str | None = None
-    # Overridable for GitHub Enterprise (and pinned in tests).
+    # Overridable for GitHub Enterprise (and pinned in tests). Seeds the tenant's
+    # `base_url` on a GitHub deploy; per-tenant thereafter.
     github_api_url: str = "https://api.github.com"
 
     # Which git host the board syncs cards with (RFC-0020 phase 1): "github"
-    # (default), "gitlab" or "azure_devops". The default keeps every existing
-    # deploy on exactly the behaviour it has today — the three settings below are
-    # inert until this is changed.
+    # (default), "gitlab" or "azure_devops". DEPRECATED as configuration on the
+    # same one-release seed rule as the two above — the tenant's `provider` is
+    # the answer now. The default keeps every existing deploy on exactly the
+    # behaviour it has today.
     git_provider: str = "github"
     # Credential for the selected provider. The provider-neutral name for
     # `github_token` above: set either, this one wins. It carries the same
@@ -108,6 +119,8 @@ class Settings(BaseSettings):
     # Base URL of the provider instance — a self-hosted GitLab, an Azure DevOps
     # server, a GitHub Enterprise. Unset means the provider's public default
     # (`github_api_url` for GitHub, https://gitlab.com, https://dev.azure.com).
+    # DEPRECATED as configuration on the same one-release seed rule: the tenant's
+    # `base_url` is the answer now.
     git_provider_url: str | None = None
 
     # ── Importing a repo's EXISTING issues (RFC-0020 §3.6) ───────────────────

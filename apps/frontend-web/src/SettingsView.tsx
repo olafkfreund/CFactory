@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchSettings, updateCopilotSettings, type CopilotSettings } from "./api";
+import GitConfigPanel from "./GitConfigPanel";
 import { IconRobot, IconCheck } from "./icons";
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -16,6 +17,9 @@ function defaultModelFor(provider: string, current: CopilotSettings | null): str
 
 export default function SettingsView({ reloadSignal }: { reloadSignal: number }) {
   const [settings, setSettings] = useState<CopilotSettings | null>(null);
+  // Which tenant this cockpit is: the backend resolves it from the header
+  // oauth2-proxy injects, so the git-config panel has to be told (RFC-0020 §3.3).
+  const [tenant, setTenant] = useState<string | null>(null);
   const [provider, setProvider] = useState("claude");
   const [model, setModel] = useState("");
   const [saving, setSaving] = useState(false);
@@ -28,6 +32,7 @@ export default function SettingsView({ reloadSignal }: { reloadSignal: number })
       .then((s) => {
         if (!alive) return;
         setSettings(s);
+        setTenant(s.tenant);
         setProvider(s.provider);
         setModel(s.model);
         setErr(null);
@@ -69,7 +74,10 @@ export default function SettingsView({ reloadSignal }: { reloadSignal: number })
     <>
       <div className="page-head">
         <h1>Settings</h1>
-        <p>Cockpit configuration. Choose which LLM powers the copilot — changes apply to the next question.</p>
+        <p>
+          Cockpit configuration. Choose which LLM powers the copilot, and which git host and
+          project this board syncs with.
+        </p>
       </div>
 
       {err && <div className="banner banner--error">{err}</div>}
@@ -149,6 +157,8 @@ export default function SettingsView({ reloadSignal }: { reloadSignal: number })
             )}
           </div>
         </div>
+
+        <GitConfigPanel tenant={tenant} reloadSignal={reloadSignal} />
       </div>
     </>
   );

@@ -38,7 +38,7 @@ Conventions in the tables below:
 | `CFACTORY_OBSERVE_API_URL` | `http://localhost:5080` | no | OpenObserve health-probe base for the Services reachability view (not a PARR factory; never polled/hydrated). In-cluster: `http://observe.factory.svc.cluster.local:5080`. |
 | `CFACTORY_UPSTREAM_TOKEN` | _(unset)_ | in hosted | Shared bearer token sent as `Authorization: Bearer <token>` on every adapter call, live-progress poll and upstream WS subscription. Leave unset only for local dev where the factories run `APP_DISABLE_AUTH=true`. Server-side only. |
 | `CFACTORY_AIFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | Service token for AIFactory's live-agent console WebSocket. Server-side only. |
-| `CFACTORY_INTAKE_PROJECT_ID` | _(unset)_ | if any `low`/`medium` card is promoted | AIFactory project id a dispatched planning card is built into (RFC-0019 §3.2). AIFactory's `/api/tasks/from-issue` requires a `project_id` and a card carries none, so it is deployment config. Unset = a `low`/`medium` card promoted to `ready` is moved to `blocked` with that reason (loud, never silently accepted); `hard` cards route to PFactory and need no project. Recommended: the sacrificial demo project — hosted runs `5d78d4b9-35f9-4445-92c1-78f3ff60a494` (`aifactory-demo`) — because an autonomous build writes real code. No dedicated Helm key; inject via `config.extraEnv`. See [the planning-board guide](../guides/planning-board.md#cfactory_intake_project_id-in-full). |
+| `CFACTORY_INTAKE_PROJECT_ID` | _(unset)_ | **DEPRECATED — a one-release seed** | AIFactory project id a dispatched planning card is built into (RFC-0019 §3.2). **RFC-0020 §3.3 retired it as configuration:** it is now the tenant's `aifactory_project_id`, editable in Settings > Git integration. It survives ONE release as a seed — on first boot a tenant with no stored git config materialises one from it, after which the stored value is authoritative and a restart never overwrites an edit. Removed next release; do not set it on a new deployment. Note it is an AIFactory project id, **not** a repository path. Unset and unconfigured = a `low`/`medium` card promoted to `ready` is moved to `blocked` with that reason (loud, never silently accepted); `hard` cards route to PFactory and need no project. Recommended value and the full story: [the planning-board guide](../guides/planning-board.md#git-integration-the-settings-panel). |
 | `CFACTORY_DATABASE_URL` | _(unset)_ | no | Postgres connection string for the WorkItem correlation store. Unset = local SQLite under the workspace root. Also stores the RFC-0019 planning cards, in their own table. |
 | `CFACTORY_SUBSCRIBE_UPSTREAMS` | `false` | no | On: connect to each upstream `/ws/events` feed at startup. Off: no upstream WS (avoids reconnect loops against down services). |
 | `CFACTORY_LIVE_PROGRESS` | `false` | no | On: poll PFactory/TFactory + subscribe AIFactory progress and broadcast `{type:"progress"}`. Off: no live-progress. |
@@ -54,11 +54,11 @@ Conventions in the tables below:
 | `CFACTORY_PUBLIC_API_URL` | _(unset)_ | no | Public base URL of the token-gated API shown on `/settings/token` for editor/external clients. Display only. |
 | `CFACTORY_MULTI_TENANT` | `false` | no | On: resolve tenant per request from the `X-Tenant-Id` header (hosted, injected by oauth2-proxy from the Keycloak tenant claim). Off: single `default` tenant. Planning cards are scoped the same way, and `card_key` is unique per tenant — two tenants may each hold an `FCT-1`. |
 | `CFACTORY_GITHUB_TOKEN` | _(unset)_ | no | Enables GitHub card <-> issue sync (RFC-0019 section 3.5). Unset = sync OFF: no network call on a card write, no issue opened. The bare `GITHUB_TOKEN`/`GH_TOKEN` are deliberately **not** accepted — this credential opens issues in a real repo, so an ambient `gh` login must not switch the feature on. Server-side only. |
-| `CFACTORY_GITHUB_REPO` | _(unset)_ | no | `owner/repo` a `ready` card opens its issue in. Unset = cards can only *adopt* an existing issue (set the card's `issue_ref`), never create one. |
-| `CFACTORY_GITHUB_API_URL` | `https://api.github.com` | no | GitHub API base. Override for GitHub Enterprise. |
-| `CFACTORY_GIT_PROVIDER` | `github` | no | Which git host the board syncs cards with (RFC-0020 phase 1): `github`, `gitlab` or `azure_devops`. The default keeps an existing deploy on exactly the behaviour it has today. GitLab/Azure DevOps are served by the fleet's canonical provider layer, vendored at `apps/backend/runners/github/`. |
-| `CFACTORY_GIT_PROVIDER_TOKEN` | _(unset)_ | no | Credential for the selected provider — the provider-neutral name for `CFACTORY_GITHUB_TOKEN`; set either, this one wins. Carries the same deliberate omission: the bare `GITHUB_TOKEN`/`GH_TOKEN` are **not** accepted. Server-side only. |
-| `CFACTORY_GIT_PROVIDER_URL` | _(unset)_ | no | Base URL of the provider instance (self-hosted GitLab, Azure DevOps server, GitHub Enterprise). Unset = the provider's public default (`CFACTORY_GITHUB_API_URL` for GitHub, `https://gitlab.com`, `https://dev.azure.com`). |
+| `CFACTORY_GITHUB_REPO` | _(unset)_ | **DEPRECATED — a one-release seed** | `owner/repo` a `ready` card opens its issue in. RFC-0020 §3.3 retired it as configuration on the same seed rule as `CFACTORY_INTAKE_PROJECT_ID`: it is now the tenant's `project`, editable in Settings > Git integration. Unset and unconfigured = cards can only *adopt* an existing issue (set the card's `issue_ref`), never create one. |
+| `CFACTORY_GITHUB_API_URL` | `https://api.github.com` | no | GitHub API base. Override for GitHub Enterprise. Since RFC-0020 §3.3 it SEEDS a GitHub tenant's `base_url`; the stored value is authoritative thereafter. |
+| `CFACTORY_GIT_PROVIDER` | `github` | **DEPRECATED — a one-release seed** | Which git host the board syncs cards with (RFC-0020 phase 1): `github`, `gitlab` or `azure_devops`. RFC-0020 §3.3 retired it as configuration on the same seed rule: it is now the tenant's `provider`, editable in Settings > Git integration. GitLab/Azure DevOps are served by the fleet's canonical provider layer, vendored at `apps/backend/runners/github/`. |
+| `CFACTORY_GIT_PROVIDER_TOKEN` | _(unset)_ | no | Credential for the selected provider — the provider-neutral name for `CFACTORY_GITHUB_TOKEN`; set either, this one wins. **Still deployment-level, and deliberately so:** RFC-0020 §3.3 stores a tenant's provider and project and never a credential (the copilot precedent), so a tenant with a project and no usable token here reports `credential_missing`. Phases 3-4 move credentials into the tenant. In a multi-tenant deploy every tenant currently shares this one token — safe for single-tenant, explicitly not a credential isolation boundary. Carries the same deliberate omission: the bare `GITHUB_TOKEN`/`GH_TOKEN` are **not** accepted. Server-side only. |
+| `CFACTORY_GIT_PROVIDER_URL` | _(unset)_ | **DEPRECATED — a one-release seed** | Base URL of the provider instance (self-hosted GitLab, Azure DevOps server, GitHub Enterprise). RFC-0020 §3.3 retired it as configuration on the same seed rule: it is now the tenant's `base_url`. Unset and unconfigured = the provider's public default (`CFACTORY_GITHUB_API_URL` for GitHub, `https://gitlab.com`, `https://dev.azure.com`). |
 | `CFACTORY_IMPORT_STATE` | `open` | no | Which issues a *backfill* imports (RFC-0020 section 3.6): `open`, `closed` or `all`. Deliberately the wide default — "connect my repo" means "show me my backlog", and a filter that quietly hides most of it fails with no error to diagnose. The incremental pass always uses `all` regardless, so closures and reopenings are not missed. |
 | `CFACTORY_IMPORT_LABELS` | _(unset)_ | no | Comma-separated label filter for the backfill. Empty = no filter. Opt-in narrowing, never the default. |
 | `CFACTORY_IMPORT_MAX` | `1000` | no | Ceiling on issues brought in by one import. Truncation is **reported** in the result and in the board's import summary, never silent. |
@@ -108,7 +108,7 @@ Set these to real values in any hosted/shared deployment — never commit them:
 - `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_AIFACTORY_TOKEN` — upstream factory auth.
 - `CFACTORY_API_KEYS` — scoped keys that gate the cockpit API.
 - `CFACTORY_MCP_SECRET` — legacy full-scope credential for the MCP transport (`CFACTORY_API_KEYS` also gates `/mcp`, per declared tool scope).
-- `CFACTORY_INTAKE_PROJECT_ID` — not a secret, but the one value a hosted deploy must decide deliberately: it is the repository autonomous card-driven builds land in.
+- `CFACTORY_INTAKE_PROJECT_ID` — not a secret, and **no longer where this is set**: since RFC-0020 §3.3 it seeds the tenant's git config once, and the AIFactory project autonomous card-driven builds land in is edited in Settings > Git integration. Still the one value a hosted deploy must decide deliberately.
 - `CFACTORY_OLLAMA_API_KEY` / `ANTHROPIC_API_KEY` — copilot credentials.
 
 ## Notes
@@ -118,10 +118,15 @@ Set these to real values in any hosted/shared deployment — never commit them:
   (Services and Settings views). Runtime edits persist to small JSON files under
   the workspace root and survive a restart; the copilot API key is never written
   to disk.
-- The RFC-0019 planning board reads three of these —
-  `CFACTORY_INTAKE_PROJECT_ID`, `CFACTORY_API_KEYS` / `CFACTORY_MCP_SECRET`
-  (board tool scopes) and `CFACTORY_MULTI_TENANT` (card partitioning). Each is
-  written up with its user story, options and failure behaviour in
+- The planning board reads `CFACTORY_API_KEYS` / `CFACTORY_MCP_SECRET` (board
+  tool scopes) and `CFACTORY_MULTI_TENANT` (card partitioning). Each is written
+  up with its user story, options and failure behaviour in
   [the planning-board guide](../guides/planning-board.md).
+- **Which git host and project the board syncs with is no longer an environment
+  variable.** RFC-0020 §3.3 made it a tenant resource, edited in Settings > Git
+  integration and reachable at `/api/tenants/{tenant}/git-config` (with MCP
+  twins). The four variables marked DEPRECATED above seed it once on first boot
+  and are removed next release. The credential is the exception: it stays
+  deployment-level until phase 3.
 - Deep operator detail — per-variable read location, Helm knobs and chart gaps —
   lives in the in-repo TechDocs at `techdocs/dependencies.md`.

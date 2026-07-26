@@ -138,15 +138,28 @@ def default_stage(card: Card) -> Stage:
     return Stage.PLAN if card.tier in _PLANNING_TIERS else Stage.CODE
 
 
-def prepare_stage(card: Card, stage: Stage, *, settings: Settings) -> PreparedAction | None:
+def aifactory_project_id(store: CardStore, settings: Settings) -> str | None:
+    """The AIFactory project a dispatched card is BUILT in, for this tenant.
+
+    RFC-0020 §3.3: it comes from the tenant's git configuration, which is
+    editable in the cockpit — falling back, for one release, to the
+    ``CFACTORY_INTAKE_PROJECT_ID`` env var that used to be its only source (see
+    :mod:`cfactory.git_config`). This is the ONE place the value is read, so
+    "which project does my build land in?" has exactly one answer.
+    """
+    return store.git_target(settings).aifactory_project_id
+
+
+def prepare_stage(card: Card, stage: Stage, *, project_id: str | None) -> PreparedAction | None:
     """Build the not-yet-executed intake write that sends ``card`` into ``stage``.
 
     Returns ``None`` only when the payload cannot be built because no intake
     project is configured — AIFactory's ``from-issue`` and TFactory's
     ``specs/ingest`` both require a ``project_id`` the card contract does not
-    carry, so it comes from ``CFACTORY_INTAKE_PROJECT_ID``. The caller turns that
-    into a refusal (explicit action) or a blocked card (implicit promotion)
-    rather than a silent no-op.
+    carry, so it comes from the tenant's git configuration
+    (:func:`aifactory_project_id`). The caller turns that into a refusal
+    (explicit action) or a blocked card (implicit promotion) rather than a silent
+    no-op.
     """
     if stage is Stage.PLAN:
         return PreparedAction(
@@ -166,7 +179,7 @@ def prepare_stage(card: Card, stage: Stage, *, settings: Settings) -> PreparedAc
                 "decomposition depth (RFC-0011 §3); planning runs before any code."
             ),
         )
-    if not settings.intake_project_id:
+    if not project_id:
         return None
     if stage is Stage.TEST:
         return PreparedAction(
@@ -176,7 +189,7 @@ def prepare_stage(card: Card, stage: Stage, *, settings: Settings) -> PreparedAc
             method="POST",
             endpoint=TFACTORY_INTAKE_ENDPOINT,
             payload={
-                "project_id": settings.intake_project_id,
+                "project_id": project_id,
                 # TFactory keys the verification workspace on spec_id; the card's
                 # own stable key is the natural one and is already a safe path
                 # component ("FCT-42").
@@ -195,7 +208,7 @@ def prepare_stage(card: Card, stage: Stage, *, settings: Settings) -> PreparedAc
         method="POST",
         endpoint=AIFACTORY_INTAKE_ENDPOINT,
         payload={
-            "project_id": settings.intake_project_id,
+            "project_id": project_id,
             "payload": {
                 "title": card.title,
                 "body": _brief(card),
@@ -211,9 +224,9 @@ def prepare_stage(card: Card, stage: Stage, *, settings: Settings) -> PreparedAc
     )
 
 
-def prepare_dispatch(card: Card, *, settings: Settings) -> PreparedAction | None:
+def prepare_dispatch(card: Card, *, project_id: str | None) -> PreparedAction | None:
     """The tier-routed intake write for an implicitly promoted ready card."""
-    return prepare_stage(card, default_stage(card), settings=settings)
+    return prepare_stage(card, default_stage(card), project_id=project_id)
 
 
 # ── Preconditions ─────────────────────────────────────────────────────────────
@@ -232,8 +245,9 @@ def prepare_dispatch(card: Card, *, settings: Settings) -> PreparedAction | None
 #                             or no COMPLETED code stage. There is no build to
 #                             verify, so TFactory would generate lanes against
 #                             nothing.
-# 4. ``no_intake_project``  — ``code``/``test`` with no CFACTORY_INTAKE_PROJECT_ID.
-#                             Both doors require a project_id the card has not got.
+# 4. ``no_intake_project``  — ``code``/``test`` with no AIFactory project in the
+#                             tenant's git config. Both doors require a
+#                             project_id the card has not got.
 #
 # Deliberately NOT refusals — see :func:`stage_warnings`: coding a ``hard`` card
 # with no plan (a skipped stage, warned about, still allowed), and any stage that
@@ -250,7 +264,7 @@ def _no_tier(card: Card) -> StageRefusal:
     )
 
 
-def refuse_reason(card: Card, stage: Stage, *, settings: Settings) -> StageRefusal | None:
+def refuse_reason(card: Card, stage: Stage, *, project_id: str | None) -> StageRefusal | None:
     """The reason ``stage`` must not be dispatched for ``card``, or None."""
     if not card.tier:
         return _no_tier(card)
@@ -267,11 +281,11 @@ def refuse_reason(card: Card, stage: Stage, *, settings: Settings) -> StageRefus
             f"{card.card_key} has no completed build to verify — run the code stage to "
             "completion first, otherwise TFactory would generate lanes against nothing.",
         )
-    if stage is not Stage.PLAN and not settings.intake_project_id:
+    if stage is not Stage.PLAN and not project_id:
         return StageRefusal(
             "no_intake_project",
-            f"no intake project configured, so the {stage.value} stage has no target — "
-            "set CFACTORY_INTAKE_PROJECT_ID.",
+            f"no AIFactory project configured, so the {stage.value} stage has no target — "
+            "set it in Settings > Git integration.",
         )
     return None
 
@@ -460,7 +474,7 @@ def dispatch_card(
             "correlation_key": card.correlation_key,
         }
 
-    action = prepare_dispatch(card, settings=settings)
+    action = prepare_dispatch(card, project_id=aifactory_project_id(store, settings))
     if action is None:
         store.update(card.card_key, {"status": "blocked"})
         return {
@@ -468,8 +482,8 @@ def dispatch_card(
             "ok": False,
             "status_code": 0,
             "reason": (
-                "no intake project configured — set CFACTORY_INTAKE_PROJECT_ID to "
-                "dispatch a low/medium card to AIFactory"
+                "no AIFactory project configured — set one in Settings > Git integration "
+                "to dispatch a low/medium card to AIFactory"
             ),
         }
     return _send(store, card, action, settings=settings, transport=transport)
@@ -517,10 +531,11 @@ def dispatch_stage(
             "stage": stage.value,
             "correlation_key": card.correlation_key,
         }
-    refusal = refuse_reason(card, stage, settings=settings)
+    project_id = aifactory_project_id(store, settings)
+    refusal = refuse_reason(card, stage, project_id=project_id)
     if refusal is not None:
         return _refused(refusal, stage)
-    action = prepare_stage(card, stage, settings=settings)
+    action = prepare_stage(card, stage, project_id=project_id)
     if action is None:  # refuse_reason already covers every buildable case
         return _refused(
             StageRefusal("no_intake_project", f"no payload can be built for {stage.value}"), stage

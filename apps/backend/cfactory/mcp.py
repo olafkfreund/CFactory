@@ -55,7 +55,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from . import card_ops
+from . import card_ops, git_config_ops
 from .api_deps import action_transport_dep, cards_store_dep
 from .audit import get_audit_store
 from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
@@ -72,6 +72,7 @@ from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline
 from .enterprise import identity_dep
+from .git_config import SUPPORTED_PROVIDERS, GitConfigError, GitConfigUpdate
 from .store import get_store
 
 logger = logging.getLogger(__name__)
@@ -403,6 +404,92 @@ BOARD_TOOLS: list[dict[str, Any]] = [
             "properties": {"card_key": _CARD_KEY_PROP},
         },
     },
+    # ── Tenant git configuration (RFC-0020 §3.3) ─────────────────────────────
+    # Which host the board syncs with, which project, and which AIFactory project
+    # its builds land in. No tenant argument on purpose: a tool operates on the
+    # CALLER's tenant (resolved from X-Tenant-Id exactly as the card tools are),
+    # so there is no way to name somebody else's — isolation by construction
+    # rather than by a second check that could be forgotten.
+    {
+        "name": "cfactory_get_git_config",
+        "description": (
+            "Read this tenant's git configuration: which provider (github / gitlab / "
+            "azure_devops), which host, which project the board syncs cards with, which "
+            "project issues are imported from, and which AIFactory project dispatched "
+            "cards are built in. 'status' is derived: unconfigured (no project named), "
+            "credential_missing (a project, but no usable credential on the deployment), "
+            "configured (never proved), verified (proved by cfactory_verify_git_config). "
+            "No credential is ever returned."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cfactory_set_git_config",
+        "description": (
+            "Replace this tenant's git configuration — the programmatic equivalent of the "
+            "cockpit's Settings > Git integration panel. A FULL replacement: an omitted "
+            "optional field is cleared. Saving clears any previous verification, because "
+            "it proved a different configuration. Rejects a project path the provider "
+            "cannot address and any 'factory:<tier>' default label (that label is the "
+            "fleet's intake trigger — it would build the same card twice). Credentials "
+            "are NOT set here; they stay deployment-level until RFC-0020 phase 3."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": list(SUPPORTED_PROVIDERS),
+                    "description": "Which git host. Defaults to github.",
+                },
+                "base_url": {
+                    "type": "string",
+                    "description": (
+                        "Host root, for a self-hosted GitLab / GitHub Enterprise / Azure "
+                        "DevOps Server. Omit for the provider's public default."
+                    ),
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "The project the board syncs with: 'owner/repo' on GitHub, a "
+                        "group path on GitLab, 'organization/project/repo' on Azure DevOps."
+                    ),
+                },
+                "intake_project": {
+                    "type": "string",
+                    "description": (
+                        "Optional: import issues from THIS project instead of 'project'. "
+                        "Defaults to 'project'."
+                    ),
+                },
+                "aifactory_project_id": {
+                    "type": "string",
+                    "description": (
+                        "The AIFactory project id a dispatched card is BUILT in (an opaque "
+                        "project uuid, not a repository path). Without it, low/medium cards "
+                        "cannot be dispatched and the code/test stages refuse."
+                    ),
+                },
+                "default_labels": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Labels put on issues the board opens. No 'factory:*'.",
+                },
+            },
+        },
+    },
+    {
+        "name": "cfactory_verify_git_config",
+        "description": (
+            "Check that this tenant's git configuration actually reaches its project: one "
+            "cheap authenticated read of the repository, proving the host resolves, the "
+            "credential is accepted and the project is visible. Records the outcome, so "
+            "status becomes 'verified' or keeps the failure reason. An unreachable host "
+            "is ok=false with the reason, never an error."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 MCP_TOOLS += BOARD_TOOLS
@@ -432,6 +519,11 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_test_card": WRITE,
     "cfactory_run_card": WRITE,
     "cfactory_delete_card": WRITE,
+    # Tenant git configuration (RFC-0020 §3.3). Verify is a WRITE: it makes an
+    # authenticated call to somebody's git host and records the result.
+    "cfactory_get_git_config": READ,
+    "cfactory_set_git_config": WRITE,
+    "cfactory_verify_git_config": WRITE,
 }
 
 
@@ -622,6 +714,18 @@ def _tool_delete_card(args: dict[str, Any], ctx: ToolContext) -> Any:
     return card_ops.delete_card(ctx.cards, ctx.audit, args.get("card_key", ""))
 
 
+def _tool_get_git_config(_args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.get_git_config(ctx.cards)
+
+
+def _tool_set_git_config(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.set_git_config(ctx.cards, ctx.audit, GitConfigUpdate(**args))
+
+
+def _tool_verify_git_config(_args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.verify_git_config(ctx.cards, ctx.audit, transport=ctx.transport)
+
+
 def _tool_stage_card(stage: str) -> Callable[[dict[str, Any], ToolContext], Any]:
     """Handler for one stage tool — the whole sequence when ``stage`` is empty.
 
@@ -662,6 +766,9 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_test_card": _tool_stage_card("test"),
     "cfactory_run_card": _tool_stage_card(""),
     "cfactory_delete_card": _tool_delete_card,
+    "cfactory_get_git_config": _tool_get_git_config,
+    "cfactory_set_git_config": _tool_set_git_config,
+    "cfactory_verify_git_config": _tool_verify_git_config,
 }
 
 
@@ -678,6 +785,8 @@ _TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...
     # The REST twin answers 409 {reason, message}; over JSON-RPC the same two
     # fields, so an agent can branch on the code and quote the sentence.
     (StageRefusedError, lambda exc: {"error": exc.message, "reason": exc.code}),
+    # A rejected git configuration: 400 over REST, the same sentence here.
+    (GitConfigError, lambda exc: {"error": str(exc)}),
     (
         ValidationError,
         lambda exc: {"error": "invalid arguments", "details": exc.errors(include_url=False)},

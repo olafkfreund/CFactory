@@ -1,4 +1,11 @@
-"""Which git host the board writes to (RFC-0020 phase 1).
+"""Which git host the board writes to (RFC-0020 phases 1 and 2).
+
+**Which host is a tenant's choice, not the process's.** :func:`build_provider`
+takes a :class:`~cfactory.git_config.GitTarget` — the resolved tenant git
+configuration (RFC-0020 §3.3) — rather than reading ``Settings``. Phase 1 read
+``CFACTORY_GIT_PROVIDER`` here; phase 2 moved that decision into a stored,
+portal-editable resource, and this module stopped having an opinion about where
+the answer comes from.
 
 Everything provider-SPECIFIC lives here; :mod:`cfactory.github_sync` above it
 knows only :class:`IssueProvider` and ``IssueData`` and therefore knows nothing
@@ -42,7 +49,22 @@ import httpx
 from runners.github.providers.factory import get_provider
 from runners.github.providers.protocol import IssueData, IssueFilters, ProviderType
 
-from .config import Settings
+from .git_config import ADO_PATH_PARTS as _ADO_PATH_PARTS
+from .git_config import (
+    PROVIDER_DEFAULT_BASE_URL,
+    SUPPORTED_PROVIDERS,
+    GitTarget,
+    provider_token,
+)
+
+__all__ = [
+    "SUPPORTED_PROVIDERS",
+    "HttpGitHubProvider",
+    "IssueProvider",
+    "build_provider",
+    "provider_token",
+    "run_sync",
+]
 
 _TIMEOUT_SECONDS = 10.0
 # GitHub's maximum page size for a list endpoint.
@@ -50,27 +72,15 @@ _GITHUB_PAGE_SIZE = 100
 
 _T = TypeVar("_T")
 
-# The provider types the board can be pointed at. A subset of the canonical
-# ProviderType: bitbucket/gitea are declared there but unimplemented, and
-# offering a setting that only ever raises would be a lie in the config surface.
-SUPPORTED_PROVIDERS = (
-    ProviderType.GITHUB.value,
-    ProviderType.GITLAB.value,
-    ProviderType.AZURE_DEVOPS.value,
-)
-
-# Azure DevOps addresses a repo as organization/project/repo, unlike the two-part
-# path GitHub and GitLab use.
-_ADO_PATH_PARTS = 3
-
 
 @runtime_checkable
 class IssueProvider(Protocol):
     """The slice of the canonical ``GitProvider`` the board actually uses.
 
-    Deliberately narrow. The full protocol covers pull requests, reviews, merges,
-    labels and repo metadata; a planning board opens an issue, reads it back, and
-    lists the project's issues to import them (RFC-0020 §3.6), and nothing else.
+    Deliberately narrow. The full protocol covers pull requests, reviews, merges
+    and labels; a planning board opens an issue, reads it back, lists the
+    project's issues to import them (RFC-0020 §3.6), and reads the repository
+    once to verify a tenant's configuration (§3.3) — and nothing else.
     Naming that subset means :class:`HttpGitHubProvider` does
     not have to carry fifteen ``NotImplementedError`` stubs to satisfy a type,
     while every canonical provider satisfies this structurally — which is checked,
@@ -96,6 +106,8 @@ class IssueProvider(Protocol):
 
     async def fetch_issues(self, filters: IssueFilters | None = None) -> list[IssueData]: ...
 
+    async def get_repository_info(self) -> dict[str, Any]: ...
+
 
 def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
     """Run one provider call from the board's synchronous card path.
@@ -112,18 +124,6 @@ def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
     """
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
-
-
-def provider_token(settings: Settings) -> str | None:
-    """The configured credential, or ``None`` when sync is not configured at all.
-
-    ``git_provider_token`` is the provider-neutral name; ``github_token`` is the
-    pre-RFC-0020 one and still works, so a deploy that set it keeps working
-    untouched. Neither falls back to a bare ``GITHUB_TOKEN``/``GH_TOKEN`` — see
-    the comment on those settings in :mod:`cfactory.config` for why that omission
-    is load-bearing rather than an oversight.
-    """
-    return settings.git_provider_token or settings.github_token
 
 
 def _async_transport(
@@ -247,6 +247,20 @@ class HttpGitHubProvider:
                 page += 1
         return issues[: filters.limit]
 
+    async def get_repository_info(self) -> dict[str, Any]:
+        """One cheap authenticated read of the repository (RFC-0020 §3.3 verify).
+
+        The canonical providers all expose this, so the tenant git-config verify
+        is the same single call on every host — and it is the *right* call: it
+        proves in one round trip that the base URL resolves, the credential is
+        accepted, and the project exists and is visible to it.
+        """
+        async with self._client() as client:
+            resp = await client.get(f"/repos/{self._repo}")
+            resp.raise_for_status()
+            info = resp.json()
+            return dict(info) if isinstance(info, dict) else {}
+
     def _parse_issue(self, issue: Any) -> IssueData:
         """GitHub's issue JSON as provider-neutral :class:`IssueData`.
 
@@ -305,37 +319,43 @@ def _parse_datetime(value: Any) -> datetime:
 
 
 def build_provider(
-    settings: Settings,
+    target: GitTarget,
     project: str,
     *,
     transport: httpx.BaseTransport | httpx.AsyncBaseTransport | None = None,
 ) -> IssueProvider:
-    """The provider named by ``CFACTORY_GIT_PROVIDER``, pointed at *project*.
+    """The provider the TENANT's git config names, pointed at *project*.
 
-    ``project`` is the host's path for the repository: ``owner/repo`` on GitHub,
-    ``group/project`` (subgroups allowed) on GitLab, ``organization/project/repo``
-    on Azure DevOps. It comes from the card's own ``issue_ref`` when adopting, and
-    from ``CFACTORY_GITHUB_REPO`` when opening.
+    ``target`` is the resolved tenant configuration (RFC-0020 §3.3) — a stored
+    row, or the deployment environment for a tenant that has none. It supplies
+    the host kind, the base URL (so a self-hosted GitLab or GitHub Enterprise
+    works) and the credential.
+
+    ``project`` is passed separately rather than read off the target because the
+    two differ on the path that matters most: adopting an issue uses the CARD's
+    own project, not the tenant's configured one, so a card can point at a repo
+    the board does not itself sync with.
 
     Raises ``ValueError`` on an unknown provider or a project path the provider
     cannot address — both are configuration errors, and the caller turns them into
     a visible ``github_sync_error`` on the card rather than a 500.
     """
-    kind = (settings.git_provider or ProviderType.GITHUB.value).strip().lower()
-    token = provider_token(settings)
+    kind = (target.provider or ProviderType.GITHUB.value).strip().lower()
+    token = target.token
+    base_url = target.base_url
 
     if kind == ProviderType.GITHUB.value:
         return HttpGitHubProvider(
             project,
             token,
-            settings.git_provider_url or settings.github_api_url,
+            base_url or PROVIDER_DEFAULT_BASE_URL[ProviderType.GITHUB.value],
             _async_transport(transport),
         )
 
     if kind == ProviderType.GITLAB.value:
         kwargs: dict[str, Any] = {"_token": token}
-        if settings.git_provider_url:
-            kwargs["_base_url"] = settings.git_provider_url
+        if base_url:
+            kwargs["_base_url"] = base_url
         return get_provider(ProviderType.GITLAB, project, **kwargs)
 
     if kind == ProviderType.AZURE_DEVOPS.value:
@@ -348,8 +368,8 @@ def build_provider(
             "_organization": organization,
             "_project": ado_project,
         }
-        if settings.git_provider_url:
-            ado["_base_url"] = settings.git_provider_url
+        if base_url:
+            ado["_base_url"] = base_url
         return get_provider(ProviderType.AZURE_DEVOPS, repo, **ado)
 
     raise ValueError(f"unknown git provider: {kind!r} (expected one of {SUPPORTED_PROVIDERS})")

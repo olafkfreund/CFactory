@@ -28,11 +28,13 @@ Direction of travel:
 * **issue -> card**: ``fetch_issue`` and mirror it down. This is the half that
   keeps the board from lying about work that moved on the host.
 
-**Which host (RFC-0020 phase 1).** Both verbs above are the fleet's canonical
-``GitProvider`` protocol, vendored at ``apps/backend/runners/github/`` and
-drift-gated — not GitHub URLs. Nothing below this line knows what a repo path or
-an issue state looks like on any particular host: ``CFACTORY_GIT_PROVIDER``
-selects github (default) / gitlab / azure_devops, and the provider hands back
+**Which host (RFC-0020 phases 1 and 2).** Both verbs above are the fleet's
+canonical ``GitProvider`` protocol, vendored at ``apps/backend/runners/github/``
+and drift-gated — not GitHub URLs. Nothing below this line knows what a repo path
+or an issue state looks like on any particular host: the TENANT's git
+configuration (§3.3) selects github (default) / gitlab / azure_devops and names
+the project, resolved once per sync from the tenant-scoped store this module is
+handed, and the provider hands back
 normalised ``IssueData`` where the number is the host's own identifier (a GitLab
 IID, say) and the state is ``open``/``closed`` whatever the host calls it. The
 card's columns keep their ``github_*`` names — renaming a column is a migration
@@ -71,21 +73,19 @@ from runners.github.providers.protocol import IssueData
 
 from .cards import Card, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
-from .git_providers import IssueProvider, build_provider, provider_token, run_sync
+from .git_config import PROJECT_PATTERN, GitTarget, provider_token
+from .git_providers import IssueProvider, build_provider, run_sync
 
 logger = logging.getLogger(__name__)
 
-# A project path ("owner/repo", or "group/sub/project" on a GitLab with
-# subgroups) and a ref to an issue in one ("owner/repo#123"). Anchored and
+# A ref to an issue in a project ("owner/repo#123"). Anchored and
 # character-restricted because these strings end up interpolated into a request
 # PATH by the provider: an unvalidated ref carrying "../" or a host would let a
-# card write choose which resource we call. Every segment must contain at least
-# one alphanumeric, which is what keeps ".." out now that a path may be deeper
-# than two segments.
-_SEGMENT = "[A-Za-z0-9_.-]*[A-Za-z0-9][A-Za-z0-9_.-]*"
-_PROJECT = rf"{_SEGMENT}(?:/{_SEGMENT})+"
-_PROJECT_RE = re.compile(rf"^({_PROJECT})$")
-_ISSUE_REF_RE = re.compile(rf"^({_PROJECT})#([0-9]+)$")
+# card write choose which resource we call. The project half is the same pattern
+# a stored git config is validated against — one definition, in
+# :mod:`cfactory.git_config`, so a project path the config accepts is exactly a
+# project path a ref may name.
+_ISSUE_REF_RE = re.compile(rf"^({PROJECT_PATTERN})#([0-9]+)$")
 
 
 @dataclass(frozen=True)
@@ -135,33 +135,35 @@ def _issue_body(card: Card) -> str:
 
 
 def _provider(
-    project: str, settings: Settings, transport: httpx.BaseTransport | None
+    project: str, target: GitTarget, transport: httpx.BaseTransport | None
 ) -> IssueProvider:
-    """The configured provider, pointed at *project*."""
-    return build_provider(settings, project, transport=transport)
+    """The tenant's configured provider, pointed at *project*."""
+    return build_provider(target, project, transport=transport)
 
 
 def _open_issue(
-    card: Card, *, settings: Settings, transport: httpx.BaseTransport | None
+    card: Card, *, target: GitTarget, transport: httpx.BaseTransport | None
 ) -> tuple[IssueRef, IssueData]:
-    """Open a new issue for a card in the configured project.
+    """Open a new issue for a card in the tenant's configured project.
 
-    Deliberately sends NO labels. The fleet's issue-driven intake (RFC-0011)
-    triggers on a ``factory:<tier>`` label, and the card has already been (or is
-    about to be) dispatched by the §3.2 intake hook — labelling the issue would
-    build the same card twice. That rule is provider-independent: every host's
-    ``create_issue`` takes labels, and we pass none to all of them.
+    The only labels sent are the tenant's ``default_labels``, and an
+    ``factory:<tier>`` label can never be among them: the fleet's issue-driven
+    intake (RFC-0011) triggers on exactly that label, and the card has already
+    been (or is about to be) dispatched by the §3.2 intake hook — labelling the
+    issue with a tier would build the same card twice. The configuration refuses
+    such a label on the way in (``git_config.validate_labels``), so it cannot
+    reach here whatever the tenant typed. That rule is provider-independent.
     """
-    match = _PROJECT_RE.match((settings.github_repo or "").strip())
-    if match is None:
+    project = target.project
+    if project is None:
         raise ValueError(
-            "cannot open an issue: set CFACTORY_GITHUB_REPO to the provider's "
-            "project path (e.g. 'owner/repo'), or set the card's issue_ref to "
-            "adopt an existing issue"
+            "cannot open an issue: no project is configured for this tenant — set one "
+            "in Settings > Git integration (or set the card's issue_ref to adopt an "
+            "existing issue)"
         )
-    project = match.group(1)
+    labels = list(target.default_labels) or None
     issue = run_sync(
-        _provider(project, settings, transport).create_issue(card.title, _issue_body(card))
+        _provider(project, target, transport).create_issue(card.title, _issue_body(card), labels)
     )
     if not isinstance(issue.number, int):
         raise ValueError(f"provider returned no issue number for {card.card_key!r}")
@@ -169,9 +171,9 @@ def _open_issue(
 
 
 def _fetch_issue(
-    ref: IssueRef, *, settings: Settings, transport: httpx.BaseTransport | None
+    ref: IssueRef, *, target: GitTarget, transport: httpx.BaseTransport | None
 ) -> IssueData:
-    return run_sync(_provider(ref.project, settings, transport).fetch_issue(ref.number))
+    return run_sync(_provider(ref.project, target, transport).fetch_issue(ref.number))
 
 
 def _is_missing(exc: Exception) -> bool:
@@ -262,14 +264,15 @@ def sync_card(
     settings = settings or get_settings()
     if not sync_enabled(settings):
         return {"synced": False, "ok": True, "reason": "github sync not configured"}
+    target = store.git_target(settings)
 
     ref = IssueRef.parse(card.issue_ref)
     created = ref is None
     try:
         if ref is None:
-            ref, issue = _open_issue(card, settings=settings, transport=transport)
+            ref, issue = _open_issue(card, target=target, transport=transport)
         else:
-            issue = _fetch_issue(ref, settings=settings, transport=transport)
+            issue = _fetch_issue(ref, target=target, transport=transport)
     except Exception as exc:  # noqa: BLE001 — the never-raises contract IS the
         # feature, and the blast radius widened with RFC-0020: behind the protocol
         # sits third-party provider code we do not control (a malformed GitLab
@@ -324,15 +327,15 @@ def maybe_sync(
     that already carries an ``issue_ref`` syncs on any write, since it has an
     issue to stay honest about.
 
-    A card with no issue is only synced when a repo to open one IN is configured.
-    A deploy that sets a token but no ``CFACTORY_GITHUB_REPO`` has opted into
-    mirroring adopted issues, not into filing new ones, so the hook stays quiet
-    instead of failing every ready card. Asking explicitly (the endpoint / MCP
-    tool) still says plainly that no repo is configured.
+    A card with no issue is only synced when the TENANT has a project to open one
+    in (RFC-0020 §3.3). A deploy that sets a token but names no project has opted
+    into mirroring adopted issues, not into filing new ones, so the hook stays
+    quiet instead of failing every ready card. Asking explicitly (the endpoint /
+    MCP tool) still says plainly that no project is configured.
     """
     settings = settings or get_settings()
     if not sync_enabled(settings):
         return None
-    if not card.issue_ref and not (card.status == "ready" and settings.github_repo):
+    if not card.issue_ref and not (card.status == "ready" and store.git_target(settings).project):
         return None
     return sync_card(store, card, settings=settings, transport=transport)

@@ -27,6 +27,7 @@ from . import (
     routes_connect,
     routes_copilot,
     routes_events,
+    routes_git_config,
     routes_health,
     routes_live_agents,
     routes_services,
@@ -82,6 +83,11 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     # Refuse to silently boot a hosted deploy on the forgeable dev audit secret (#81).
     check_audit_secret(settings)
+    # One-release seed of the default tenant's git config from the legacy env
+    # vars (RFC-0020 §3.3), so an existing single-tenant deployment keeps working
+    # with no operator action and its values become editable in the portal. A
+    # no-op once a config is stored — see CardStore.seed_git_config_from_env.
+    get_cards_store(settings).seed_git_config_from_env(settings)
     tasks: list[asyncio.Task[None]] = []
     if settings.subscribe_upstreams:
         tasks = start_subscribers(get_store(), get_manager(), settings)
@@ -160,6 +166,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_live_agents.router)
     app.include_router(routes_actions.router)
     app.include_router(routes_cards.router)
+    app.include_router(routes_git_config.router)
     app.include_router(routes_copilot.router)
     app.include_router(routes_connect.router)
     app.include_router(routes_ws.router)

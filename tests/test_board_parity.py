@@ -25,12 +25,17 @@ from cfactory.app import create_app
 from cfactory.auth import READ, WRITE
 from cfactory.mcp import MCP_TOOLS, TOOL_SCOPES
 
-# The prefix every board REST route lives under, and the substring that marks a
-# tool as a board tool. Both are how a NEW surface gets noticed: add
+# The prefixes every board REST route lives under, and the substrings that mark
+# a tool as a board tool. Both are how a NEW surface gets noticed: add
 # ``POST /api/cards/{card_key}/archive`` or ``cfactory_archive_card`` and the
 # orphan checks below see it without anyone updating this file.
-CARD_ROUTE_PREFIX = "/api/cards"
-CARD_TOOL_MARKER = "card"
+#
+# ``/api/tenants`` + ``git_config`` joined the list with RFC-0020 §3.3: the
+# tenant git configuration is a board resource — it decides which host and which
+# project every card action talks to — so its mutations are under the same parity
+# law, and a REST route added there without an MCP twin fails this build.
+BOARD_ROUTE_PREFIXES = ("/api/cards", "/api/tenants")
+BOARD_TOOL_MARKERS = ("card", "git_config")
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,27 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
     BoardOperation("code", "POST", "/api/cards/{card_key}/actions/code", "cfactory_code_card"),
     BoardOperation("test", "POST", "/api/cards/{card_key}/actions/test", "cfactory_test_card"),
     BoardOperation("run", "POST", "/api/cards/{card_key}/actions/run", "cfactory_run_card"),
+    # Tenant git configuration (RFC-0020 §3.3, #363). One route per tool here:
+    # reading a configuration, replacing it and proving it reaches its project
+    # are three different capabilities, not three ergonomics for one call.
+    BoardOperation(
+        "get_git_config",
+        "GET",
+        "/api/tenants/{tenant}/git-config",
+        "cfactory_get_git_config",
+    ),
+    BoardOperation(
+        "set_git_config",
+        "PUT",
+        "/api/tenants/{tenant}/git-config",
+        "cfactory_set_git_config",
+    ),
+    BoardOperation(
+        "verify_git_config",
+        "POST",
+        "/api/tenants/{tenant}/git-config:verify",
+        "cfactory_verify_git_config",
+    ),
 )
 
 
@@ -87,14 +113,16 @@ def _live_rest_routes() -> set[tuple[str, str]]:
     return {
         (method.upper(), path)
         for path, ops in create_app().openapi()["paths"].items()
-        if path.startswith(CARD_ROUTE_PREFIX)
+        if path.startswith(BOARD_ROUTE_PREFIXES)
         for method in ops
     }
 
 
 def _live_mcp_tools() -> set[str]:
     """Every board tool the MCP catalog actually advertises."""
-    return {t["name"] for t in MCP_TOOLS if CARD_TOOL_MARKER in t["name"]}
+    return {
+        t["name"] for t in MCP_TOOLS if any(m in t["name"] for m in BOARD_TOOL_MARKERS)
+    }
 
 
 def test_every_rest_route_has_an_mcp_twin() -> None:

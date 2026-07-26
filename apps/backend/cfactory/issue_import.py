@@ -50,8 +50,9 @@ from starlette.concurrency import run_in_threadpool
 
 from .cards import Card, CardCreate, CardStatus, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
+from .git_config import PROJECT_RE
 from .git_providers import build_provider, run_sync
-from .github_sync import _PROJECT_RE, IssueRef, sync_enabled
+from .github_sync import IssueRef, sync_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -271,23 +272,26 @@ def import_issues(
     if not sync_enabled(settings):
         return _result(project or "", ok=True, reason="git provider sync not configured")
 
-    target = (project or settings.github_repo or "").strip()
-    if _PROJECT_RE.match(target) is None:
+    git = store.git_target(settings)
+    # The tenant's intake project is where a backfill READS from, falling back to
+    # the sync project (RFC-0020 §3.3). An explicit argument still wins — the
+    # import endpoint takes a project so a one-off pull from another repo does
+    # not require editing the tenant's configuration first.
+    target = (project or git.import_project or "").strip()
+    if PROJECT_RE.match(target) is None:
         return _result(
             target,
             ok=False,
             reason=(
-                "cannot import: set CFACTORY_GITHUB_REPO to the provider's project path "
-                "(e.g. 'owner/repo'), or pass one explicitly"
+                "cannot import: no project is configured for this tenant — set one in "
+                "Settings > Git integration, or pass one explicitly"
             ),
         )
 
     since = None if full else store.get_watermark(target)
     filters = _filters(settings, since)
     try:
-        issues = run_sync(
-            build_provider(settings, target, transport=transport).fetch_issues(filters)
-        )
+        issues = run_sync(build_provider(git, target, transport=transport).fetch_issues(filters))
     except Exception as exc:  # noqa: BLE001 — the never-raises contract, same as
         # github_sync.sync_card: behind the protocol sits third-party provider
         # code we do not control, and an unlisted exception type must not take

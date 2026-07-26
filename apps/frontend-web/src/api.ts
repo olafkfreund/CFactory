@@ -1179,6 +1179,15 @@ export const CardSchema = z
     // Set once the card's work enters the factory (RFC-0001 correlation), and
     // then REUSED by every later stage rather than re-pointed.
     correlation_key: z.string().nullable(),
+    // Mirrored FROM the git host and never pushed to it (RFC-0019 §3.5): which
+    // issue this card is the projection of ("owner/repo#123"), that issue's state
+    // there, and its labels. The ref carries no HOST — the board is
+    // multi-provider, so a link out is built from the tenant's git config, never
+    // from a hardcoded github.com (see `issueUrl` in cards.ts). Nullish/defaulted
+    // so a card served by a pre-Phase-6 backend still parses.
+    issue_ref: z.string().nullish(),
+    issue_state: z.string().nullish(),
+    labels: z.array(z.string()).default([]),
     // Per-stage dispatch records, keyed by stage name. Optional so a card served
     // by a pre-Phase-7 backend still parses.
     stage_runs: z.record(CardStageSchema, StageRunSchema).default({}),

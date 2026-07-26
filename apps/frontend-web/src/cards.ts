@@ -10,6 +10,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   fetchCards,
+  fetchGitConfig,
+  fetchSettings,
   importCards,
   patchCard,
   runCardStage,
@@ -105,6 +107,100 @@ export function importNotice(result: CardImport): string {
     `skipped ${String(result.skipped)} from ${result.project}${truncated}. ` +
     `Last synced ${result.last_synced_at ?? "never"} — polled, not live.`
   );
+}
+
+/**
+ * The web URL of the issue a card projects, or null when it cannot be built (#213).
+ *
+ * `issue_ref` is `owner/repo#123` and carries NO host, so the host has to come
+ * from the tenant's git configuration — this board is multi-provider, and
+ * hardcoding github.com would point every self-hosted GitLab card at the wrong
+ * place. `base_url` is an API root, so github's needs mapping back to its web
+ * root (api.github.com -> github.com, and a GitHub Enterprise `/api/v3` root ->
+ * its own host).
+ *
+ * Azure DevOps returns null on purpose: its project path is three-part and its
+ * issues are work items on a different URL shape, so anything built from a
+ * two-part ref would be a confidently wrong link. The ref still renders as text —
+ * no link beats a broken link.
+ */
+export function issueUrl(
+  issueRef: string | null | undefined,
+  provider: string,
+  baseUrl: string,
+): string | null {
+  const ref = /^([^\s#]+)#(\d+)$/.exec((issueRef ?? "").trim());
+  if (!ref) return null;
+  const [, project, number] = ref;
+  const root = baseUrl.trim().replace(/\/+$/, "");
+  if (provider === "github") {
+    const web =
+      root === "https://api.github.com" || root === ""
+        ? "https://github.com"
+        : root.replace(/\/api\/v3$/, "");
+    return `${web}/${project}/issues/${number}`;
+  }
+  if (provider === "gitlab") {
+    return `${root || "https://gitlab.com"}/${project}/-/issues/${number}`;
+  }
+  return null;
+}
+
+/**
+ * Resolve this tenant's git host once, and hand back an `issue_ref -> URL` builder.
+ *
+ * Two GETs on mount rather than a field on the card: the cockpit cannot know its
+ * own tenant (the backend resolves it from the header oauth2-proxy injects, see
+ * `fetchSettings`), and the host lives on that tenant's git config. A failure is
+ * swallowed deliberately — an unconfigured or unreachable git config must cost the
+ * board its issue LINKS, never its cards.
+ */
+export function useIssueUrl(): (issueRef: string | null | undefined) => string | null {
+  const [host, setHost] = useState<{ provider: string; baseUrl: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchSettings()
+      .then((s) => fetchGitConfig(s.tenant))
+      .then((c) => {
+        if (alive) setHost({ provider: c.provider, baseUrl: c.base_url });
+      })
+      .catch(() => {
+        /* no host known — cards still render, they just carry no link */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return useCallback(
+    (ref: string | null | undefined) => (host ? issueUrl(ref, host.provider, host.baseUrl) : null),
+    [host],
+  );
+}
+
+// How much of the body a collapsed card shows. Long enough to tell two cards
+// apart, short enough that 46 of them still read as a list.
+const PEEK_LIMIT = 160;
+
+/**
+ * The one-line gist of a markdown body, for a COLLAPSED card (#213).
+ *
+ * A 46-issue backlog that renders every RFC body in full is worse than the bare
+ * titles it replaced, so the list shows this and the full markdown lives behind
+ * the disclosure. Fenced code is dropped outright (a code block is never the
+ * gist) and the remaining markdown punctuation is stripped, because this is
+ * plain text in a one-line clamp, not a second rendering surface.
+ */
+export function peek(body: string): string {
+  const flat = body
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/^\s*#{1,6}\s+/gm, "")
+    .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, "$1")
+    .replace(/^\s*[-*]\s+(\[[ xX]\]\s+)?/gm, "")
+    .replace(/[*_`>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!flat) return "Issue body";
+  return flat.length > PEEK_LIMIT ? `${flat.slice(0, PEEK_LIMIT).trimEnd()}…` : flat;
 }
 
 /** Priority order: lower number first, then card_key so the sort is stable. */

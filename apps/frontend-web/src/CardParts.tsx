@@ -9,9 +9,11 @@ import {
   CARD_STAGES,
   CARD_STATUSES,
   CARD_TIERS,
+  peek,
   stageBlocker,
   type StageAction,
 } from "./cards";
+import Markdown from "./Markdown";
 
 /**
  * The filter bar both views share: a free-text query plus the server-side
@@ -167,10 +169,53 @@ export function CardStageActions({
 }
 
 /**
- * The card body both views render: key, title, acceptance criteria count, tier
- * / assignee / milestone / correlation chips, the two mutation affordances — a
- * status `<select>` (move) and ▲/▼ priority nudges (reprioritise) — and, when
- * `onStage` is supplied, the plan / code / test / run-all stage actions.
+ * The imported issue body plus acceptance criteria, collapsed (#213).
+ *
+ * `<details>` rather than a `useState` toggle: the collapse is the platform's, so
+ * it is keyboard-operable and screen-reader-announced without any code, and
+ * `CardBody` stays a pure function of its props. Markdown goes through the shared
+ * `Markdown` component, which renders React nodes and never HTML — issue bodies
+ * are third-party text and must not be able to inject markup.
+ */
+function CardDetails({ card }: { card: Card }) {
+  const body = card.description?.trim() ?? "";
+  const acs = card.acceptance_criteria;
+  if (!body && acs.length === 0) return null;
+  return (
+    <details className="card-pl__body">
+      <summary className="card-pl__peek">
+        <span className="card-pl__peek-text">
+          {body ? peek(body) : `${String(acs.length)} acceptance criteria`}
+        </span>
+      </summary>
+      <div className="card-pl__detail">
+        {acs.length > 0 && (
+          <>
+            <div className="card-pl__detail-h">Acceptance criteria</div>
+            <ul className="card-pl__ac">
+              {acs.map((ac, i) => (
+                <li key={i}>{ac}</li>
+              ))}
+            </ul>
+          </>
+        )}
+        {body && <Markdown text={body} className="card-md" />}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * The card body both views render: key, title, the collapsed issue body and
+ * acceptance criteria, tier / assignee / milestone / label / issue chips, the two
+ * mutation affordances — a status `<select>` (move) and ▲/▼ priority nudges
+ * (reprioritise) — and, when `onStage` is supplied, the plan / code / test /
+ * run-all stage actions.
+ *
+ * `issueHref` is passed in rather than derived here: the host lives on the
+ * tenant's git config, which is one fetch for the whole list and not one per card
+ * (see `useIssueUrl`). Null means the host is unknown or the provider's URL shape
+ * is not derivable, and the ref renders as text instead.
  *
  * ponytail: keyboard-first controls rather than drag-and-drop. They are
  * accessible for free and hit both PATCH paths; DnD can be layered on top of
@@ -179,6 +224,7 @@ export function CardStageActions({
 export function CardBody({
   card,
   busy,
+  issueHref,
   onMutate,
   onStage,
   onEdit,
@@ -186,6 +232,7 @@ export function CardBody({
 }: {
   card: Card;
   busy: boolean;
+  issueHref?: string | null;
   onMutate: (patch: CardPatch) => void;
   onStage?: (action: StageAction) => void;
   onEdit?: () => void;
@@ -202,10 +249,43 @@ export function CardBody({
         </span>
       </div>
       <div className="card-pl__title">{card.title}</div>
+      <CardDetails card={card} />
       <div className="card-pl__chips">
         {card.tier && <span className={`card-tier card-tier--${card.tier}`}>{card.tier}</span>}
+        {card.issue_state && (
+          <span
+            className={`card-chip card-chip--state-${card.issue_state}`}
+            title={`Issue state on the git host: ${card.issue_state}`}
+          >
+            {card.issue_state}
+          </span>
+        )}
+        {card.issue_ref &&
+          (issueHref ? (
+            <a
+              className="card-chip card-chip--issue"
+              href={issueHref}
+              target="_blank"
+              rel="noreferrer noopener"
+              title={`Open ${card.issue_ref} on the git host`}
+            >
+              {card.issue_ref} ↗
+            </a>
+          ) : (
+            <span
+              className="card-chip"
+              title="No link — this board's git host is not configured, or its issue URLs are not derivable"
+            >
+              {card.issue_ref}
+            </span>
+          ))}
         {card.assignee && <span className="card-chip">@{card.assignee}</span>}
         {card.milestone && <span className="card-chip">◇ {card.milestone}</span>}
+        {card.labels.map((label) => (
+          <span className="card-chip card-chip--label" key={label}>
+            {label}
+          </span>
+        ))}
         {card.acceptance_criteria.length > 0 && (
           <span className="card-chip" title={card.acceptance_criteria.join("\n")}>
             {card.acceptance_criteria.length} AC

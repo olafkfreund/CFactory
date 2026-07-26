@@ -11,7 +11,14 @@ import {
   type CardStatus,
   type CardTier,
 } from "./api";
-import { byPriority, CARD_STATUSES, CARD_TIERS, matchesQuery, useCards } from "./cards";
+import {
+  byPriority,
+  CARD_STATUSES,
+  CARD_TIERS,
+  matchesQuery,
+  useCards,
+  useIssueUrl,
+} from "./cards";
 import { CardBanners, CardBody, CardFilterBar } from "./CardParts";
 
 type Draft = {
@@ -60,6 +67,7 @@ export default function BacklogView({ reloadSignal }: { reloadSignal: number }) 
     filters,
     reloadSignal,
   );
+  const hrefOf = useIssueUrl();
 
   // `create` = the new-card form; a card_key = that card's inline editor.
   const [editing, setEditing] = useState<string | null>(null);
@@ -186,6 +194,7 @@ export default function BacklogView({ reloadSignal }: { reloadSignal: number }) 
                 key={card.card_key}
                 card={card}
                 busy={busy}
+                issueHref={hrefOf(card.issue_ref)}
                 onMutate={(patch) => {
                   void mutate(card.card_key, patch);
                 }}

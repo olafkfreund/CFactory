@@ -764,6 +764,18 @@ body {
 .md .md-h1 { font-size: 1.02rem; }
 .md .md-h2 { font-size: 0.96rem; }
 .md .md-h3, .md .md-h4 { font-size: 0.9rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.md a { color: var(--cyan); }
+/* Fenced code and task lists (#213 — imported issue bodies use both). The block
+   scrolls INSIDE itself: a wide code fence must never widen the page. */
+.md .md-pre {
+  margin: 0.45rem 0; padding: 0.5rem 0.6rem; max-width: 100%; overflow-x: auto;
+  background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 7px;
+}
+.md .md-pre code {
+  background: none; border: 0; padding: 0; font-size: 0.76rem; white-space: pre;
+}
+.md .md-tasks { list-style: none; padding-left: 0.15rem; }
+.md .md-task { accent-color: var(--cyan); margin-right: 0.4rem; vertical-align: -0.08em; }
 
 .chat-input { display: flex; gap: 0.5rem; }
 .chat-input input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 0.5rem 0.7rem; font-size: 0.86rem; font-family: inherit; }
@@ -1867,9 +1879,43 @@ body {
 .card-pl--busy { opacity: 0.55; }
 .card-pl__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .card-pl__prio { font-size: 0.72rem; color: var(--faint); }
-.card-pl__title { font-size: 0.92rem; font-weight: 500; margin: 0.35rem 0 0.5rem; line-height: 1.35; }
+.card-pl__title { font-size: 0.92rem; font-weight: 500; margin: 0.35rem 0 0.5rem; line-height: 1.35; overflow-wrap: anywhere; }
 .card-pl__chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.55rem; }
 .card-pl__actions { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+
+/* The imported issue body, collapsed (#213). A <details>, so the disclosure is the
+   platform's — keyboard-operable and announced without any JS. Collapsed, the card
+   costs exactly ONE clamped line, which is what keeps a 46-card backlog scannable;
+   expanded, the body is capped and scrolls inside itself rather than pushing the
+   rest of the list off the screen. */
+.card-pl__body { margin: -0.15rem 0 0.55rem; }
+.card-pl__peek {
+  display: flex; align-items: center; gap: 0.4rem; min-width: 0;
+  cursor: pointer; list-style: none;
+}
+.card-pl__peek::-webkit-details-marker { display: none; }
+.card-pl__peek::before { content: "▸"; flex: none; color: var(--faint); font-size: 0.72rem; }
+.card-pl__body[open] > .card-pl__peek::before { content: "▾"; }
+.card-pl__peek:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 5px; }
+.card-pl__peek-text {
+  min-width: 0; font-size: 0.8rem; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.card-pl__peek:hover .card-pl__peek-text { color: var(--text); }
+.card-pl__detail {
+  margin-top: 0.45rem; padding: 0.5rem 0.65rem; max-height: 24rem; overflow-y: auto;
+  background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 8px;
+}
+.card-pl__detail-h {
+  font: 600 0.68rem var(--font-mono); color: var(--faint);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.card-pl__ac { margin: 0.3rem 0 0.55rem; padding-left: 1.2rem; font-size: 0.82rem; color: var(--muted); }
+.card-pl__ac li { margin: 0.12rem 0; }
+.card-md { font-size: 0.82rem; color: var(--muted); overflow-wrap: anywhere; }
+/* The detail box is already --panel-2, so a fence inside it needs its own tone to
+   read as a code block at all. */
+.card-pl__detail .md-pre { background: var(--bg); }
 
 .card-chip {
   font: 500 0.7rem var(--font-mono); color: var(--muted);
@@ -1877,6 +1923,17 @@ body {
   border-radius: 999px; padding: 0.12rem 0.5rem;
 }
 .card-chip--live { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, var(--border)); }
+/* Mirrored issue metadata (#213). A label is third-party text of any length, so it
+   truncates rather than widening the card; the issue ref is a link when the tenant's
+   git host is known, and plain text when it is not. */
+.card-chip--label { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-chip--issue {
+  text-decoration: none; color: var(--cyan);
+  border-color: color-mix(in srgb, var(--cyan) 35%, var(--border));
+}
+.card-chip--issue:hover { border-color: var(--cyan); }
+.card-chip--state-open { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.card-chip--state-closed { color: var(--faint); }
 .card-tier {
   font: 600 0.7rem var(--font-mono); border-radius: 999px; padding: 0.12rem 0.5rem;
   border: 1px solid var(--border);

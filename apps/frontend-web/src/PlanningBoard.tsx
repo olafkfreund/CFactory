@@ -7,7 +7,7 @@
 // execution stages) and is a different view over different data.
 import { useState, type CSSProperties } from "react";
 import type { CardFilters } from "./api";
-import { byPriority, CARD_STATUSES, matchesQuery, useCards } from "./cards";
+import { byPriority, CARD_STATUSES, matchesQuery, useCards, useIssueUrl } from "./cards";
 import { CardBanners, CardBody, CardFilterBar } from "./CardParts";
 
 export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }) {
@@ -18,6 +18,7 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
     filters,
     reloadSignal,
   );
+  const hrefOf = useIssueUrl();
 
   const shown = cards.filter((c) => matchesQuery(c, query)).sort(byPriority);
 
@@ -75,6 +76,7 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
                       key={card.card_key}
                       card={card}
                       busy={false}
+                      issueHref={hrefOf(card.issue_ref)}
                       onMutate={(patch) => {
                         void mutate(card.card_key, patch);
                       }}

@@ -1,12 +1,35 @@
 import { type ReactNode } from "react";
 
-// Minimal, safe Markdown renderer for copilot answers. The copilot emits GitHub-
-// flavoured markdown (headings, **bold**, *italic*, `code`, bullet/numbered
-// lists, paragraphs); we render that subset as React nodes — never via
-// dangerouslySetInnerHTML — so LLM output can't inject HTML/script. Anything we
-// don't recognise falls through as plain text.
+// Minimal, safe Markdown renderer for copilot answers and imported issue bodies
+// (#213). Both sources emit GitHub-flavoured markdown (headings, **bold**,
+// *italic*, `code`, fenced code, bullet/numbered lists, task lists, links,
+// paragraphs); we render that subset as React nodes — never via
+// dangerouslySetInnerHTML — so neither LLM output nor a third party's issue body
+// can inject HTML/script. Anything we don't recognise falls through as plain
+// text, which means raw HTML in an issue body renders as the visible characters
+// it is rather than as markup. Anchors are the one place a string reaches an
+// attribute, so `safeHref` allowlists http(s) — a `javascript:` URL in an issue
+// body must not become a clickable one.
 
-const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_)/g;
+const INLINE =
+  /(\[[^\]\n]+\]\([^)\s]+\)|\*\*[^*]+\*\*|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|https?:\/\/[^\s<>()]+)/g;
+const LINK = /^\[([^\]\n]+)\]\(([^)\s]+)\)$/;
+
+// A URL we are willing to put in an href. Anything else (javascript:, data:, a
+// protocol-relative //host) stays inert text.
+function safeHref(url: string): string | null {
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+function link(href: string, text: string, key: string): ReactNode {
+  const safe = safeHref(href);
+  if (!safe) return <span key={key}>{text}</span>;
+  return (
+    <a key={key} href={safe} target="_blank" rel="noreferrer noopener">
+      {text}
+    </a>
+  );
+}
 
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -18,7 +41,10 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     if (m.index > last) nodes.push(text.slice(last, m.index));
     const tok = m[0];
     const key = `${keyPrefix}-i${i++}`;
-    if (tok.startsWith("**")) nodes.push(<strong key={key}>{tok.slice(2, -2)}</strong>);
+    const md = LINK.exec(tok);
+    if (md) nodes.push(link(md[2], md[1], key));
+    else if (tok.startsWith("http")) nodes.push(link(tok, tok, key));
+    else if (tok.startsWith("**")) nodes.push(<strong key={key}>{tok.slice(2, -2)}</strong>);
     else if (tok.startsWith("`")) nodes.push(<code key={key}>{tok.slice(1, -1)}</code>);
     else nodes.push(<em key={key}>{tok.slice(1, -1)}</em>);
     last = m.index + tok.length;
@@ -27,22 +53,47 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
+// A GFM task-list item: "[ ] thing" / "[x] thing". Returned as the state plus the
+// remaining text so the item renders a real (disabled) checkbox — an issue body's
+// checklist is the most information-dense thing in it, and "[x] " as literal
+// characters reads as noise.
+const TASK = /^\[([ xX])\]\s+(.*)$/;
+
 type Block =
   | { kind: "p"; lines: string[] }
   | { kind: "h"; level: number; text: string }
   | { kind: "ul"; items: string[] }
-  | { kind: "ol"; items: string[] };
+  | { kind: "ol"; items: string[] }
+  | { kind: "code"; lines: string[]; lang: string };
 
 function parseBlocks(src: string): Block[] {
   const blocks: Block[] = [];
   const lines = src.replace(/\r\n/g, "\n").split("\n");
   let para: string[] = [];
+  let fence: { kind: "code"; lines: string[]; lang: string } | null = null;
   const flushPara = () => {
     if (para.length) blocks.push({ kind: "p", lines: para });
     para = [];
   };
   for (const raw of lines) {
     const line = raw.trimEnd();
+    // A fence swallows everything verbatim until it closes, so markdown INSIDE a
+    // code block stays code. An unterminated fence still renders (below).
+    const fenceMark = /^\s*```(.*)$/.exec(line);
+    if (fence) {
+      if (fenceMark) {
+        blocks.push(fence);
+        fence = null;
+      } else {
+        fence.lines.push(raw);
+      }
+      continue;
+    }
+    if (fenceMark) {
+      flushPara();
+      fence = { kind: "code", lines: [], lang: fenceMark[1].trim() };
+      continue;
+    }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
     const numbered = /^\s*\d+\.\s+(.*)$/.exec(line);
@@ -66,7 +117,27 @@ function parseBlocks(src: string): Block[] {
     }
   }
   flushPara();
+  if (fence) blocks.push(fence); // unterminated fence — show it, don't drop it
   return blocks;
+}
+
+// One list item, with a GFM checkbox when it is a task-list item.
+function Item({ text, keyPrefix }: { text: string; keyPrefix: string }) {
+  const task = TASK.exec(text);
+  if (!task) return <>{renderInline(text, keyPrefix)}</>;
+  return (
+    <>
+      <input
+        type="checkbox"
+        className="md-task"
+        checked={task[1].toLowerCase() === "x"}
+        readOnly
+        disabled
+        aria-label={task[2]}
+      />
+      {renderInline(task[2], keyPrefix)}
+    </>
+  );
 }
 
 export default function Markdown({ text, className }: { text: string; className?: string }) {
@@ -83,10 +154,13 @@ export default function Markdown({ text, className }: { text: string; className?
           );
         }
         if (b.kind === "ul") {
+          const tasks = b.items.some((it) => TASK.test(it));
           return (
-            <ul key={bi}>
+            <ul className={tasks ? "md-tasks" : undefined} key={bi}>
               {b.items.map((it, ii) => (
-                <li key={ii}>{renderInline(it, `ul${bi}-${ii}`)}</li>
+                <li key={ii}>
+                  <Item text={it} keyPrefix={`ul${bi}-${ii}`} />
+                </li>
               ))}
             </ul>
           );
@@ -95,9 +169,20 @@ export default function Markdown({ text, className }: { text: string; className?
           return (
             <ol key={bi}>
               {b.items.map((it, ii) => (
-                <li key={ii}>{renderInline(it, `ol${bi}-${ii}`)}</li>
+                <li key={ii}>
+                  <Item text={it} keyPrefix={`ol${bi}-${ii}`} />
+                </li>
               ))}
             </ol>
+          );
+        }
+        if (b.kind === "code") {
+          // The language is a label, never a class we act on — an issue body's
+          // fence info string is untrusted, so it goes in a data attribute.
+          return (
+            <pre className="md-pre" key={bi} data-lang={b.lang || undefined}>
+              <code>{b.lines.join("\n")}</code>
+            </pre>
           );
         }
         // Paragraph: join wrapped lines, preserving intentional breaks.

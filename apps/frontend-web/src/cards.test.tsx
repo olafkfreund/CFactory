@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CardSchema, fetchCards, patchCard, runCardStage, type Card, type CardPatch } from "./api";
 import {
   byPriority,
+  issueUrl,
   matchesQuery,
+  peek,
   optimisticPatch,
   replaceCard,
   stageBlocker,
@@ -29,6 +31,7 @@ const CARD: Card = {
   assignee: "olaf",
   milestone: "m1",
   correlation_key: null,
+  labels: [],
   stage_runs: {},
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
@@ -360,3 +363,153 @@ describe("stage action buttons", () => {
 // guard that the client's patch surface tracks the pinned contract.
 const _patch: CardPatch = { status: "blocked", priority: 3, tier: "hard", assignee: null };
 void _patch;
+
+// ── Imported issue body + metadata (#213) ───────────────────────────────────
+// A card whose body came from a real issue: markdown with a heading, a task list,
+// a fenced code block and a link — the four things an issue body actually
+// contains and the four the bare-title board threw away.
+const BODY = [
+  "## Why",
+  "",
+  "The board drops the body. See [the issue](https://github.com/acme/widgets/issues/7).",
+  "",
+  "- [x] import the body",
+  "- [ ] render the body",
+  "",
+  "```python",
+  "def go(x: int) -> int:  # *not* italics",
+  "    return x",
+  "```",
+].join("\n");
+
+const IMPORTED: Card = {
+  ...CARD,
+  description: BODY,
+  issue_ref: "acme/widgets#7",
+  issue_state: "open",
+  labels: ["bug", "frontend"],
+};
+
+describe("issueUrl (multi-provider link out)", () => {
+  it("maps the github API root back to the web host", () => {
+    expect(issueUrl("acme/widgets#7", "github", "https://api.github.com")).toBe(
+      "https://github.com/acme/widgets/issues/7",
+    );
+  });
+
+  it("keeps a GitHub Enterprise host and drops its /api/v3 suffix", () => {
+    expect(issueUrl("acme/widgets#7", "github", "https://ghe.corp/api/v3")).toBe(
+      "https://ghe.corp/acme/widgets/issues/7",
+    );
+  });
+
+  it("uses GitLab's own issue path, on the configured host", () => {
+    expect(issueUrl("grp/sub/proj#12", "gitlab", "https://gitlab.corp")).toBe(
+      "https://gitlab.corp/grp/sub/proj/-/issues/12",
+    );
+  });
+
+  it("returns null rather than a wrong URL for a provider it cannot address", () => {
+    expect(issueUrl("org/proj/repo#12", "azure_devops", "https://dev.azure.com")).toBeNull();
+  });
+
+  it("returns null for a missing or malformed ref", () => {
+    expect(issueUrl(null, "github", "https://api.github.com")).toBeNull();
+    expect(issueUrl(undefined, "github", "https://api.github.com")).toBeNull();
+    expect(issueUrl("acme/widgets", "github", "https://api.github.com")).toBeNull();
+  });
+});
+
+describe("peek (the collapsed one-liner)", () => {
+  it("flattens markdown to one short line and drops fenced code", () => {
+    const line = peek(BODY);
+    expect(line).not.toContain("\n");
+    expect(line).not.toContain("```");
+    expect(line).not.toContain("def go");
+    expect(line).toContain("The board drops the body");
+    expect(line.length).toBeLessThanOrEqual(161); // 160 + the ellipsis
+  });
+
+  it("never renders as blank, even for a body that is only code", () => {
+    expect(peek("```\nx = 1\n```")).toBe("Issue body");
+  });
+});
+
+describe("card body rendering (#213)", () => {
+  const noop = () => undefined;
+  const render = (card: Card, href?: string | null) =>
+    renderToStaticMarkup(
+      <CardBody card={card} busy={false} issueHref={href} onMutate={noop} />,
+    );
+
+  it("renders the issue body as markdown, not as raw text", () => {
+    const html = render(IMPORTED);
+    expect(html).toContain("<details");
+    expect(html).toContain("md-h2"); // "## Why" became a heading
+    expect(html).toContain("md-pre"); // the fence became a code block
+    expect(html).toContain('type="checkbox"'); // the task list became checkboxes
+    expect(html).toContain("def go(x: int) -&gt; int:  # *not* italics"); // code stays literal
+    expect(html).toContain('href="https://github.com/acme/widgets/issues/7"');
+  });
+
+  it("shows the collapsed peek and keeps the full body behind the disclosure", () => {
+    const html = render(IMPORTED);
+    expect(html).toContain("card-pl__peek-text");
+    // <details> is closed by default — the list stays one line per card.
+    expect(html).not.toContain("<details open");
+  });
+
+  it("renders nothing at all for an empty or null body", () => {
+    const noBody = { ...IMPORTED, description: null, acceptance_criteria: [] };
+    expect(render(noBody)).not.toContain("<details");
+    const blank = { ...noBody, description: "   \n  " };
+    expect(render(blank)).not.toContain("<details");
+    // …and the card itself still renders.
+    expect(render(noBody)).toContain("Ship the planning board");
+  });
+
+  it("still offers the disclosure for acceptance criteria when there is no body", () => {
+    const html = render({ ...IMPORTED, description: null });
+    expect(html).toContain("<details");
+    expect(html).toContain("2 acceptance criteria");
+    expect(html).toContain("backlog view");
+  });
+
+  it("renders the issue ref as a link when the host is known", () => {
+    const html = render(IMPORTED, "https://github.com/acme/widgets/issues/7");
+    expect(html).toContain('href="https://github.com/acme/widgets/issues/7"');
+    expect(html).toContain("acme/widgets#7");
+    expect(html).toContain('rel="noreferrer noopener"');
+  });
+
+  it("renders the issue ref as plain text when the host is not known", () => {
+    // No body here: a link INSIDE a body would put an <a> on the card either way,
+    // and what is under test is the metadata chip.
+    const html = render({ ...IMPORTED, description: null, acceptance_criteria: [] }, null);
+    expect(html).toContain("acme/widgets#7");
+    expect(html).not.toContain("card-chip--issue");
+    expect(html).not.toContain("<a ");
+  });
+
+  it("shows the mirrored issue state and labels", () => {
+    const html = render(IMPORTED);
+    expect(html).toContain("card-chip--state-open");
+    expect(html).toContain("bug");
+    expect(html).toContain("frontend");
+  });
+
+  it("refuses to make a javascript: URL in a body clickable", () => {
+    const html = render({
+      ...IMPORTED,
+      description: "[click me](javascript:alert(1))",
+    });
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain("click me");
+  });
+
+  it("renders HTML in a body as visible text, never as markup", () => {
+    const html = render({ ...IMPORTED, description: "<img src=x onerror=alert(1)>" });
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
+  });
+});

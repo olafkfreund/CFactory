@@ -41,6 +41,7 @@ newcomer's first run, start with the
 - [Intake: how a card becomes a build](#intake-how-a-card-becomes-a-build)
 - [Git integration: the settings panel](#git-integration-the-settings-panel)
 - [Many repositories, many providers: connections](#many-repositories-many-providers-connections)
+- [What your provider costs you: the capability matrix](#what-your-provider-costs-you-the-capability-matrix)
 - [Status write-back: the board is a live view](#status-write-back-the-board-is-a-live-view)
 - [Discovery: how an agent finds all this before it has a token](#discovery-how-an-agent-finds-all-this-before-it-has-a-token)
 - [Parity: the rule that keeps the two surfaces honest](#parity-the-rule-that-keeps-the-two-surfaces-honest)
@@ -791,6 +792,7 @@ missing key must not destroy a credential.
 | `PATCH` | `/api/tenants/{tenant}/git-repositories/{repository_id}` | write | `cfactory_update_git_repository` |
 | `DELETE` | `/api/tenants/{tenant}/git-repositories/{repository_id}` | write | `cfactory_delete_git_repository` |
 | `POST` | `/api/tenants/{tenant}/git-repositories/{repository_id}:default` | write | `cfactory_set_default_git_repository` |
+| `GET` | `/api/tenants/{tenant}/git-capabilities` | read | `cfactory_git_capabilities` |
 
 `GET /git-connections` returns each connection with its repositories inline plus
 `default_repository_id`, so one call renders the whole panel.
@@ -828,6 +830,133 @@ For anything larger:
 5. **Give each repository its own AIFactory project id.** Sharing one across
    repositories puts two codebases' builds in one project, which is the state the
    fleet's own dashboards cannot untangle later.
+
+---
+
+## What your provider costs you: the capability matrix
+
+### The user story
+
+> As a team whose code is on GitLab, I want to know *before* I connect it what
+> the fleet will and will not do for me, so that I find out about a missing
+> auto-merge while I am choosing a provider rather than two days later when a
+> finished build is sitting on a merge request that nothing merges.
+
+That is the whole of this section. The reduction below is real, it is not
+recoverable by configuration, and until RFC-0020 phase 5 it was discoverable only
+by running into it.
+
+### The declaration now travels with the work
+
+Before phase 5 the tenant's provider stopped at CFactory's own boundary. PFactory,
+AIFactory and TFactory each chose a git host from their own configuration — a
+per-project `gitProvider` setting defaulting to `github`, an env var, or the
+ambient `gh` login. The consequence was blunt: **a GitLab tenant's PARR run
+reconnoitred github.com and opened a GitHub pull request.**
+
+What changed is one field. The repo reference CFactory already sent with every
+dispatch is now **provider-qualified**:
+
+| Provider | Reference the fleet receives |
+|---|---|
+| GitHub | `owner/repo` |
+| GitLab | `gitlab:group/subgroup/project` |
+| Azure DevOps | `azure_devops:organization/project/repo` |
+
+GitHub stays **unqualified**, deliberately. An unqualified reference reads as
+`github:`, so a GitHub tenant's payload is byte-for-byte what it was before this
+phase: nothing downstream has to change, and there is no backfill of stored
+references. Both forms round-trip unchanged.
+
+Nothing else about the contract changed. There is no separate `provider` field
+travelling beside the repo — two fields would be two sources of truth, and the
+one that got read would be whichever service happened to look at it first.
+
+A tenant with **no project configured** sends no reference at all, rather than a
+guessed one. Each downstream service then behaves exactly as it did before this
+phase, which for a deployment that never filled the panel in is the only honest
+answer available.
+
+### The matrix
+
+Everything that differs by host, and nothing that does not:
+
+| Capability | GitHub | GitLab | Azure DevOps |
+|---|---|---|---|
+| Board sync and issue import | works | works | works |
+| Label intake (RFC-0011) | works | works | works |
+| PARR run (plan, build, verify) | works | works | works |
+| Delegate an issue to a coding agent (`assign_to_user`) | works | **partial** | **not available** |
+| Auto-merge when green (`enable_auto_merge`) | works | **not available** | **not available** |
+| Automatic PR on a clean build | works | **not available** | **not available** |
+
+So, stated the way it matters: **a GitLab tenant gets board sync, intake and
+PARR. It does not get Copilot-style delegation or auto-merge.**
+
+The three reductions in full:
+
+- **`assign_to_user` on GitLab is partial, not absent.** It dispatches a GitLab
+  Duo Workflow, which needs a Duo entitlement and an OAuth-scoped credential.
+  Without either, the call is accepted and the workflow never starts — so treat a
+  delegated issue as unconfirmed until the issue itself shows it was picked up.
+  (Factory#366's summary sentence says this raises `NotImplementedError` on
+  GitLab; it does not. The issue's own parenthetical, "Duo Workflow is partial",
+  is the accurate half, and it is what is published here.)
+- **`assign_to_user` on Azure DevOps raises `NotImplementedError`.** A permanent
+  gap, not a backlog item: Azure DevOps has no autonomous coding agent to
+  delegate to.
+- **`enable_auto_merge` is GitHub-shaped** — the RFC-0011 low-tier
+  auto-merge-when-green path and the RFC-0009 merge gate both rest on it, and it
+  raises `NotImplementedError` on GitLab and on Azure DevOps. The run still opens
+  its merge request and still records the `merge_policy` decision; a person or
+  your CI performs the merge. AIFactory's automatic PR is skipped for the same
+  reason (it is driven through the `gh` CLI) and it is skipped **loudly** — the
+  run records why rather than failing halfway through a `gh` call.
+
+### Where it is published
+
+Three places, from one source, so they cannot disagree:
+
+| Surface | How to read it |
+|---|---|
+| Settings panel | Under the provider selector, on both the add-a-connection card and each connection's edit form. It follows the LIVE selection, so switching the toggle to GitLab shows what that would cost before you press Save. |
+| REST | `GET /api/tenants/{tenant}/git-capabilities` (read scope) |
+| MCP | `cfactory_git_capabilities` (read scope) |
+| Docs | this table |
+
+The backend table in `apps/backend/cfactory/capabilities.py` is the source, and
+`tests/test_capabilities.py` asserts every claim in it against the vendored
+provider layer. If a canonical provider grows a real `enable_auto_merge`, or
+loses one, that test fails and the matrix has to be told — which is what stops
+this page becoming a stale promise.
+
+### What happens when it is unset or wrong
+
+- **The capability read fails** (network, an old backend without the route): the
+  panel renders the connection form exactly as before, silently, without the
+  matrix. Losing a warning is a bad trade; losing the form you came to fill in
+  would be a far worse one.
+- **The provider is one the matrix has never heard of**: every capability reads
+  as not available. A caller asking "may I auto-merge here?" about an unknown
+  host must hear no, never an exception it might swallow into a yes.
+- **You enable auto-merge on a GitLab project anyway**: the build completes, the
+  branch is pushed, and the endgame is skipped with the reason recorded. Nothing
+  is force-merged and nothing half-runs.
+
+### Recommended
+
+1. **Read the matrix before connecting, not after.** It is next to the selector
+   for exactly this reason.
+2. **On GitLab or Azure DevOps, leave `AIFACTORY_AUTO_MERGE` off** and merge from
+   your own CI on a green pipeline. The fleet's merge decision is still recorded;
+   it is only the button-press that is yours.
+3. **If you want Duo delegation on GitLab, verify it once by hand** — delegate a
+   throwaway issue and confirm the workflow actually started. A silent no-op is
+   the failure mode, and one manual check tells you whether your entitlement and
+   token are right.
+4. **Mixed estates are fine.** Resolution is per card, through that card's
+   repository, so a tenant with a GitHub connection and a GitLab connection gets
+   auto-merge on the GitHub repos and not on the GitLab ones, in the same board.
 
 ---
 

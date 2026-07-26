@@ -833,6 +833,22 @@ body {
 .set-repo-form { border-top: 1px dashed var(--border); margin-top: 0.6rem; padding-top: 0.2rem; }
 .set-badge { font-family: var(--font-mono); font-size: 0.68rem; color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 30%, transparent); border-radius: 999px; padding: 0.1rem 0.5rem; white-space: nowrap; }
 
+/* The capability matrix beside the provider selector (RFC-0020 §3.5, #366).
+   Deliberately quiet: it sits under a toggle inside a form, so it reads as a
+   consequence of the choice above it rather than as a second control. The dashed
+   rule is the same one .set-repo-form uses to separate a nested block. */
+.set-caps { border-top: 1px dashed var(--border); margin-top: 0.7rem; padding-top: 0.6rem; }
+.set-cap { margin-bottom: 0.5rem; }
+.set-cap:last-of-type { margin-bottom: 0.35rem; }
+/* Name and pill on one line, wrapping rather than colliding — the #211 rule.
+   The pill carries a SHORT state word only; the sentence is the .set-hint under
+   it, which is what stopped a status running across a card title. */
+.set-cap-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.set-cap-name { font-size: 0.8rem; color: var(--text); min-width: 0; }
+.set-cap .set-hint { display: block; margin-top: 0.15rem; max-width: 60ch; }
+/* The trailing "unchanged on this host" line is a paragraph, not a caption. */
+.set-caps > .set-hint { display: block; margin-top: 0.5rem; }
+
 /* Task detail drawer (#44) */
 .card-wi--clickable { cursor: pointer; }
 .card-wi--clickable:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }

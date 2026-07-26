@@ -131,6 +131,16 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
         "/api/tenants/{tenant}/git-credential",
         "cfactory_delete_git_credential",
     ),
+    # The published capability matrix (RFC-0020 §3.5, #366). A READ, and under the
+    # parity law for the reason the law exists: an agent choosing a provider needs
+    # the same "you will not get auto-merge on GitLab" warning the panel shows a
+    # human, at the same moment — before it writes the choice, not after a run.
+    BoardOperation(
+        "git_capabilities",
+        "GET",
+        "/api/tenants/{tenant}/git-capabilities",
+        "cfactory_git_capabilities",
+    ),
     # Git connections and repositories (RFC-0020 §3.3 phase 8, #373). Two levels,
     # full CRUD on each, and every mutation twinned: a tenant with a GitHub
     # connection and a GitLab connection, each with several repositories, must be

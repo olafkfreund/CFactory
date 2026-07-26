@@ -59,6 +59,7 @@ from . import card_ops, git_config_ops
 from .api_deps import action_transport_dep, cards_store_dep
 from .audit import get_audit_store
 from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
+from .capabilities import capability_matrix
 from .card_ops import CardNotFoundError, StageRefusedError
 from .cards import (
     CardCreate,
@@ -597,6 +598,24 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "cfactory_git_capabilities",
+        "description": (
+            "What the fleet can actually do on each git host (RFC-0020 §3.5) — READ THIS "
+            "BEFORE choosing a provider, because the reduction is real and it is not "
+            "recoverable by configuration. Board sync, RFC-0011 label intake and the PARR "
+            "run are identical on github, gitlab and azure_devops. Two things are not: "
+            "assign_to_user (delegating an issue to the host's own coding agent) is full on "
+            "GitHub, PARTIAL on GitLab (a Duo Workflow that silently no-ops without a Duo "
+            "entitlement and an OAuth-scoped credential) and absent on Azure DevOps; and "
+            "enable_auto_merge — the RFC-0011 auto-merge-when-green path and the RFC-0009 "
+            "merge gate — plus AIFactory's automatic PR are GitHub-shaped and raise or skip "
+            "elsewhere. Returns each capability's per-provider level (full / partial / none) "
+            "and the sentence explaining it. Static: it describes the provider layer, not "
+            "this tenant's configuration."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
     # ── Connections and repositories (RFC-0020 §3.3, phase 8) ────────────────
     # The two-level model that replaces the single configuration above. No tenant
     # argument on any of them, for the same reason: a tool operates on the
@@ -893,6 +912,10 @@ TOOL_SCOPES: dict[str, str] = {
     # because nothing can.
     "cfactory_set_git_credential": WRITE,
     "cfactory_delete_git_credential": WRITE,
+    # The published capability matrix (RFC-0020 §3.5). READ, and deliberately not
+    # gated any harder: "what will I lose by picking GitLab?" must be answerable
+    # before anything is configured.
+    "cfactory_git_capabilities": READ,
     # Connections and repositories (RFC-0020 §3.3, phase 8). Verify is a WRITE for
     # the same reason the single-config one is: it calls somebody's git host and
     # records the result.
@@ -1158,6 +1181,10 @@ def _repository_id(args: dict[str, Any]) -> int:
         ) from None
 
 
+def _tool_git_capabilities(_args: dict[str, Any], _ctx: ToolContext) -> Any:
+    return capability_matrix().model_dump()
+
+
 def _tool_list_git_connections(_args: dict[str, Any], ctx: ToolContext) -> Any:
     return git_config_ops.list_git_connections(ctx.cards)
 
@@ -1269,6 +1296,7 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_verify_git_config": _tool_verify_git_config,
     "cfactory_set_git_credential": _tool_set_git_credential,
     "cfactory_delete_git_credential": _tool_delete_git_credential,
+    "cfactory_git_capabilities": _tool_git_capabilities,
     "cfactory_list_git_connections": _tool_list_git_connections,
     "cfactory_create_git_connection": _tool_create_git_connection,
     "cfactory_update_git_connection": _tool_update_git_connection,

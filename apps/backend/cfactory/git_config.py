@@ -125,6 +125,10 @@ PROJECT_RE = re.compile(rf"^({PROJECT_PATTERN})$")
 # :func:`validate_labels`.
 _INTAKE_LABEL_PREFIX = "factory:"
 
+# The provider qualification a repo reference carries when it leaves this service
+# (RFC-0020 §3.5). ``gitlab:group/project``; ``owner/repo`` unqualified.
+_QUALIFIER = ":"
+
 # The derived status (RFC-0020 §3.3). Not a stored column: it is a function of
 # the configuration plus the credential plus the last verification, and storing
 # a value that three other things determine is how a status goes stale.
@@ -311,6 +315,51 @@ def validated_fields(update: GitConfigUpdate) -> dict[str, Any]:
         "verify_error": None,
         "credential_rejected": None,
     }
+
+
+# ── the provider-qualified repo reference (RFC-0020 §3.5) ────────────────────
+#
+# The ONE thing this phase adds to what leaves CFactory. PFactory, AIFactory and
+# TFactory each used to pick a git host from their own environment default, so a
+# GitLab tenant's PARR run opened a GitHub PR. They now read the host off the
+# repo reference the task contract already carried, which means the tenant's
+# declaration travels with the work instead of being re-guessed three times.
+#
+# GitHub stays UNQUALIFIED. That is not an inconsistency, it is the migration
+# rule the RFC states (§7, "unqualified refs read as github:") pushed one step
+# further: a GitHub tenant's contract is byte-for-byte what it was before this
+# phase, so nothing downstream has to change to keep working and there is no
+# backfill. Both forms round-trip through parse/qualify unchanged.
+
+
+def qualify_repo(provider: str | None, project: str | None) -> str | None:
+    """``project`` tagged with the host it lives on, for a contract's repo ref.
+
+    ``None`` in, ``None`` out: a tenant with no project configured has no repo
+    reference to send, and inventing one would be worse than sending nothing.
+    """
+    if not project:
+        return None
+    kind = (provider or GITHUB).strip().lower()
+    return project if kind == GITHUB else f"{kind}{_QUALIFIER}{project}"
+
+
+def parse_repo_ref(ref: str | None) -> tuple[str, str] | None:
+    """``(provider, project)`` for a repo reference, or ``None`` if there is none.
+
+    Only a KNOWN provider name is treated as a qualification. That is what keeps
+    ``https://gitlab.example/g/p`` (a clone URL, which PFactory's reconnaissance
+    accepts) and any future colon-bearing path from being shredded into a
+    nonsense provider — an unrecognised prefix means the whole string is the
+    project, exactly as it was read before this phase.
+    """
+    value = (ref or "").strip()
+    if not value:
+        return None
+    head, sep, tail = value.partition(_QUALIFIER)
+    if sep and head.strip().lower() in SUPPORTED_PROVIDERS and tail.strip():
+        return head.strip().lower(), tail.strip()
+    return GITHUB, value
 
 
 # ── credential (the DEPLOYMENT's, when a tenant has stored none) ─────────────

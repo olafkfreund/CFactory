@@ -628,6 +628,29 @@ export async function fetchGitConnections(tenant: string): Promise<GitConnection
   return getJson(tenantPath(tenant, "git-connections"), GitConnectionsSchema, "git-connections");
 }
 
+// The published capability matrix (RFC-0020 §3.5). What the fleet can actually
+// do on each host, so the reduction a non-GitHub tenant lives with is visible
+// beside the provider selector rather than discovered on a run that quietly
+// does not merge. `support` and `notes` are keyed by provider name.
+export const GitCapabilitySchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  detail: z.string(),
+  support: z.record(z.string()).default({}),
+  notes: z.record(z.string()).default({}),
+});
+export type GitCapability = z.infer<typeof GitCapabilitySchema>;
+
+export const GitCapabilitiesSchema = z.object({
+  providers: z.array(z.string()).default([]),
+  capabilities: z.array(GitCapabilitySchema).default([]),
+});
+export type GitCapabilities = z.infer<typeof GitCapabilitiesSchema>;
+
+export async function fetchGitCapabilities(tenant: string): Promise<GitCapabilities> {
+  return getJson(tenantPath(tenant, "git-capabilities"), GitCapabilitiesSchema, "git-capabilities");
+}
+
 export async function createGitConnection(
   tenant: string,
   body: { provider: string; base_url?: string | null; label?: string | null },

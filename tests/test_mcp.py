@@ -126,6 +126,20 @@ def test_initialize_and_tools_list(mcp_client):
         # and a delete and deliberately no read.
         "cfactory_set_git_credential",
         "cfactory_delete_git_credential",
+        # Git connections and repositories (RFC-0020 §3.3 phase 8) — many hosts,
+        # many repos per host, and the tenant default a card falls back to.
+        "cfactory_list_git_connections",
+        "cfactory_create_git_connection",
+        "cfactory_update_git_connection",
+        "cfactory_delete_git_connection",
+        "cfactory_verify_git_connection",
+        "cfactory_set_git_connection_credential",
+        "cfactory_delete_git_connection_credential",
+        "cfactory_list_git_repositories",
+        "cfactory_create_git_repository",
+        "cfactory_update_git_repository",
+        "cfactory_delete_git_repository",
+        "cfactory_set_default_git_repository",
     }
 
 

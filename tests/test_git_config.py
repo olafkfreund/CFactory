@@ -53,6 +53,7 @@ from cfactory.git_config import (
 )
 from fastapi.testclient import TestClient
 from runners.github.providers.gitlab_provider import GitLabProvider
+from sqlalchemy import Boolean
 
 # Not credentials: fake values so the resolved config has a token and the API
 # keystore is configured inside these tests.
@@ -217,8 +218,14 @@ def test_no_credential_is_ever_stored_or_returned(client, cards):
     body = client.get(_url()).json()
 
     assert not any("token" in key or "secret" in key for key in body)
-    row = cards.git_config_row()
-    assert not any("token" in c.name for c in row.__table__.columns)
+    resolved = cards.default_repository()
+    for table in (resolved.connection.__table__, resolved.repository.__table__):
+        assert not any("token" in c.name or "secret" in c.name for c in table.columns)
+        # The one credential-shaped column on a connection is a BOOLEAN saying the
+        # host refused one — never a place a credential could be kept.
+        credential_columns = [c for c in table.columns if "credential" in c.name]
+        assert [c.name for c in credential_columns] in ([], ["credential_rejected"])
+        assert all(isinstance(c.type, Boolean) for c in credential_columns)
 
 
 def test_the_mcp_twin_reads_and_writes_the_same_configuration(client):
@@ -329,7 +336,7 @@ def test_a_failed_verify_records_the_reason_and_does_not_claim_verified(client, 
     assert body["ok"] is False
     assert "404" in body["reason"]
     assert body["config"]["status"] == CONFIGURED
-    assert "404" in cards.git_config_row().verify_error
+    assert "404" in cards.default_repository().connection.verify_error
 
 
 def test_verify_without_a_credential_says_so_without_calling_anything(
@@ -446,20 +453,28 @@ def test_a_write_lands_in_the_writers_partition_not_the_default_one(multi_tenant
     client = multi_tenant_client
     _as(client, "acme", "put", _url("acme"), json={"provider": "github", "project": _PROJECT})
 
-    assert cards.scoped("acme").git_config_row() is not None
-    assert cards.scoped("default").git_config_row() is None
+    assert cards.scoped("acme").connections() != []
+    assert cards.scoped("acme").default_repository().repository.project == _PROJECT
+    assert cards.scoped("default").connections() == []
+    assert cards.scoped("default").default_repository() is None
 
 
 def test_the_mcp_tools_have_no_way_to_name_another_tenant(client):
     """Isolation by construction: the tools take no tenant, so an agent operates
     on its own partition or on nothing."""
-    tools = {t["name"]: t for t in mcp.MCP_TOOLS if "git_config" in t["name"]}
+    tools = {t["name"]: t for t in mcp.MCP_TOOLS if "git_" in t["name"]}
 
-    assert set(tools) == {
+    assert {
         "cfactory_get_git_config",
         "cfactory_set_git_config",
         "cfactory_verify_git_config",
-    }
+        # The phase-8 surface obeys the same rule: connections and repositories
+        # are addressed by their own id, never by a tenant an agent could type.
+        "cfactory_list_git_connections",
+        "cfactory_create_git_connection",
+        "cfactory_verify_git_connection",
+        "cfactory_set_default_git_repository",
+    } <= set(tools)
     for tool in tools.values():
         assert "tenant" not in tool["inputSchema"].get("properties", {})
 
@@ -489,10 +504,10 @@ def test_the_seed_materialises_the_default_tenants_config_from_the_env(cards):
     seeded = cards.seed_git_config_from_env(_seeded_settings())
 
     assert seeded is not None
-    row = cards.git_config_row()
-    assert row.tenant_id == "default"
-    assert row.project == _PROJECT
-    assert row.aifactory_project_id == "proj-from-env"
+    resolved = cards.default_repository()
+    assert resolved.connection.tenant_id == "default"
+    assert resolved.repository.project == _PROJECT
+    assert resolved.repository.aifactory_project_id == "proj-from-env"
 
 
 def test_the_seed_never_overwrites_a_stored_configuration(cards):
@@ -503,9 +518,9 @@ def test_the_seed_never_overwrites_a_stored_configuration(cards):
 
     assert cards.seed_git_config_from_env(_seeded_settings()) is None
 
-    row = cards.git_config_row()
-    assert row.project == "edited/by-a-human"
-    assert row.provider == "gitlab"
+    resolved = cards.default_repository()
+    assert resolved.repository.project == "edited/by-a-human"
+    assert resolved.connection.provider == "gitlab"
 
 
 def test_a_second_boot_does_not_re_seed_either(cards):
@@ -517,14 +532,15 @@ def test_a_second_boot_does_not_re_seed_either(cards):
 
     cards.seed_git_config_from_env(settings)
 
-    assert cards.git_config_row().project == "edited/by-a-human"
+    assert cards.default_repository().repository.project == "edited/by-a-human"
 
 
 def test_nothing_to_seed_writes_no_row(cards):
     """A deploy that never configured any of this stays unconfigured rather than
     acquiring an empty row that reads as a deliberate choice."""
     assert cards.seed_git_config_from_env(Settings(git_provider_token=_TEST_TOKEN)) is None
-    assert cards.git_config_row() is None
+    assert cards.connections() == []
+    assert cards.default_repository() is None
 
 
 def test_a_tenant_with_no_row_still_resolves_from_the_env(cards):
@@ -600,7 +616,11 @@ def test_the_import_reads_from_the_tenants_intake_project(cards, host, settings)
 def test_the_dispatch_target_comes_from_the_tenants_config(cards, settings):
     from cfactory.card_intake import aifactory_project_id
 
-    cards.set_git_config(GitConfigUpdate(provider="github", aifactory_project_id="tenant-project"))
+    cards.set_git_config(
+        GitConfigUpdate(
+            provider="github", project=_PROJECT, aifactory_project_id="tenant-project"
+        )
+    )
 
     assert aifactory_project_id(cards, settings) == "tenant-project"
 

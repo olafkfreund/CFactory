@@ -353,18 +353,24 @@ def run_card_sequence(
     return _finish_stage_action(store, ctx, card_key, result)
 
 
-def import_cards(
+def import_cards(  # noqa: PLR0913 — keyword-only, independent seams (which
+    # repository, which project, which transport, full or incremental); an options
+    # object would hide the call sites rather than simplify them.
     store: CardStore,
     ctx: AuditContext,
     *,
     project: str | None = None,
+    repository_id: int | None = None,
     full: bool = False,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, object]:
-    """Import the configured repository's EXISTING issues as cards (RFC-0020 §3.6).
+    """Import ONE repository's EXISTING issues as cards (RFC-0020 §3.6).
 
     The other direction from :func:`sync_card_github`: that one takes a card and
-    finds it an issue, this one takes a repository and fills the board. Runs
+    finds it an issue, this one takes a repository and fills the board. Which
+    repository is ``repository_id``, else the one whose project path matches
+    ``project``, else the tenant's default (RFC-0020 §3.3 phase 8) — and its
+    connection supplies the host and the credential. Runs
     incrementally once a watermark exists (``full=True`` re-reads everything);
     both are safe to repeat, because the import is an upsert against the unique
     ``(tenant_id, issue_ref)`` index rather than an insert.
@@ -376,7 +382,9 @@ def import_cards(
     an unreachable provider is a visible ``ok=False`` entry on the chain, not a
     gap in it and not a 500.
     """
-    result = import_issues(store, project=project, full=full, transport=transport)
+    result = import_issues(
+        store, project=project, repository_id=repository_id, full=full, transport=transport
+    )
     ctx.audit.record(
         actor=ctx.actor,
         kind="import_cards",

@@ -37,6 +37,13 @@ from .config import get_settings, resolve_tenant
 from .credentials import CredentialError
 from .enterprise import identity_dep
 from .git_config import GitConfigError, GitConfigUpdate
+from .git_connections import (
+    GitConnectionCreate,
+    GitConnectionUpdate,
+    GitRepositoryCreate,
+    GitRepositoryUpdate,
+    GitResourceNotFoundError,
+)
 
 router = APIRouter(tags=["git-config"])
 
@@ -199,7 +206,334 @@ def delete_git_credential(
     200, because the state the caller asked for is the state that now holds. The
     board keeps serving reads afterwards; its status simply becomes
     `credential_missing`.
+
+    Operates on the connection the tenant's default repository lives on. To
+    revoke a specific connection's credential, use
+    `DELETE /api/tenants/{tenant}/git-connections/{connection_id}/credential`.
     """
     return git_config_ops.clear_git_credential(
         store, AuditContext(audit, actor, endpoint=REST_ENDPOINT)
     )
+
+
+# ── Connections and repositories (RFC-0020 §3.3, phase 8) ────────────────────
+#
+# The two-level surface that replaces the single configuration above: a tenant has
+# many CONNECTIONS (a provider + a host + a credential) and each connection has
+# many REPOSITORIES (a project path + where it imports from + which AIFactory
+# project it builds in). Exactly one repository is the tenant DEFAULT, and that is
+# what a card which names no repository resolves to.
+#
+# Every one of these has an MCP twin in cfactory.mcp, and tests/test_board_parity.py
+# fails the build if one is added without the other (RFC-0019 §3.3).
+
+
+def _ctx(audit: AuditStore, actor: str) -> AuditContext:
+    return AuditContext(audit, actor, endpoint=REST_ENDPOINT)
+
+
+@router.get("/api/tenants/{tenant}/git-connections")
+def list_git_connections(
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("read"))],
+) -> dict[str, object]:
+    """Every git connection this tenant has, each with its repositories.
+
+    A connection is a place the board can authenticate to: a provider
+    (`github` / `gitlab` / `azure_devops`), a host, and a credential. A repository
+    is something to work on through one — its project path, the project issues are
+    imported from, and the AIFactory project its builds land in.
+
+    `default_repository_id` is the repository a card that names none resolves to.
+    `status` on each connection is derived, never stored: `unconfigured` (no
+    repositories), `credential_missing` (no usable credential, or one the host
+    refused), `configured` (reachable in principle, never proved), `verified`
+    (proved by a `:verify` call). No credential is ever returned — only whether
+    there is one, when it was stored and which key wraps it.
+
+    Never 404s and never empty-errors: a tenant that has configured nothing gets
+    an empty list.
+    """
+    return git_config_ops.list_git_connections(store)
+
+
+@router.post("/api/tenants/{tenant}/git-connections")
+def create_git_connection(
+    body: GitConnectionCreate,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Add a git connection.
+
+    400 when the provider is unknown, when `base_url` is not an http(s) origin, or
+    when this tenant already has a connection to the same provider and host —
+    configuring one host twice would leave "which credential reaches it?"
+    ambiguous, so it is refused rather than duplicated.
+
+    **No credential is accepted here.** Store it with
+    `PUT /api/tenants/{tenant}/git-connections/{connection_id}/credential`, which
+    is write-only.
+    """
+    try:
+        return git_config_ops.create_git_connection(store, _ctx(audit, actor), body)
+    except GitConfigError as exc:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+
+
+@router.patch("/api/tenants/{tenant}/git-connections/{connection_id}")
+def update_git_connection(
+    body: GitConnectionUpdate,
+    connection_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Change a connection's provider, host or label.
+
+    A patch: only the fields sent are applied. Changing the provider or the host
+    CLEARS the verification (it proved a connection this one no longer is);
+    changing only the label does not. The credential is untouched and stays valid —
+    it is bound to the connection, not to its host.
+
+    404 when this tenant has no such connection, 400 on a value the provider
+    cannot use or a host this tenant already has a connection to.
+    """
+    try:
+        return git_config_ops.update_git_connection(store, _ctx(audit, actor), connection_id, body)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+    except GitConfigError as exc:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+
+
+@router.delete("/api/tenants/{tenant}/git-connections/{connection_id}")
+def delete_git_connection(
+    connection_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Forget a connection, **its repositories** and its credential.
+
+    Everything that hangs off a connection goes with it: a repository cannot be
+    reached without its host, and a credential for a connection that no longer
+    exists is a secret kept for no reason. Cards are NOT deleted — a card whose
+    repository is gone falls back to the tenant default. If the default was on
+    this connection, the oldest remaining repository is promoted, so a tenant that
+    still has repositories always has a default.
+
+    404 when this tenant has no such connection.
+    """
+    try:
+        return git_config_ops.delete_git_connection(store, _ctx(audit, actor), connection_id)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+
+
+@router.post("/api/tenants/{tenant}/git-connections/{connection_id}:verify")
+def verify_git_connection(
+    connection_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Check that this connection's host answers and its credential is accepted.
+
+    One cheap authenticated read of ONE of its repositories — the tenant default
+    when that is on this connection, otherwise its oldest — which is enough to
+    prove the host resolves, the credential works and the project is visible. The
+    outcome is recorded on the connection, so its `status` becomes `verified` or
+    keeps the failure reason.
+
+    Always 200 for a reachability failure: an unreachable host is `ok: false` with
+    the reason, not a board error. `ok: false` with `status: unconfigured` means
+    the connection has no repositories to verify against yet. 404 when this tenant
+    has no such connection.
+    """
+    try:
+        return git_config_ops.verify_git_connection(
+            store, _ctx(audit, actor), connection_id, transport=transport
+        )
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+
+
+@router.put("/api/tenants/{tenant}/git-connections/{connection_id}/credential")
+def put_connection_credential(
+    body: GitCredentialUpdate,
+    connection_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Store (or replace) the credential for ONE connection (RFC-0020 §3.4).
+
+    **Write-only.** The response is the masked indicator — `configured`, when it
+    was stored, which key wraps it — and there is no endpoint, anywhere, that
+    returns the credential. It is encrypted before it is written (a per-record data
+    key, itself wrapped by the deployment's `CFACTORY_CREDENTIAL_KEY`) and sealed
+    against **this tenant and this connection**, so the stored record cannot be
+    replayed onto another connection even by someone holding the database. Every
+    later read of it appends an entry to the audit chain.
+
+    503 when the deployment has no encryption key configured: with nothing to
+    encrypt it with, the credential is REFUSED rather than written in the clear.
+    404 when this tenant has no such connection.
+    """
+    try:
+        return git_config_ops.set_connection_credential(
+            store, _ctx(audit, actor), connection_id, body.credential
+        )
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+    except CredentialError as exc:
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=str(exc)) from None
+
+
+@router.delete("/api/tenants/{tenant}/git-connections/{connection_id}/credential")
+def delete_connection_credential(
+    connection_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Forget one connection's credential — the per-connection revocation path.
+
+    Idempotent: removing one that is not there answers `removed: false` with a
+    200. The connection keeps its repositories and simply reads as
+    `credential_missing`. 404 when this tenant has no such connection.
+    """
+    try:
+        return git_config_ops.clear_connection_credential(store, _ctx(audit, actor), connection_id)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+
+
+@router.get("/api/tenants/{tenant}/git-repositories")
+def list_git_repositories(
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("read"))],
+    connection_id: int | None = None,
+) -> dict[str, object]:
+    """This tenant's repositories as a flat list, newest connection last.
+
+    Pass `connection_id` for just one connection's. `is_default` marks the one a
+    card that names no repository resolves to.
+    """
+    return git_config_ops.list_git_repositories(store, connection_id)
+
+
+@router.post("/api/tenants/{tenant}/git-connections/{connection_id}/repositories")
+def create_git_repository(
+    body: GitRepositoryCreate,
+    connection_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Add a repository to a connection.
+
+    The FIRST repository a tenant has becomes its default whatever `make_default`
+    says — a tenant with repositories and no default would refuse every card that
+    named none.
+
+    400 when the project is not a path this connection's provider can address
+    (`owner/repo`, or `organization/project/repo` on Azure DevOps), when it is
+    already on this connection, or when `default_labels` contains a
+    `factory:<tier>` label — that label is the fleet's intake trigger, so putting
+    it on an issue the board opens would build the same card twice. 404 when this
+    tenant has no such connection.
+    """
+    try:
+        return git_config_ops.create_git_repository(store, _ctx(audit, actor), connection_id, body)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+    except GitConfigError as exc:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+
+
+@router.patch("/api/tenants/{tenant}/git-repositories/{repository_id}")
+def update_git_repository(
+    body: GitRepositoryUpdate,
+    repository_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Change a repository's project, intake project, AIFactory project or labels.
+
+    A patch: only the fields sent are applied, and sending `null` for
+    `intake_project` or `aifactory_project_id` CLEARS it. 404 when this tenant has
+    no such repository, 400 on a value the provider cannot use.
+    """
+    try:
+        return git_config_ops.update_git_repository(store, _ctx(audit, actor), repository_id, body)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+    except GitConfigError as exc:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+
+
+@router.delete("/api/tenants/{tenant}/git-repositories/{repository_id}")
+def delete_git_repository(
+    repository_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Forget a repository.
+
+    Cards that pointed at it are NOT deleted — they fall back to the tenant
+    default, exactly like a card that never named one. If this was the default, the
+    oldest remaining repository is promoted. 404 when this tenant has no such
+    repository.
+    """
+    try:
+        return git_config_ops.delete_git_repository(store, _ctx(audit, actor), repository_id)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+
+
+@router.post("/api/tenants/{tenant}/git-repositories/{repository_id}:default")
+def set_default_git_repository(
+    repository_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Make this the tenant's default repository.
+
+    The default is what a card that names no repository resolves to — for syncing
+    an issue, for importing, and for which AIFactory project its build lands in —
+    so this is the one setting that moves existing unassigned cards. A tenant has
+    exactly one, enforced by the database. 404 when this tenant has no such
+    repository.
+    """
+    try:
+        return git_config_ops.set_default_git_repository(store, _ctx(audit, actor), repository_id)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None

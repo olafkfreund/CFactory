@@ -34,8 +34,12 @@ from cfactory.mcp import MCP_TOOLS, TOOL_SCOPES
 # tenant git configuration is a board resource — it decides which host and which
 # project every card action talks to — so its mutations are under the same parity
 # law, and a REST route added there without an MCP twin fails this build.
+#
+# ``git_`` rather than a list of the individual git nouns since RFC-0020 phase 8:
+# the surface grew connections and repositories, and a marker per noun is a marker
+# somebody forgets to add. Any future ``cfactory_*_git_*`` tool is caught.
 BOARD_ROUTE_PREFIXES = ("/api/cards", "/api/tenants")
-BOARD_TOOL_MARKERS = ("card", "git_config", "git_credential")
+BOARD_TOOL_MARKERS = ("card", "git_")
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,82 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
         "DELETE",
         "/api/tenants/{tenant}/git-credential",
         "cfactory_delete_git_credential",
+    ),
+    # Git connections and repositories (RFC-0020 §3.3 phase 8, #373). Two levels,
+    # full CRUD on each, and every mutation twinned: a tenant with a GitHub
+    # connection and a GitLab connection, each with several repositories, must be
+    # as configurable by an agent as it is by a human in the panel.
+    BoardOperation(
+        "list_git_connections",
+        "GET",
+        "/api/tenants/{tenant}/git-connections",
+        "cfactory_list_git_connections",
+    ),
+    BoardOperation(
+        "create_git_connection",
+        "POST",
+        "/api/tenants/{tenant}/git-connections",
+        "cfactory_create_git_connection",
+    ),
+    BoardOperation(
+        "update_git_connection",
+        "PATCH",
+        "/api/tenants/{tenant}/git-connections/{connection_id}",
+        "cfactory_update_git_connection",
+    ),
+    BoardOperation(
+        "delete_git_connection",
+        "DELETE",
+        "/api/tenants/{tenant}/git-connections/{connection_id}",
+        "cfactory_delete_git_connection",
+    ),
+    BoardOperation(
+        "verify_git_connection",
+        "POST",
+        "/api/tenants/{tenant}/git-connections/{connection_id}:verify",
+        "cfactory_verify_git_connection",
+    ),
+    BoardOperation(
+        "set_git_connection_credential",
+        "PUT",
+        "/api/tenants/{tenant}/git-connections/{connection_id}/credential",
+        "cfactory_set_git_connection_credential",
+    ),
+    BoardOperation(
+        "delete_git_connection_credential",
+        "DELETE",
+        "/api/tenants/{tenant}/git-connections/{connection_id}/credential",
+        "cfactory_delete_git_connection_credential",
+    ),
+    BoardOperation(
+        "list_git_repositories",
+        "GET",
+        "/api/tenants/{tenant}/git-repositories",
+        "cfactory_list_git_repositories",
+    ),
+    BoardOperation(
+        "create_git_repository",
+        "POST",
+        "/api/tenants/{tenant}/git-connections/{connection_id}/repositories",
+        "cfactory_create_git_repository",
+    ),
+    BoardOperation(
+        "update_git_repository",
+        "PATCH",
+        "/api/tenants/{tenant}/git-repositories/{repository_id}",
+        "cfactory_update_git_repository",
+    ),
+    BoardOperation(
+        "delete_git_repository",
+        "DELETE",
+        "/api/tenants/{tenant}/git-repositories/{repository_id}",
+        "cfactory_delete_git_repository",
+    ),
+    BoardOperation(
+        "set_default_git_repository",
+        "POST",
+        "/api/tenants/{tenant}/git-repositories/{repository_id}:default",
+        "cfactory_set_default_git_repository",
     ),
 )
 

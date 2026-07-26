@@ -83,11 +83,18 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     # Refuse to silently boot a hosted deploy on the forgeable dev audit secret (#81).
     check_audit_secret(settings)
+    # Adopt every pre-phase-8 single git configuration into a connection + a
+    # default repository, re-sealing its credential onto the connection without
+    # ever writing the plaintext (RFC-0020 §3.3 phase 8). Idempotent and ordered
+    # BEFORE the seed: a tenant that has a legacy row must be adopted, not
+    # re-seeded from environment variables it has since edited away from.
+    cards = get_cards_store(settings)
+    cards.adopt_legacy_git_config(settings)
     # One-release seed of the default tenant's git config from the legacy env
     # vars (RFC-0020 §3.3), so an existing single-tenant deployment keeps working
     # with no operator action and its values become editable in the portal. A
-    # no-op once a config is stored — see CardStore.seed_git_config_from_env.
-    get_cards_store(settings).seed_git_config_from_env(settings)
+    # no-op once a connection exists — see CardStore.seed_git_config_from_env.
+    cards.seed_git_config_from_env(settings)
     tasks: list[asyncio.Task[None]] = []
     if settings.subscribe_upstreams:
         tasks = start_subscribers(get_store(), get_manager(), settings)

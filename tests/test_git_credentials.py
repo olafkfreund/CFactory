@@ -101,6 +101,24 @@ _READER = "test-reader-key-not-a-credential"  # noqa: S105 — a fake, not a sec
 _PROJECT = "acme/widgets"
 _TENANT = "default"
 
+# The connection a sealed record is bound to in the crypto-only tests. Any int
+# will do — what matters is that it is part of the associated data, so the same
+# record does not unseal under a different one (RFC-0020 §3.4, phase 8).
+_CONNECTION = 7
+
+
+def _credential_row(cards):
+    """The sealed row for this store's default connection, or None.
+
+    Phase 8 moved the credential from the tenant to the connection, so "this
+    tenant's credential row" is now "the row on the connection its default
+    repository lives on" — which for a single-connection tenant, i.e. every one
+    of these tests, is the only connection it has.
+    """
+    connections = cards.connections()
+    return cards.credential_row(connections[0].id) if connections else None
+
+
 _HTTP_FORBIDDEN = 403
 _HTTP_UNAVAILABLE = 503
 
@@ -220,17 +238,17 @@ def _tool_payload(client, name: str, arguments: dict | None = None) -> dict:
 
 
 def test_a_sealed_credential_round_trips(keyring):
-    sealed = seal(_SECRET, tenant=_TENANT, keyring=keyring)
+    sealed = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
 
-    assert unseal(sealed, tenant=_TENANT, keyring=keyring) == _SECRET
+    assert unseal(sealed, tenant=_TENANT, connection=_CONNECTION, keyring=keyring) == _SECRET
 
 
 def test_two_seals_of_the_same_value_differ(keyring):
     """Each record gets its own data key and its own nonce, so identical
     credentials do not produce identical ciphertext — otherwise the store would
     leak "these two tenants use the same token" to anyone reading the table."""
-    first = seal(_SECRET, tenant=_TENANT, keyring=keyring)
-    second = seal(_SECRET, tenant=_TENANT, keyring=keyring)
+    first = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
+    second = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
 
     assert first.ciphertext != second.ciphertext
     assert first.wrapped_key != second.wrapped_key
@@ -240,60 +258,60 @@ def test_a_different_key_fails_closed_rather_than_returning_garbage(keyring):
     """AES-GCM authenticates: a wrong key is an error, never a plausible string.
     That is the property an unauthenticated mode would not give us."""
     other = load_keyring(Settings(credential_key=f"v1:{_KEY_OTHER}"))
-    sealed = seal(_SECRET, tenant=_TENANT, keyring=keyring)
+    sealed = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
 
     with pytest.raises(CredentialError, match="did not decrypt"):
-        unseal(sealed, tenant=_TENANT, keyring=other)
+        unseal(sealed, tenant=_TENANT, connection=_CONNECTION, keyring=other)
 
 
 def test_a_key_this_process_does_not_hold_says_so(keyring):
-    sealed = seal(_SECRET, tenant=_TENANT, keyring=keyring)
+    sealed = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
     rotated_away = load_keyring(Settings(credential_key=f"v2:{_KEY_V2}"))
 
     with pytest.raises(CredentialError, match="does not hold key 'v1'"):
-        unseal(sealed, tenant=_TENANT, keyring=rotated_away)
+        unseal(sealed, tenant=_TENANT, connection=_CONNECTION, keyring=rotated_away)
 
 
 def test_a_tampered_record_does_not_decrypt(keyring):
-    sealed = seal(_SECRET, tenant=_TENANT, keyring=keyring)
+    sealed = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
     altered = credentials.Sealed(
         sealed.key_version, sealed.wrapped_key, sealed.ciphertext[:-1] + b"\x00"
     )
 
     with pytest.raises(CredentialError, match="did not decrypt"):
-        unseal(altered, tenant=_TENANT, keyring=keyring)
+        unseal(altered, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
 
 
 def test_a_record_lifted_into_another_tenant_does_not_decrypt(keyring):
     """The tenant is associated data on BOTH layers, so isolation survives a
     wrong WHERE clause — this is the guard for when the scope is the bug."""
-    sealed = seal(_SECRET, tenant="acme", keyring=keyring)
+    sealed = seal(_SECRET, tenant="acme", connection=_CONNECTION, keyring=keyring)
 
     with pytest.raises(CredentialError, match="did not decrypt"):
-        unseal(sealed, tenant="globex", keyring=keyring)
+        unseal(sealed, tenant="globex", connection=_CONNECTION, keyring=keyring)
 
 
 def test_rewrapping_moves_the_key_without_decrypting_the_credential(keyring):
-    sealed = seal(_SECRET, tenant=_TENANT, keyring=keyring)
+    sealed = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
     rotated = load_keyring(Settings(credential_key=_ROTATED))
 
-    moved = rewrap(sealed, tenant=_TENANT, keyring=rotated)
+    moved = rewrap(sealed, tenant=_TENANT, connection=_CONNECTION, keyring=rotated)
 
     assert moved is not None
     assert moved.key_version == "v2"
     # The payload is byte-identical: only the data key changed keys.
     assert moved.ciphertext == sealed.ciphertext
     assert moved.wrapped_key != sealed.wrapped_key
-    assert unseal(moved, tenant=_TENANT, keyring=rotated) == _SECRET
+    assert unseal(moved, tenant=_TENANT, connection=_CONNECTION, keyring=rotated) == _SECRET
     # And it is readable with ONLY the new key, which is what lets the old one
     # be dropped from the environment.
-    assert unseal(moved, tenant=_TENANT, keyring=KeyRing(rotated.keys[:1])) == _SECRET
+    assert unseal(moved, tenant=_TENANT, connection=_CONNECTION, keyring=KeyRing(rotated.keys[:1])) == _SECRET
 
 
 def test_rewrapping_a_record_already_on_the_active_key_is_a_no_op(keyring):
-    sealed = seal(_SECRET, tenant=_TENANT, keyring=keyring)
+    sealed = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
 
-    assert rewrap(sealed, tenant=_TENANT, keyring=keyring) is None
+    assert rewrap(sealed, tenant=_TENANT, connection=_CONNECTION, keyring=keyring) is None
 
 
 # ── the key ring, and refusing to guess ──────────────────────────────────────
@@ -348,7 +366,7 @@ def test_nothing_stored_anywhere_contains_the_credential(cards, settings):
     this fails. Every column is checked, not only the one meant to hold it."""
     cards.set_git_credential(_SECRET)
 
-    row = cards.git_credential_row()
+    row = _credential_row(cards)
     stored = [getattr(row, column.name) for column in row.__table__.columns]
     for value in stored:
         blob = value if isinstance(value, bytes) else str(value).encode()
@@ -364,7 +382,7 @@ def test_storing_without_an_encryption_key_is_refused_and_writes_nothing(cards, 
 
     with pytest.raises(CredentialError, match="CFACTORY_CREDENTIAL_KEY is not set"):
         cards.set_git_credential(_SECRET)
-    assert cards.git_credential_row() is None
+    assert _credential_row(cards) is None
 
 
 def test_an_empty_credential_is_refused(cards):
@@ -376,11 +394,11 @@ def test_replacing_a_credential_updates_the_row_rather_than_adding_one(cards, se
     """One credential per tenant. A second row would mean a revoked credential
     still sitting in the table behind the current one."""
     cards.set_git_credential(_SECRET)
-    first = cards.git_credential_row().id
+    first = _credential_row(cards).id
 
     cards.set_git_credential(_OTHER_SECRET)
 
-    assert cards.git_credential_row().id == first
+    assert _credential_row(cards).id == first
     assert cards.git_credential(settings).token() == _OTHER_SECRET
 
 
@@ -429,12 +447,12 @@ def test_a_lost_key_yields_no_credential_rather_than_garbage(cards, settings):
 
 def test_a_read_rewraps_a_record_onto_the_active_key(cards, settings, audit):
     cards.set_git_credential(_SECRET)
-    assert cards.git_credential_row().key_version == "v1"
+    assert _credential_row(cards).key_version == "v1"
 
     settings.credential_key = _ROTATED
     assert cards.git_credential(settings, audit=audit).token() == _SECRET
 
-    assert cards.git_credential_row().key_version == "v2"
+    assert _credential_row(cards).key_version == "v2"
     # And the old key can now be dropped: the record reads with v2 alone.
     settings.credential_key = f"v2:{_KEY_V2}"
     assert cards.git_credential(settings, audit=audit).token() == _SECRET
@@ -546,7 +564,7 @@ def test_the_credential_handle_does_not_render_the_credential(cards, settings):
     cards.set_git_credential(_SECRET)
 
     assert _SECRET not in repr(cards.git_credential(settings))
-    assert _SECRET not in repr(cards.git_credential_row().sealed())
+    assert _SECRET not in repr(_credential_row(cards).sealed())
 
 
 def test_storing_without_a_key_says_why_without_quoting_the_credential(client, settings):
@@ -817,8 +835,8 @@ def test_one_tenants_write_does_not_overwrite_anothers(multi_tenant_client, card
     _as(client, "globex", "put", _url("globex"), json={"credential": _OTHER_SECRET})
 
     assert cards.scoped("acme").git_credential(settings).token() == _SECRET
-    assert cards.scoped("acme").git_credential_row().id != (
-        cards.scoped("globex").git_credential_row().id
+    assert _credential_row(cards.scoped("acme")).id != (
+        _credential_row(cards.scoped("globex")).id
     )
 
 

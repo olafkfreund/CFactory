@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -36,13 +37,17 @@ from sqlalchemy.types import JSON
 from .audit import AuditStore
 from .config import DEFAULT_TENANT, Settings, get_settings
 from .credentials import (
+    KEY_ENV,
+    LEGACY_AAD_VERSION,
     Credential,
     CredentialError,
     CredentialInfo,
     GitCredentialRow,
+    Sealed,
     env_credential,
     load_keyring,
     require_keyring,
+    reseal,
     rewrap,
     seal,
     unseal,
@@ -50,14 +55,28 @@ from .credentials import (
 from .db import Base, make_engine
 from .git_config import (
     GitConfig,
+    GitConfigError,
     GitConfigRow,
     GitConfigUpdate,
     GitTarget,
     config_view,
     provider_token,
-    target_from_row,
     target_from_settings,
     validated_fields,
+)
+from .git_connections import (
+    GitConnectionCreate,
+    GitConnectionRow,
+    GitConnectionUpdate,
+    GitRepositoryCreate,
+    GitRepositoryRow,
+    GitRepositoryUpdate,
+    GitResourceNotFoundError,
+    ResolvedRepository,
+    connection_fields,
+    repository_fields,
+    repository_patch,
+    target_from_repository,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +103,19 @@ _CREDENTIAL_TARGET = "git_provider"
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _issue_project(issue_ref: str | None) -> str | None:
+    """The project path out of an ``owner/repo#123`` issue reference.
+
+    How a card that carries an issue finds the repository that issue lives in —
+    so a card imported from a GitLab repo syncs back to GitLab even when the
+    tenant's default repository is on GitHub. Parsed here rather than imported
+    from :mod:`cfactory.github_sync` because that module imports this one.
+    """
+    if not issue_ref or "#" not in issue_ref:
+        return None
+    return issue_ref.rsplit("#", 1)[0].strip() or None
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -143,6 +175,18 @@ class CardRow(Base):
     # guard — exactly as correlation_key means "already in the factory", this
     # means "already has an issue", so a second sync adopts instead of creating.
     issue_ref: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+
+    # ── Which repository this card is for (RFC-0020 §3.3, Phase 8) ───────────
+    # NULL means "the tenant's default repository", which is what every card
+    # created before this phase — and every card a human does not choose a
+    # repository for — resolves to. Set it and the card syncs, imports and builds
+    # against THAT repository on ITS connection, so two cards on one board can
+    # target two repos on two different providers. Deliberately not a foreign key
+    # with a cascade: deleting a repository must not delete planning data, so a
+    # card pointing at a repository that is gone falls back to the default (see
+    # ``resolve_repository``).
+    repository_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Mirrored FROM GitHub, never pushed to it: GitHub is the record of truth for
     # these (see cfactory.github_sync — GitHub wins on conflict).
     issue_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -189,6 +233,9 @@ class Card(BaseModel):
     milestone: str | None
     correlation_key: str | None
     issue_ref: str | None
+    # Which repository this card targets, or NULL for the tenant's default
+    # (RFC-0020 §3.3, phase 8).
+    repository_id: int | None = None
     issue_state: str | None
     labels: list[str]
     github_sync_error: str | None
@@ -224,6 +271,10 @@ class CardCreate(BaseModel):
     # from both write models: they are mirrored FROM GitHub, so letting a caller
     # set them would let the board assert something GitHub never said.
     issue_ref: str | None = Field(default=None, max_length=256)
+    # Which of the tenant's repositories this card is for (RFC-0020 §3.3, phase
+    # 8). Omit it for the tenant's default, which is what a board with one
+    # repository — every board before this phase — always means.
+    repository_id: int | None = None
 
 
 class CardUpdate(BaseModel):
@@ -247,6 +298,9 @@ class CardUpdate(BaseModel):
     # Adopt (or re-point) the card's GitHub issue. See CardCreate for why the
     # mirrored columns are not writable here.
     issue_ref: str | None = Field(default=None, max_length=256)
+    # Move the card to another of the tenant's repositories, or send ``null`` to
+    # put it back on the tenant default (RFC-0020 §3.3, phase 8).
+    repository_id: int | None = None
 
 
 class ImportStateRow(Base):
@@ -302,12 +356,26 @@ _LATE_COLUMNS = {
     # TIMESTAMP, not DATETIME: PostgreSQL has no DATETIME, and SQLite accepts
     # any type name.
     "deleted_at": "TIMESTAMP",
+    # Phase 8: which repository this card targets. NULL = the tenant default, so
+    # every existing card keeps behaving exactly as it did.
+    "repository_id": "INTEGER",
 }
 
 # The same guard for ``tenant_git_config``, which RFC-0020 phase 2 shipped and
 # phase 3 gave one more column. A live board created by phase 2 already HAS the
 # table, so ``create_all`` will not add it and every config read would fail.
 _LATE_CONFIG_COLUMNS = {"credential_rejected": "BOOLEAN"}
+
+# And for ``tenant_git_credential``, which phase 8 moves from per-tenant to
+# per-connection. Both columns are added UNSET, which is exactly what a legacy
+# record is: no connection yet, and the pre-phase-8 tenant-only crypto binding.
+# ``adopt_legacy_git_config`` fills them in at boot.
+_LATE_CREDENTIAL_COLUMNS = {"connection_id": "INTEGER", "aad_version": "INTEGER DEFAULT 1"}
+
+# The per-tenant unique index phase 8 replaces: one credential per tenant is
+# exactly the limitation being removed, so it has to GO on a live database and
+# not merely be absent from a fresh one.
+_DROPPED_INDEXES = ("ix_tenant_git_credential_tenant",)
 
 # Indexes the late columns need. The unique one is the RFC-0020 §3.6 import
 # idempotency guard and must exist on a live DB too, not only on a fresh
@@ -316,6 +384,12 @@ _LATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS ix_cards_issue_ref ON cards (issue_ref)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_cards_tenant_id_issue_ref"
     " ON cards (tenant_id, issue_ref)",
+    # Phase 8's replacement for the per-tenant credential index, on a table that
+    # already exists — so create_all will never add it.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_tenant_git_credential_connection"
+    " ON tenant_git_credential (connection_id)",
+    "CREATE INDEX IF NOT EXISTS ix_tenant_git_credential_tenant_id"
+    " ON tenant_git_credential (tenant_id)",
 )
 
 
@@ -331,14 +405,25 @@ def _ensure_late_columns(engine: Engine) -> None:
     from sqlalchemy import inspect, text  # noqa: PLC0415 — init-time only
 
     inspector = inspect(engine)
-    if inspector.has_table(GitConfigRow.__tablename__):
-        present = {c["name"] for c in inspector.get_columns(GitConfigRow.__tablename__)}
+    for table, columns in (
+        (GitConfigRow.__tablename__, _LATE_CONFIG_COLUMNS),
+        (GitCredentialRow.__tablename__, _LATE_CREDENTIAL_COLUMNS),
+    ):
+        if not inspector.has_table(table):
+            continue
+        present = {c["name"] for c in inspector.get_columns(table)}
         with engine.begin() as conn:
-            for name, ddl in _LATE_CONFIG_COLUMNS.items():
+            for name, ddl in columns.items():
                 if name not in present:
-                    conn.execute(
-                        text(f"ALTER TABLE {GitConfigRow.__tablename__} ADD COLUMN {name} {ddl}")
-                    )
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+    for index in _DROPPED_INDEXES:
+        # Its own transaction, and survivable: a database that never had the index
+        # (a fresh create_all) must not fail boot because a DROP found nothing.
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"DROP INDEX IF EXISTS {index}"))
+        except Exception as exc:  # noqa: BLE001 — boot must survive; see below.
+            logger.warning("could not drop legacy index %s: %s", index, exc)
     if not inspector.has_table(CardRow.__tablename__):
         return
     existing = {c["name"] for c in inspector.get_columns(CardRow.__tablename__)}
@@ -562,7 +647,7 @@ class CardStore:
             row.deleted_at = _now()
             return True
 
-    # ── Tenant git configuration (RFC-0020 §3.3) ─────────────────────────────
+    # ── Git connections and repositories (RFC-0020 §3.3, phase 8) ────────────
     #
     # Hung off the card store rather than given a store of its own, for the same
     # reason ``ImportStateRow`` is: it is *about* this tenant's cards, shares
@@ -571,12 +656,284 @@ class CardStore:
     # CardStore. A second store would mean a second tenant-scoping mechanism to
     # keep in step with this one, which is precisely how a cross-tenant read gets
     # written by accident.
+    #
+    # Every read below filters on ``self.tenant`` and every write stamps it, so a
+    # connection id or repository id from another tenant is NOT FOUND rather than
+    # readable — the isolation is the same one the cards get, and the credential
+    # binding (see cfactory.credentials) is the cryptographic backstop for when a
+    # WHERE clause is wrong.
 
-    def git_config_row(self) -> GitConfigRow | None:
-        """This tenant's stored git configuration row, or None if it has none."""
-        stmt = select(GitConfigRow).where(GitConfigRow.tenant_id == self.tenant)
+    def connections(self) -> Sequence[GitConnectionRow]:
+        """This tenant's git connections, oldest first.
+
+        ``Sequence`` rather than ``list`` because this class defines a ``list``
+        METHOD, which shadows the builtin for every annotation below it.
+        """
+        stmt = (
+            select(GitConnectionRow)
+            .where(GitConnectionRow.tenant_id == self.tenant)
+            .order_by(GitConnectionRow.id.asc())
+        )
+        with self._session() as session:
+            return list(session.scalars(stmt))
+
+    def connection(self, connection_id: int) -> GitConnectionRow:
+        """One of this tenant's connections, or raise :class:`GitResourceNotFoundError`."""
+        row = self._connection_or_none(connection_id)
+        if row is None:
+            raise GitResourceNotFoundError(f"no git connection {connection_id} for this tenant")
+        return row
+
+    def _connection_or_none(self, connection_id: int) -> GitConnectionRow | None:
+        stmt = select(GitConnectionRow).where(
+            GitConnectionRow.id == connection_id,
+            GitConnectionRow.tenant_id == self.tenant,
+        )
         with self._session() as session:
             return session.scalars(stmt).first()
+
+    def create_connection(self, body: GitConnectionCreate) -> GitConnectionRow:
+        """Add a connection. Raises ``GitConfigError`` if this host is already one.
+
+        The duplicate is caught from the unique index rather than from a lookup:
+        two concurrent creates of the same host both find nothing and both insert,
+        and only the constraint settles that.
+        """
+        fields = connection_fields(body.provider, body.base_url, body.label)
+        try:
+            with self._session.begin() as session:
+                row = GitConnectionRow(tenant_id=self.tenant, **fields)
+                session.add(row)
+                session.flush()
+                return row
+        except IntegrityError:
+            raise GitConfigError(
+                f"this tenant already has a {fields['provider']} connection to "
+                f"{fields['base_url'] or 'the provider default host'} — edit that one, or add "
+                "a repository to it"
+            ) from None
+
+    def update_connection(self, connection_id: int, body: GitConnectionUpdate) -> GitConnectionRow:
+        """Patch a connection. Changing provider or host clears its verification."""
+        sent = body.model_dump(exclude_unset=True)
+        current = self.connection(connection_id)
+        fields = connection_fields(
+            body.provider if "provider" in sent else current.provider,
+            body.base_url if "base_url" in sent else current.base_url,
+            body.label if "label" in sent else current.label,
+        )
+        moved = (fields["provider"], fields["base_url"]) != (current.provider, current.base_url)
+        if moved:
+            # A verification proved the host that answered and the credential it
+            # accepted. Point the connection somewhere else and it proves nothing.
+            fields |= {"verified_at": None, "verify_error": None, "credential_rejected": None}
+        try:
+            with self._session.begin() as session:
+                row = session.get(GitConnectionRow, connection_id)
+                if row is None or row.tenant_id != self.tenant:  # pragma: no cover — just read
+                    raise GitResourceNotFoundError(
+                        f"no git connection {connection_id} for this tenant"
+                    )
+                for name, value in fields.items():
+                    setattr(row, name, value)
+                row.updated_at = _now()
+                session.flush()
+                return row
+        except IntegrityError:
+            raise GitConfigError(
+                f"this tenant already has a {fields['provider']} connection to "
+                f"{fields['base_url'] or 'the provider default host'}"
+            ) from None
+
+    def delete_connection(self, connection_id: int) -> bool:
+        """Forget a connection, ITS REPOSITORIES and its credential.
+
+        Everything hanging off a connection goes with it, in one transaction:
+        a repository cannot be reached without the host it lives on, and a
+        credential for a connection that no longer exists is a secret kept for no
+        reason. Cards are NOT touched — a card whose repository is gone falls back
+        to the tenant default, exactly like one that never named a repository.
+
+        If the tenant's default repository was one of these, the oldest remaining
+        repository is promoted, so a tenant that still has repositories always has
+        a default to fall back to.
+        """
+        self.connection(connection_id)
+        with self._session.begin() as session:
+            for repo in session.scalars(
+                select(GitRepositoryRow).where(GitRepositoryRow.connection_id == connection_id)
+            ):
+                session.delete(repo)
+            for cred in session.scalars(
+                select(GitCredentialRow).where(GitCredentialRow.connection_id == connection_id)
+            ):
+                session.delete(cred)
+            row = session.get(GitConnectionRow, connection_id)
+            if row is not None:
+                session.delete(row)
+        self._ensure_default_repository()
+        return True
+
+    def repositories(self, connection_id: int | None = None) -> Sequence[GitRepositoryRow]:
+        """This tenant's repositories, optionally only one connection's."""
+        stmt = select(GitRepositoryRow).where(GitRepositoryRow.tenant_id == self.tenant)
+        if connection_id is not None:
+            stmt = stmt.where(GitRepositoryRow.connection_id == connection_id)
+        with self._session() as session:
+            return list(session.scalars(stmt.order_by(GitRepositoryRow.id.asc())))
+
+    def repository(self, repository_id: int) -> GitRepositoryRow:
+        """One of this tenant's repositories, or raise :class:`GitResourceNotFoundError`."""
+        stmt = select(GitRepositoryRow).where(
+            GitRepositoryRow.id == repository_id,
+            GitRepositoryRow.tenant_id == self.tenant,
+        )
+        with self._session() as session:
+            row = session.scalars(stmt).first()
+        if row is None:
+            raise GitResourceNotFoundError(f"no git repository {repository_id} for this tenant")
+        return row
+
+    def create_repository(self, connection_id: int, body: GitRepositoryCreate) -> GitRepositoryRow:
+        """Add a repository to one of this tenant's connections.
+
+        The first repository a tenant has becomes its default whatever
+        ``make_default`` says: a tenant with repositories and no default would
+        refuse every card that named none, which is not a state a create should be
+        able to leave behind.
+        """
+        connection = self.connection(connection_id)
+        fields = repository_fields(body, connection.provider)
+        make_default = body.make_default or self.default_repository() is None
+        try:
+            with self._session.begin() as session:
+                row = GitRepositoryRow(tenant_id=self.tenant, connection_id=connection_id, **fields)
+                session.add(row)
+                session.flush()
+                created = row.id
+        except IntegrityError:
+            raise GitConfigError(
+                f"{fields['project']!r} is already a repository on this connection"
+            ) from None
+        if make_default:
+            return self.set_default_repository(created)
+        return self.repository(created)
+
+    def update_repository(self, repository_id: int, body: GitRepositoryUpdate) -> GitRepositoryRow:
+        """Patch a repository. Only the fields actually sent are applied."""
+        current = self.repository(repository_id)
+        connection = self.connection(current.connection_id)
+        fields = repository_patch(body, connection.provider)
+        if not fields:
+            return current
+        try:
+            with self._session.begin() as session:
+                row = session.get(GitRepositoryRow, repository_id)
+                if row is None or row.tenant_id != self.tenant:  # pragma: no cover — just read
+                    raise GitResourceNotFoundError(
+                        f"no git repository {repository_id} for this tenant"
+                    )
+                for name, value in fields.items():
+                    setattr(row, name, value)
+                row.updated_at = _now()
+                session.flush()
+                return row
+        except IntegrityError:
+            raise GitConfigError(
+                f"{fields.get('project')!r} is already a repository on this connection"
+            ) from None
+
+    def delete_repository(self, repository_id: int) -> bool:
+        """Forget a repository. Cards that pointed at it fall back to the default."""
+        self.repository(repository_id)
+        with self._session.begin() as session:
+            row = session.get(GitRepositoryRow, repository_id)
+            if row is not None:
+                session.delete(row)
+        self._ensure_default_repository()
+        return True
+
+    def set_default_repository(self, repository_id: int) -> GitRepositoryRow:
+        """Make this repository the one a card that names none resolves to.
+
+        Clearing the previous default and setting the new one happen in ONE
+        transaction, because the database forbids two defaults per tenant (the
+        unique ``default_for_tenant`` index) — so a two-step version would fail
+        halfway and leave the tenant with none.
+        """
+        self.repository(repository_id)
+        with self._session.begin() as session:
+            for row in session.scalars(
+                select(GitRepositoryRow).where(
+                    GitRepositoryRow.default_for_tenant == self.tenant,
+                    GitRepositoryRow.id != repository_id,
+                )
+            ):
+                row.default_for_tenant = None
+            session.flush()
+            chosen = session.get(GitRepositoryRow, repository_id)
+            if chosen is None:  # pragma: no cover — read above
+                raise GitResourceNotFoundError(f"no git repository {repository_id} for this tenant")
+            chosen.default_for_tenant = self.tenant
+            session.flush()
+            return chosen
+
+    def _ensure_default_repository(self) -> None:
+        """Promote the oldest repository when the tenant has lost its default."""
+        remaining = self.repositories()
+        if not remaining or any(repo.is_default for repo in remaining):
+            return
+        self.set_default_repository(remaining[0].id)
+
+    def default_repository(self) -> ResolvedRepository | None:
+        """The repository a card that names none resolves to, with its connection."""
+        stmt = select(GitRepositoryRow).where(GitRepositoryRow.default_for_tenant == self.tenant)
+        with self._session() as session:
+            repo = session.scalars(stmt).first()
+        if repo is None:
+            return None
+        connection = self._connection_or_none(repo.connection_id)
+        if connection is None:  # pragma: no cover — deleted with its repositories
+            return None
+        return ResolvedRepository(connection, repo)
+
+    def resolve_repository(
+        self, *, repository_id: int | None = None, project: str | None = None
+    ) -> ResolvedRepository | None:
+        """The repository a card or an import means, or the tenant default.
+
+        The resolution order, and the ONE place it is expressed:
+
+        1. an explicit ``repository_id`` — a card that names its repository, or an
+           import told exactly which one to read;
+        2. a ``project`` path that matches one of this tenant's repositories — how
+           a card that carries an ``issue_ref`` finds the repository that issue
+           lives in, so a card imported from a GitLab repo syncs back to GitLab
+           and not to whatever the tenant's default happens to be. The default
+           wins the tie when two connections hold the same path, which is the
+           only ambiguity possible here and the only answer that is stable;
+        3. the tenant default.
+
+        ``None`` only when the tenant has no repositories at all, which the caller
+        renders as ``unconfigured`` (and, for a tenant still on the deployment's
+        environment variables, falls back to those).
+        """
+        if repository_id is not None:
+            repo = self.repository(repository_id)
+            connection = self._connection_or_none(repo.connection_id)
+            if connection is not None:
+                return ResolvedRepository(connection, repo)
+        wanted = (project or "").strip()
+        if wanted:
+            matches = [repo for repo in self.repositories() if repo.project == wanted]
+            chosen = next(
+                (repo for repo in matches if repo.is_default), matches[0] if matches else None
+            )
+            if chosen is not None:
+                connection = self._connection_or_none(chosen.connection_id)
+                if connection is not None:
+                    return ResolvedRepository(connection, chosen)
+        return self.default_repository()
 
     def git_target(
         self,
@@ -585,14 +942,14 @@ class CardStore:
         actor: str = SYSTEM_ACTOR,
         audit: AuditStore | None = None,
     ) -> GitTarget:
-        """This tenant's git target: the stored row if there is one, else the env.
+        """This tenant's DEFAULT git target: its default repository, else the env.
 
-        The ONE resolution every consumer uses — ``github_sync`` (which project
-        an issue is opened in), ``issue_import`` (which project issues are read
-        from) and ``card_intake`` (which AIFactory project a card is built in).
-        None of them looks at ``Settings`` for a provider, a repo or an intake
-        project any more; if they did, the stored configuration would be a second
-        opinion rather than the answer.
+        The ONE resolution every consumer uses when nothing names a repository —
+        ``github_sync`` (which project an issue is opened in), ``issue_import``
+        (which project issues are read from) and ``card_intake`` (which AIFactory
+        project a card is built in). None of them looks at ``Settings`` for a
+        provider, a repo or an intake project; if they did, the stored
+        configuration would be a second opinion rather than the answer.
 
         It hangs off the store because the store is what knows the tenant: every
         consumer is already handed a tenant-scoped one, so tenant-correct
@@ -604,12 +961,56 @@ class CardStore:
         decrypt anything to answer — so a target that is never handed to a
         provider produces no entry.
         """
+        return self.git_target_for(settings, actor=actor, audit=audit)
+
+    def git_target_for(
+        self,
+        settings: Settings | None = None,
+        *,
+        repository_id: int | None = None,
+        project: str | None = None,
+        actor: str = SYSTEM_ACTOR,
+        audit: AuditStore | None = None,
+    ) -> GitTarget:
+        """The git target for one repository (see :meth:`resolve_repository`).
+
+        A tenant with no repositories at all resolves against the deployment's
+        environment variables, which is the one-release bridge phase 2 introduced
+        and every unit test that never stores a configuration relies on.
+        """
         settings = settings or get_settings()
-        credential = self.git_credential(settings, actor=actor, audit=audit)
-        row = self.git_config_row()
-        if row is None:
-            return target_from_settings(settings, self.tenant, credential)
-        return target_from_row(row, settings, credential)
+        resolved = self.resolve_repository(repository_id=repository_id, project=project)
+        if resolved is None:
+            return target_from_settings(
+                settings, self.tenant, self._tenant_credential(settings, actor=actor, audit=audit)
+            )
+        credential = self.connection_credential(
+            resolved.connection.id, settings, actor=actor, audit=audit
+        )
+        return target_from_repository(resolved, settings, credential)
+
+    def git_target_for_card(
+        self,
+        card: Card,
+        settings: Settings | None = None,
+        *,
+        actor: str = SYSTEM_ACTOR,
+        audit: AuditStore | None = None,
+    ) -> GitTarget:
+        """The git target a CARD resolves to (RFC-0020 §3.3, phase 8).
+
+        Its own repository if it names one, else the repository its issue lives in,
+        else the tenant default — so two cards on one board can target two repos on
+        two different providers, and a card that names nothing behaves exactly as
+        it did before this phase.
+        """
+        return self.git_target_for(
+            settings,
+            repository_id=card.repository_id,
+            project=_issue_project(card.issue_ref),
+            actor=actor,
+            audit=audit,
+        )
 
     def seed_git_config_from_env(self, settings: Settings | None = None) -> GitConfig | None:
         """Materialise this tenant's config from the legacy env vars. Once.
@@ -622,18 +1023,23 @@ class CardStore:
 
         Two rules make this safe to call on every boot:
 
-        * a tenant that already has a row is left ALONE — the stored config is
-          authoritative, and re-seeding would silently undo an edit made in the
-          cockpit every time the process restarted (the failure this is most
-          likely to cause, and the one the tests pin);
-        * nothing to seed (no project, no AIFactory project id) writes no row, so
+        * a tenant that already has a CONNECTION is left ALONE — the stored
+          configuration is authoritative, and re-seeding would silently undo an
+          edit made in the cockpit every time the process restarted (the failure
+          this is most likely to cause, and the one the tests pin);
+        * nothing to seed (no project, no AIFactory project id) writes nothing, so
           a deploy that never configured any of this stays ``unconfigured``
-          rather than acquiring an empty row that reads as a deliberate choice.
+          rather than acquiring an empty connection that reads as a deliberate
+          choice.
+
+        Since phase 8 what it materialises is one connection with one repository,
+        marked as the tenant default — the same shape the legacy row is adopted
+        into (:meth:`adopt_legacy_git_config`).
 
         Returns the seeded config, or ``None`` when it did nothing.
         """
         settings = settings or get_settings()
-        if self.git_config_row() is not None:
+        if self.connections():
             return None
         env = target_from_settings(settings, self.tenant)
         if not (env.project or env.aifactory_project_id):
@@ -657,16 +1063,162 @@ class CardStore:
         )
         return config_view(self.git_target(settings))
 
-    def set_git_config(self, update: GitConfigUpdate, settings: Settings | None = None) -> None:
-        """Replace this tenant's git configuration. Raises ``GitConfigError``.
+    # ── The single-configuration shim (RFC-0020 §3.3, phases 2-7) ────────────
+    #
+    # ``set_git_config`` / ``git_credential`` / ``record_git_verification`` are
+    # what the pre-phase-8 REST endpoints, the pre-phase-8 MCP tools and the
+    # environment seed call. They are now SHIMS over the two-level model rather
+    # than a second place configuration is stored: each one operates on the
+    # tenant's DEFAULT repository and the connection that repository lives on,
+    # creating them if the tenant has none. There is no ``tenant_git_config`` row
+    # written any more — that table is read once, by
+    # :meth:`adopt_legacy_git_config`, and never again.
 
-        A full replacement (the PUT semantics), and it clears any recorded
-        verification: that verification proved a configuration this one is no
-        longer. Returns nothing — the caller re-resolves, so "what is the config
-        now" has one implementation (``git_target``) rather than a
-        second, subtly different one on the write path.
+    def set_git_config(self, update: GitConfigUpdate, settings: Settings | None = None) -> None:
+        """Replace this tenant's DEFAULT repository, and the connection it is on.
+
+        The phase-2 PUT semantics, expressed on the new model: the provider and
+        host become (or find) a connection, the project becomes the tenant's
+        default repository on it, and any recorded verification is cleared —
+        because it proved a configuration this one no longer is.
+
+        A cleared ``project`` does NOT delete a repository. It clears the tenant's
+        DEFAULT, so a card that names none is ``unconfigured`` again, and leaves
+        every repository (and every card pointing at one) intact — a full-replace
+        of one field is not a mandate to destroy the rest of the tenant's setup.
         """
-        self._upsert_git_config(validated_fields(update), settings)
+        settings = settings or get_settings()
+        fields = validated_fields(update)
+        connection = self._shim_connection(str(fields["provider"]), fields["base_url"])
+        # The phase-2 rule: any configuration write invalidates the verification.
+        self._patch_connection(
+            connection.id, {"verified_at": None, "verify_error": None, "credential_rejected": None}
+        )
+        project = fields["project"]
+        if not project:
+            self._clear_default_repository()
+            return
+        body = GitRepositoryCreate(
+            project=str(project),
+            intake_project=fields["intake_project"],
+            aifactory_project_id=fields["aifactory_project_id"],
+            default_labels=fields["default_labels"],
+            make_default=True,
+        )
+        existing = next(
+            (repo for repo in self.repositories(connection.id) if repo.project == str(project)),
+            None,
+        )
+        if existing is None:
+            self.create_repository(connection.id, body)
+            return
+        self.update_repository(
+            existing.id,
+            GitRepositoryUpdate(
+                project=body.project,
+                intake_project=body.intake_project,
+                aifactory_project_id=body.aifactory_project_id,
+                default_labels=body.default_labels,
+            ),
+        )
+        self.set_default_repository(existing.id)
+
+    def _shim_connection(self, provider: str, base_url: str | None) -> GitConnectionRow:
+        """The connection a single-configuration write lands on.
+
+        The phase-2 PUT replaced the tenant's ONE configuration, provider and host
+        included, so on the new model it EDITS a connection rather than adding one:
+        otherwise saving the panel with a different host would strand the tenant's
+        credential (and its verification) on a connection nothing points at any
+        more — the exact bug this method exists to prevent.
+
+        In order: a connection that already names this (provider, host) is used as
+        it is; otherwise the connection the tenant's default repository lives on —
+        or its only connection — is moved to it; otherwise one is created. The
+        credential survives the move, because it is bound to the connection's
+        identity and not to its host.
+        """
+        wanted = connection_fields(provider, base_url, None)
+        existing = list(self.connections())
+        match = next(
+            (
+                row
+                for row in existing
+                if (row.provider, row.base_url or "") == (wanted["provider"], wanted["base_url"])
+            ),
+            None,
+        )
+        if match is not None:
+            return match
+        resolved = self.default_repository()
+        editable = resolved.connection if resolved is not None else None
+        if editable is None and len(existing) == 1:
+            editable = existing[0]
+        if editable is not None:
+            try:
+                return self.update_connection(
+                    editable.id,
+                    GitConnectionUpdate(
+                        provider=str(wanted["provider"]), base_url=str(wanted["base_url"])
+                    ),
+                )
+            except GitConfigError:  # pragma: no cover — another connection holds
+                # that host, so the match above would have found it; kept because
+                # a concurrent create could land between the two.
+                pass
+        return self._connection_for(provider, base_url)
+
+    def _connection_for(self, provider: str, base_url: str | None) -> GitConnectionRow:
+        """The tenant's connection for this (provider, host), created if absent.
+
+        The get-or-create the shim needs. A direct create is tried first and the
+        unique index decides: looking first and creating second loses the race
+        between two concurrent saves of the same host.
+        """
+        url = base_url or None
+        try:
+            return self.create_connection(GitConnectionCreate(provider=provider, base_url=url))
+        except GitConfigError:
+            wanted = connection_fields(provider, url, None)
+            found = next(
+                (
+                    row
+                    for row in self.connections()
+                    if (row.provider, row.base_url or "")
+                    == (wanted["provider"], wanted["base_url"])
+                ),
+                None,
+            )
+            if found is None:  # pragma: no cover — the index rejected it, so it exists
+                raise
+            return found
+
+    def _clear_default_repository(self) -> None:
+        """Leave the tenant with no default repository (a cleared project)."""
+        with self._session.begin() as session:
+            for row in session.scalars(
+                select(GitRepositoryRow).where(GitRepositoryRow.default_for_tenant == self.tenant)
+            ):
+                row.default_for_tenant = None
+
+    def _default_connection(self, settings: Settings) -> GitConnectionRow:
+        """The connection the single-configuration shim operates on.
+
+        The default repository's connection, else the tenant's oldest connection,
+        else one materialised for whatever provider the deployment's environment
+        describes. A credential has to belong to a connection now — it is bound to
+        one cryptographically — so storing one for a tenant that has configured
+        nothing yet materialises the connection and NOT a repository: the tenant
+        still reads as ``unconfigured``, which is what it is.
+        """
+        resolved = self.default_repository()
+        if resolved is not None:
+            return resolved.connection
+        existing = self.connections()
+        if existing:
+            return existing[0]
+        env = target_from_settings(settings, self.tenant)
+        return self._connection_for(env.provider, env.base_url)
 
     # ── Tenant git credential (RFC-0020 §3.4) ────────────────────────────────
     #
@@ -691,27 +1243,37 @@ class CardStore:
             self._audit = AuditStore(self._url)
         return self._audit
 
-    def git_credential_row(self) -> GitCredentialRow | None:
-        """This tenant's sealed credential row, or None if it has none."""
-        stmt = select(GitCredentialRow).where(GitCredentialRow.tenant_id == self.tenant)
+    def credential_row(self, connection_id: int) -> GitCredentialRow | None:
+        """One connection's sealed credential row, or None if it has none.
+
+        Scoped by tenant AS WELL AS by connection: the connection id came from a
+        URL, and a tenant must not be able to read another tenant's sealed record
+        by naming its id — even though the AAD binding means the record would not
+        decrypt anyway.
+        """
+        stmt = select(GitCredentialRow).where(
+            GitCredentialRow.connection_id == connection_id,
+            GitCredentialRow.tenant_id == self.tenant,
+        )
         with self._session() as session:
             return session.scalars(stmt).first()
 
-    def git_credential(
+    def connection_credential(
         self,
+        connection_id: int,
         settings: Settings | None = None,
         *,
         actor: str = SYSTEM_ACTOR,
         audit: AuditStore | None = None,
     ) -> Credential:
-        """This tenant's credential handle — never the credential.
+        """One connection's credential handle — never the credential.
 
         A stored credential is the answer whether or not it can currently be
         unsealed; it does NOT fall back to the deployment's environment token.
         Falling back would hand tenant A the operator's credential the moment
         tenant A's own record became unreadable, which is the cross-tenant leak
-        this whole phase exists to close. Only a tenant that has stored nothing
-        uses the environment one.
+        phase 3 exists to close. Only a connection that has stored nothing uses
+        the environment one.
 
         ``configured`` is answered WITHOUT decrypting: a row exists and this
         process holds the key that wraps it. A key of the right id but the wrong
@@ -720,7 +1282,7 @@ class CardStore:
         alternative is decrypting a secret to render a boolean on every poll.
         """
         settings = settings or get_settings()
-        row = self.git_credential_row()
+        row = self.credential_row(connection_id)
         if row is None:
             return env_credential(provider_token(settings))
         return Credential(
@@ -730,8 +1292,39 @@ class CardStore:
                 updated_at=_as_utc(row.updated_at),
                 key_version=row.key_version,
             ),
-            lambda: self._fetch_git_credential(settings, actor=actor, audit=audit),
+            lambda: self._fetch_credential(connection_id, settings, actor=actor, audit=audit),
         )
+
+    def git_credential(
+        self,
+        settings: Settings | None = None,
+        *,
+        actor: str = SYSTEM_ACTOR,
+        audit: AuditStore | None = None,
+    ) -> Credential:
+        """The single-configuration shim: the default connection's credential."""
+        settings = settings or get_settings()
+        return self._tenant_credential(settings, actor=actor, audit=audit)
+
+    def _tenant_credential(
+        self, settings: Settings, *, actor: str = SYSTEM_ACTOR, audit: AuditStore | None = None
+    ) -> Credential:
+        """The credential of the tenant's default connection, else the env one.
+
+        Used where no connection is named: the pre-phase-8 endpoints and a tenant
+        that resolves entirely from the deployment's environment variables. A
+        tenant with connections but no default repository falls back to its OLDEST
+        connection, which for the single-connection deployment every phase-3
+        install is means "the tenant's credential", unchanged.
+        """
+        resolved = self.default_repository()
+        connection = resolved.connection if resolved is not None else None
+        if connection is None:
+            existing = self.connections()
+            connection = existing[0] if existing else None
+        if connection is None:
+            return env_credential(provider_token(settings))
+        return self.connection_credential(connection.id, settings, actor=actor, audit=audit)
 
     def _holds_key(self, key_version: str, settings: Settings) -> bool:
         """Whether this process holds the KEK that wraps *key_version*."""
@@ -742,10 +1335,10 @@ class CardStore:
             return False
         return keyring is not None and keyring.find(key_version) is not None
 
-    def _fetch_git_credential(
-        self, settings: Settings, *, actor: str, audit: AuditStore | None
+    def _fetch_credential(
+        self, connection_id: int, settings: Settings, *, actor: str, audit: AuditStore | None
     ) -> str | None:
-        """Unseal this tenant's credential for ONE provider call, and audit it.
+        """Unseal one connection's credential for ONE provider call, and audit it.
 
         Every outcome is chained, including the failures: "the credential could
         not be read at 14:02" is precisely the entry an operator needs when a
@@ -757,7 +1350,7 @@ class CardStore:
         keeps serving — a credential problem degrades the board, it does not take
         it down.
         """
-        row = self.git_credential_row()
+        row = self.credential_row(connection_id)
         if row is None:
             return None
         try:
@@ -769,7 +1362,9 @@ class CardStore:
                     f"no credential key is configured, so the stored credential for "
                     f"tenant {self.tenant!r} cannot be read"
                 )
-            secret = unseal(row.sealed(), tenant=self.tenant, keyring=keyring)
+            secret = unseal(
+                row.sealed(), tenant=self.tenant, connection=connection_id, keyring=keyring
+            )
         except CredentialError as exc:
             # The message names the tenant and the failure, never the record and
             # never a fragment of the credential.
@@ -777,53 +1372,92 @@ class CardStore:
             self._audit_credential(audit, actor, kind="read_git_credential", ok=False)
             return None
         self._audit_credential(audit, actor, kind="read_git_credential", ok=True)
-        self._rewrap_git_credential(row, keyring)
+        self._migrate_sealed(row, connection_id, keyring)
         return secret
 
-    def _rewrap_git_credential(self, row: GitCredentialRow, keyring: Any) -> None:
-        """Move a record onto the active KEK, if it is not already on it.
+    def _migrate_sealed(self, row: GitCredentialRow, connection_id: int, keyring: Any) -> None:
+        """Move a record onto the active KEK and the current binding, if needed.
 
-        The rotation story: put the new key FIRST in ``CFACTORY_CREDENTIAL_KEY``,
-        keep the old one listed, and records migrate as they are used. The
-        credential is not decrypted to do it — only its data key is re-wrapped
-        (see :func:`cfactory.credentials.rewrap`).
+        Two migrations, both lazy and both invisible:
 
-        ponytail: lazy, on read. A tenant whose credential is never used never
-        migrates, so check every tenant reports the new ``key_version`` in the
-        panel before dropping the old key from the environment. Upgrade path if
-        that ever bites: sweep every row at boot.
+        * **KEK rotation** — put the new key FIRST in ``CFACTORY_CREDENTIAL_KEY``,
+          keep the old one listed, and records move as they are used. The
+          credential is not decrypted to do it: only its data key is re-wrapped
+          (see :func:`cfactory.credentials.rewrap`).
+        * **the phase-8 binding** — a record sealed before connections existed is
+          bound to the tenant only. Re-sealing it onto (tenant, connection) DOES
+          decrypt, once, in memory (:func:`cfactory.credentials.reseal`); the
+          plaintext is never returned from that call, never logged and never
+          written anywhere but back into the sealed columns.
+
+        ponytail: lazy, on read, plus an eager sweep at boot
+        (:meth:`adopt_legacy_git_config`) — so a credential nothing ever uses
+        still gets its binding upgraded. Check every connection reports the new
+        ``key_version`` in the panel before dropping an old key from the
+        environment.
         """
         try:
-            rewrapped = rewrap(row.sealed(), tenant=self.tenant, keyring=keyring)
+            current = row.sealed()
+            rewrapped = rewrap(
+                current, tenant=self.tenant, connection=connection_id, keyring=keyring
+            )
             if rewrapped is not None:
-                self._store_sealed(rewrapped)
+                current = rewrapped
+                self._store_sealed(connection_id, rewrapped)
                 logger.info(
-                    "re-wrapped tenant %s git credential onto key %s",
+                    "re-wrapped tenant %s connection %s credential onto key %s",
                     self.tenant,
+                    connection_id,
                     rewrapped.key_version,
                 )
-        except CredentialError as exc:  # pragma: no cover — unwrapping just succeeded
-            logger.warning("could not re-wrap tenant %s git credential: %s", self.tenant, exc)
+            resealed = reseal(
+                current, tenant=self.tenant, connection=connection_id, keyring=keyring
+            )
+            if resealed is not None:
+                self._store_sealed(connection_id, resealed)
+                logger.info(
+                    "re-sealed tenant %s connection %s credential onto the connection binding "
+                    "(RFC-0020 phase 8)",
+                    self.tenant,
+                    connection_id,
+                )
+        except CredentialError as exc:  # pragma: no cover — unsealing just succeeded
+            logger.warning(
+                "could not migrate tenant %s connection %s credential: %s",
+                self.tenant,
+                connection_id,
+                exc,
+            )
 
-    def set_git_credential(self, secret: str, settings: Settings | None = None) -> CredentialInfo:
-        """Store (or replace) this tenant's credential, encrypted.
+    def sealed_for(self, connection_id: int) -> Sealed | None:
+        """The sealed record for a connection, as the crypto layer sees it."""
+        row = self.credential_row(connection_id)
+        return row.sealed() if row is not None else None
+
+    def set_connection_credential(
+        self, connection_id: int, secret: str, settings: Settings | None = None
+    ) -> CredentialInfo:
+        """Store (or replace) one connection's credential, encrypted.
 
         FAILS CLOSED: with no ``CFACTORY_CREDENTIAL_KEY`` configured this raises
         :class:`~cfactory.credentials.CredentialError` rather than writing
         anything. There is no plaintext path, not even a degraded one.
+
+        Sealed against (tenant, connection), so the record is unusable on any
+        other connection — including another of this tenant's.
         """
         settings = settings or get_settings()
+        connection = self.connection(connection_id)
         value = (secret or "").strip()
         if not value:
             raise CredentialError("credential must not be empty")
-        sealed = seal(value, tenant=self.tenant, keyring=require_keyring(settings))
-        self._store_sealed(sealed)
+        sealed = seal(
+            value, tenant=self.tenant, connection=connection.id, keyring=require_keyring(settings)
+        )
+        self._store_sealed(connection.id, sealed)
         # A new credential makes any recorded rejection obsolete — it was about
-        # the credential this one replaces. Only touched when a configuration row
-        # already exists: storing a credential must not materialise an empty
-        # configuration that then reads as a deliberate choice.
-        if self.git_config_row() is not None:
-            self._upsert_git_config({"credential_rejected": None}, settings)
+        # the credential this one replaces.
+        self._patch_connection(connection.id, {"credential_rejected": None})
         return CredentialInfo(
             configured=True,
             source="tenant",
@@ -831,28 +1465,61 @@ class CardStore:
             key_version=sealed.key_version,
         )
 
-    def clear_git_credential(self) -> bool:
-        """Forget this tenant's credential. True if there was one.
+    def set_git_credential(self, secret: str, settings: Settings | None = None) -> CredentialInfo:
+        """The single-configuration shim: store the DEFAULT connection's credential.
+
+        Materialises a connection for a tenant that has none (see
+        :meth:`_default_connection`) because a credential has to belong to one now.
+        It materialises no repository, so the tenant still reads as
+        ``unconfigured`` — storing a credential has never been allowed to invent a
+        project that then looks like a deliberate choice.
+        """
+        settings = settings or get_settings()
+        return self.set_connection_credential(
+            self._default_connection(settings).id, secret, settings
+        )
+
+    def clear_connection_credential(self, connection_id: int) -> bool:
+        """Forget one connection's credential. True if there was one.
 
         The revocation path: a credential that has leaked has to be removable
         from the surface that stored it, not by an operator with a SQL client.
         """
-        stmt = select(GitCredentialRow).where(GitCredentialRow.tenant_id == self.tenant)
+        self.connection(connection_id)
         with self._session.begin() as session:
-            row = session.scalars(stmt).first()
+            row = session.scalars(
+                select(GitCredentialRow).where(
+                    GitCredentialRow.connection_id == connection_id,
+                    GitCredentialRow.tenant_id == self.tenant,
+                )
+            ).first()
             if row is None:
                 return False
             session.delete(row)
             return True
 
-    def _store_sealed(self, sealed: Any) -> None:
-        """Insert-or-update this tenant's sealed credential.
+    def clear_git_credential(self) -> bool:
+        """The single-configuration shim: forget the DEFAULT connection's credential."""
+        resolved = self.default_repository()
+        existing = self.connections()
+        connection = (
+            resolved.connection if resolved is not None else (existing[0] if existing else None)
+        )
+        if connection is None:
+            return False
+        return self.clear_connection_credential(connection.id)
 
-        Same constraint-not-check rule as ``_upsert_git_config``: two concurrent
-        first-ever writes both find no row and both insert, and the unique index
-        rejects the loser, which then takes the update path.
+    def _store_sealed(self, connection_id: int, sealed: Sealed) -> None:
+        """Insert-or-update one connection's sealed credential.
+
+        Constraint, not check: two concurrent first-ever writes both find no row
+        and both insert, and the unique index rejects the loser, which then takes
+        the update path.
         """
-        stmt = select(GitCredentialRow).where(GitCredentialRow.tenant_id == self.tenant)
+        stmt = select(GitCredentialRow).where(
+            GitCredentialRow.connection_id == connection_id,
+            GitCredentialRow.tenant_id == self.tenant,
+        )
         for attempt in range(2):
             try:
                 with self._session.begin() as session:
@@ -861,13 +1528,16 @@ class CardStore:
                         session.add(
                             GitCredentialRow(
                                 tenant_id=self.tenant,
+                                connection_id=connection_id,
                                 key_version=sealed.key_version,
+                                aad_version=sealed.aad_version,
                                 wrapped_key=sealed.wrapped_key,
                                 ciphertext=sealed.ciphertext,
                             )
                         )
                     else:
                         row.key_version = sealed.key_version
+                        row.aad_version = sealed.aad_version
                         row.wrapped_key = sealed.wrapped_key
                         row.ciphertext = sealed.ciphertext
                         row.updated_at = _now()
@@ -891,6 +1561,21 @@ class CardStore:
             ok=ok,
         )
 
+    def record_connection_verification(
+        self, connection_id: int, *, error: str | None, rejected: bool | None = None
+    ) -> None:
+        """Record what a verify proved about one connection."""
+        self._patch_connection(
+            connection_id,
+            {
+                "verified_at": None if error else _now(),
+                "verify_error": error,
+                # A successful verify proves the credential was ACCEPTED, so it
+                # clears any earlier rejection as well as recording the success.
+                "credential_rejected": bool(rejected) if error else None,
+            },
+        )
+
     def record_git_verification(
         self,
         *,
@@ -898,16 +1583,17 @@ class CardStore:
         rejected: bool | None = None,
         settings: Settings | None = None,
     ) -> None:
-        """Record the outcome of a verify against this tenant's configuration.
+        """The single-configuration shim: record a verify on the default connection.
 
-        Materialises the row when the tenant is still resolving from the
+        Materialises the connection when the tenant is still resolving from the
         environment: asking to verify is asking about a *specific* configuration,
         and the answer has to be recorded against something. What is materialised
         is exactly what the seed would have written, so this cannot invent a
         configuration the deployment did not already describe.
         """
-        if self.git_config_row() is None:
-            env = target_from_settings(settings or get_settings(), self.tenant)
+        settings = settings or get_settings()
+        if not self.connections():
+            env = target_from_settings(settings, self.tenant)
             self.set_git_config(
                 GitConfigUpdate(
                     provider=env.provider,
@@ -917,40 +1603,137 @@ class CardStore:
                 ),
                 settings,
             )
-        self._upsert_git_config(
-            {
-                "verified_at": None if error else _now(),
-                "verify_error": error,
-                # A successful verify proves the credential was ACCEPTED, so it
-                # clears any earlier rejection as well as recording the success.
-                "credential_rejected": bool(rejected) if error else None,
-            },
-            settings,
+        self.record_connection_verification(
+            self._default_connection(settings).id, error=error, rejected=rejected
         )
 
-    def _upsert_git_config(self, fields: dict[str, Any], _settings: Settings | None = None) -> None:
-        """Insert-or-update this tenant's config row.
+    def _patch_connection(self, connection_id: int, fields: dict[str, Any]) -> None:
+        """Write bookkeeping columns onto a connection this tenant owns."""
+        with self._session.begin() as session:
+            row = session.get(GitConnectionRow, connection_id)
+            if row is None or row.tenant_id != self.tenant:
+                raise GitResourceNotFoundError(f"no git connection {connection_id} for this tenant")
+            for name, value in fields.items():
+                setattr(row, name, value)
+            row.updated_at = _now()
 
-        Two concurrent first-ever writes both find no row and both insert; the
-        unique index rejects the loser, which then takes the update path — the
-        same constraint-not-check rule the card import follows.
+    # ── Adopting the phase-2 single row (RFC-0020 §3.3, phase 8) ─────────────
+
+    def adopt_legacy_git_config(self, settings: Settings | None = None) -> int:
+        """Turn every pre-phase-8 ``tenant_git_config`` row into a connection.
+
+        Runs at boot, for EVERY tenant in the database rather than for this
+        store's own — an upgrade must not wait for a tenant to log in — and is
+        idempotent: a tenant that already has a connection is skipped, so a
+        restart never re-adopts and never overwrites an edit made in the cockpit.
+
+        One legacy row becomes exactly one connection (provider, base_url, verify
+        state) plus, when it named a project, one repository marked as the tenant
+        default (project, intake_project, aifactory_project_id, default_labels).
+
+        **The credential is re-sealed here, never re-typed and never written out.**
+        The legacy record is bound to the tenant only; this binds it to the tenant
+        AND the new connection. It is unsealed and re-sealed in memory
+        (:func:`cfactory.credentials.reseal`) and the plaintext is not returned,
+        not logged and not written anywhere but back into the sealed columns. When
+        this deployment holds no usable key the record is LEFT ALONE, still marked
+        legacy and still readable by the legacy path the moment the key is back —
+        a missing key must not destroy a credential, and it cannot be re-sealed
+        without one. Returns how many tenants were adopted.
+
+        Why here and not in the Alembic migration: this deployment bootstraps its
+        schema with ``create_all`` (see ``_ensure_late_columns``) and may never run
+        Alembic at all, and — decisively — a migration process is not guaranteed
+        to hold ``CFACTORY_CREDENTIAL_KEY``, so a re-seal there would either fail
+        the upgrade or silently skip the credential. The app process has the key by
+        definition: without it, it cannot read the credential either.
         """
-        stmt = select(GitConfigRow).where(GitConfigRow.tenant_id == self.tenant)
-        for attempt in range(2):
-            try:
-                with self._session.begin() as session:
-                    row = session.scalars(stmt).first()
-                    if row is None:
-                        session.add(GitConfigRow(tenant_id=self.tenant, **fields))
-                    else:
-                        for name, value in fields.items():
-                            setattr(row, name, value)
-                        row.updated_at = _now()
-                    session.flush()
-                    return
-            except IntegrityError:
-                if attempt:  # pragma: no cover — the row exists by the retry
-                    raise
+        settings = settings or get_settings()
+        with self._session() as session:
+            legacy = list(session.scalars(select(GitConfigRow)))
+        adopted = 0
+        for row in legacy:
+            scoped = self.scoped(row.tenant_id)
+            if scoped.connections():
+                continue
+            scoped._adopt_one(row, settings)
+            adopted += 1
+        return adopted
+
+    def _adopt_one(self, row: GitConfigRow, settings: Settings) -> None:
+        """Adopt ONE legacy configuration row into this (scoped) store's tenant."""
+        provider = (row.provider or "github").strip().lower()
+        connection = self.create_connection(
+            GitConnectionCreate(provider=provider, base_url=row.base_url)
+        )
+        self._patch_connection(
+            connection.id,
+            {
+                "verified_at": row.verified_at,
+                "verify_error": row.verify_error,
+                "credential_rejected": row.credential_rejected,
+            },
+        )
+        if row.project:
+            self.create_repository(
+                connection.id,
+                GitRepositoryCreate(
+                    project=row.project,
+                    intake_project=row.intake_project,
+                    aifactory_project_id=row.aifactory_project_id,
+                    default_labels=[
+                        label for label in (row.default_labels or []) if isinstance(label, str)
+                    ],
+                    make_default=True,
+                ),
+            )
+        logger.info(
+            "adopted tenant %r legacy git config into connection %s (provider=%s project=%s)",
+            self.tenant,
+            connection.id,
+            provider,
+            row.project,
+        )
+        self._adopt_credential(connection.id, settings)
+
+    def _adopt_credential(self, connection_id: int, settings: Settings) -> None:
+        """Attach the tenant's legacy credential to its new connection, re-sealed.
+
+        Never logs, returns or stores the plaintext — see
+        :meth:`adopt_legacy_git_config`. A record that cannot be unsealed keeps its
+        legacy binding rather than being deleted or rewritten.
+        """
+        stmt = select(GitCredentialRow).where(
+            GitCredentialRow.tenant_id == self.tenant,
+            GitCredentialRow.connection_id.is_(None),
+        )
+        with self._session.begin() as session:
+            row = session.scalars(stmt).first()
+            if row is None:
+                return
+            row.connection_id = connection_id
+            row.aad_version = LEGACY_AAD_VERSION
+        sealed = self.sealed_for(connection_id)
+        if sealed is None:  # pragma: no cover — just written
+            return
+        try:
+            keyring = load_keyring(settings)
+            if keyring is None:
+                raise CredentialError(f"no {KEY_ENV} is set")
+            resealed = reseal(sealed, tenant=self.tenant, connection=connection_id, keyring=keyring)
+        except CredentialError as exc:
+            logger.warning(
+                "tenant %s credential kept its pre-phase-8 binding (%s); it will be re-sealed "
+                "on the first read once the key is available",
+                self.tenant,
+                exc,
+            )
+            return
+        if resealed is not None:
+            self._store_sealed(connection_id, resealed)
+            logger.info(
+                "re-sealed tenant %s credential onto connection %s", self.tenant, connection_id
+            )
 
     # ── Import watermark (RFC-0020 §3.6) ─────────────────────────────────────
 

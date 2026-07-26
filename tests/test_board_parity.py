@@ -62,6 +62,15 @@ class BoardOperation:
 BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
     BoardOperation("list", "GET", "/api/cards", "cfactory_list_cards"),
     BoardOperation("get", "GET", "/api/cards/{card_key}", "cfactory_get_card"),
+    # The imported issue discussion (Factory#375). A READ, and under the parity law
+    # like every other board capability: an agent planning from a card needs the
+    # thread for the same reason a human does — the decision usually lives there.
+    BoardOperation(
+        "card_comments",
+        "GET",
+        "/api/cards/{card_key}/comments",
+        "cfactory_card_comments",
+    ),
     BoardOperation("create", "POST", "/api/cards", "cfactory_create_card"),
     BoardOperation("update", "PATCH", "/api/cards/{card_key}", "cfactory_update_card"),
     BoardOperation("move", "PATCH", "/api/cards/{card_key}", "cfactory_move_card"),

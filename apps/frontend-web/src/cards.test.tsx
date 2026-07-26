@@ -2,9 +2,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  CardCommentsSchema,
   CardImportSchema,
   CardSchema,
   CardSyncStateSchema,
+  fetchCardComments,
   fetchCardSyncState,
   fetchCards,
   GitConnectionsSchema,
@@ -27,7 +29,7 @@ import {
   stageNotice,
   syncSummary,
 } from "./cards";
-import { CardBody } from "./CardParts";
+import { CardBody, CommentThread } from "./CardParts";
 import BacklogView from "./BacklogView";
 import PlanningBoard from "./PlanningBoard";
 
@@ -48,6 +50,11 @@ const CARD: Card = {
   correlation_key: null,
   labels: [],
   stage_runs: {},
+  // Factory#375: no imported discussion, and none ever read. The two together are
+  // what a hand-made card looks like — the count is what decides whether the
+  // thread affordance renders at all.
+  comment_count: 0,
+  comments_synced_at: null,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
 };
@@ -727,5 +734,108 @@ describe("sync freshness (#374)", () => {
     const html = renderToStaticMarkup(<PlanningBoard reloadSignal={0} />);
     expect(html).toContain("card-sync");
     expect(html).toContain("Sync now");
+  });
+});
+
+// Imported issue comments (Factory#375). The body was only half the issue; for
+// planning the decision usually lives in the thread. Rendered COLLAPSED for the
+// same reason the body peek is — a 46-card backlog with every thread expanded is
+// worse than the board that carried no comments at all — and rendered through the
+// shared `Markdown` component, because a comment body is third-party text.
+describe("card comments", () => {
+  const COMMENTS = {
+    card_key: "FCT-42",
+    issue_ref: "acme/widgets#7",
+    count: 2,
+    synced_at: "2026-07-26T12:00:00Z",
+    comments: [
+      {
+        comment_id: "101",
+        author: "reviewer",
+        body: "I think we should **store** them.",
+        url: "https://example.test/1#issuecomment-101",
+        created_at: "2026-07-20T11:00:00Z",
+        updated_at: "2026-07-20T11:00:00Z",
+      },
+      {
+        comment_id: "102",
+        author: "olaf",
+        body: "Agreed.",
+        url: "https://example.test/1#issuecomment-102",
+        created_at: "2026-07-20T12:00:00Z",
+        updated_at: "2026-07-20T12:00:00Z",
+      },
+    ],
+  };
+
+  it("parses the pinned comments contract", () => {
+    const parsed = CardCommentsSchema.parse(COMMENTS);
+    expect(parsed.comments[0].comment_id).toBe("101");
+    expect(parsed.synced_at).toBe("2026-07-26T12:00:00Z");
+  });
+
+  it("keeps 'no discussion' and 'never read' apart at the boundary", () => {
+    // The same zero count means two different things, and a client that flattened
+    // them would report a download failure as a quiet issue.
+    const none = CardCommentsSchema.parse({ ...COMMENTS, count: 0, comments: [] });
+    const unknown = CardCommentsSchema.parse({
+      ...COMMENTS,
+      count: 0,
+      comments: [],
+      synced_at: null,
+    });
+    expect(none.synced_at).toBeTruthy();
+    expect(unknown.synced_at).toBeNull();
+  });
+
+  it("fetches one card's thread from its own endpoint", async () => {
+    const spy = stubFetch(() => json(COMMENTS));
+    const thread = await fetchCardComments("FCT-42");
+    expect(spy.mock.calls[0][0]).toBe("/api/cards/FCT-42/comments");
+    expect(thread.comments).toHaveLength(2);
+  });
+
+  it("renders the thread, oldest first, as markdown", () => {
+    const html = renderToStaticMarkup(<CommentThread comments={COMMENTS.comments} />);
+    expect(html).toContain("@reviewer");
+    expect(html).toContain("<strong>store</strong>");
+    expect(html.indexOf("@reviewer")).toBeLessThan(html.indexOf("@olaf"));
+  });
+
+  it("never lets a comment body inject markup or a javascript: link", () => {
+    // A comment is the most hostile input on the board: anyone who can see the
+    // issue can write one. `Markdown` emits React nodes, so a script tag renders
+    // as the visible characters it is, and `safeHref` keeps non-http(s) URLs inert.
+    const hostile = [
+      {
+        ...COMMENTS.comments[0],
+        body: "<script>alert(1)</script> and [click](javascript:alert(2))",
+      },
+    ];
+    const html = renderToStaticMarkup(<CommentThread comments={hostile} />);
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("<a ");
+  });
+
+  it("offers the thread collapsed when the card has one", () => {
+    const html = renderToStaticMarkup(
+      <CardBody card={{ ...CARD, comment_count: 2 }} busy={false} onMutate={() => undefined} />,
+    );
+    expect(html).toContain("card-pl__comments");
+    expect(html).toContain("2 comments");
+    // Collapsed: no `open` attribute, so the board stays scannable.
+    expect(html).not.toContain("<details class=\"card-pl__comments\" open");
+    // And no body has been fetched merely by listing the card.
+    expect(html).not.toContain("I think we should");
+  });
+
+  it("renders nothing at all for a card with no discussion", () => {
+    const html = renderToStaticMarkup(
+      <CardBody card={CARD} busy={false} onMutate={() => undefined} />,
+    );
+    expect(html).not.toContain("card-pl__comments");
+    expect(html).not.toContain("comment");
   });
 });

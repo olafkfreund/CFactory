@@ -71,6 +71,11 @@ _BACKOFF_CYCLE_GUARD = 10
 _HTTP_TOO_MANY = 429
 _HTTP_SERVER_ERROR = 503
 
+# What one steady-state cycle costs a repository since Factory#375: the issues
+# page, plus ONE repository-wide comments page covering every card on the board.
+_CALLS_PER_INCREMENTAL_PASS = 2
+_BIG_BACKLOG = 55
+
 _STALE_CYCLES = card_ops.STALE_CYCLES
 
 
@@ -121,13 +126,23 @@ class Host:
     def __init__(self, *, status_code: int = 200) -> None:
         self.status_code = status_code
         self.issues: dict[str, list[dict]] = {}
+        # Issue comments, per project (Factory#375). Keyed the same way as the
+        # issues so one Host answers both halves of a poll cycle.
+        self.comments: dict[str, list[dict]] = {}
         self.requests: list[httpx.Request] = []
         self.concurrent = 0
         self.peak = 0
         self.fail_projects: set[str] = set()
+        # Projects whose COMMENT reads fail while their issue reads succeed — the
+        # posture that must leave a card saying "unknown" rather than "no
+        # discussion".
+        self.fail_comments: set[str] = set()
 
     def for_project(self, project: str) -> list[dict]:
         return self.issues.setdefault(project, [])
+
+    def comments_for(self, project: str) -> list[dict]:
+        return self.comments.setdefault(project, [])
 
     def _project_of(self, request: httpx.Request) -> str:
         # "/repos/{owner}/{repo}/issues" -> "{owner}/{repo}"
@@ -150,6 +165,10 @@ class Host:
                 return httpx.Response(code, json={"message": "no"})
             if int(request.url.params.get("page", "1")) > 1:
                 return httpx.Response(200, json=[])
+            if "/comments" in request.url.path:
+                if project in self.fail_comments:
+                    return httpx.Response(_HTTP_SERVER_ERROR, json={"message": "no comments"})
+                return httpx.Response(200, json=self.comments_for(project))
             return httpx.Response(200, json=self.for_project(project))
         finally:
             self.concurrent -= 1
@@ -423,7 +442,15 @@ def test_a_tenant_with_many_repositories_does_not_stampede_the_provider(
 @pytest.mark.usefixtures("sleeps")
 def test_the_incremental_pass_stays_one_call_per_repository(cards, host, settings):
     """The poll must not get expensive: after the backfill, one page per repository
-    per cycle, asking only for what changed."""
+    per cycle, asking only for what changed.
+
+    TWO requests since Factory#375, not one per card: the issues page plus ONE
+    repository-wide comments page. That second call is flat — it costs the same
+    for one card as for fifty-five, because GitHub's ``/issues/comments``
+    endpoint answers the whole board with a server-side ``since``. Replace it
+    with a per-card fetch and this count grows with the backlog, which is the
+    regression this assertion exists to catch.
+    """
     _repositories(cards, [_A_PROJECT], token=_A_TOKEN)
     host.for_project(_A_PROJECT).append(_issue(1))
     backoff = PollBackoff()
@@ -432,10 +459,40 @@ def test_the_incremental_pass_stays_one_call_per_repository(cards, host, setting
 
     _poll(cards, settings, host, backoff)
 
-    assert len(host.requests) == 1
-    params = host.requests[0].url.params
-    assert params.get("since")  # the watermark, so the host returns only changes
-    assert params.get("state") == "all"
+    issues, comments = host.requests
+    assert len(host.requests) == _CALLS_PER_INCREMENTAL_PASS
+    assert issues.url.params.get("since")  # the watermark, so only changes come back
+    assert issues.url.params.get("state") == "all"
+    # The bulk endpoint, not the per-issue one — the flat-cost path.
+    assert issues.url.path.endswith("/issues")
+    assert comments.url.path.endswith("/issues/comments")
+    assert comments.url.params.get("since")
+
+
+@pytest.mark.usefixtures("sleeps")
+def test_a_bigger_backlog_costs_the_same_incremental_pass(cards, host, settings):
+    """THE affordability property (Factory#375): the refresh does not grow with
+    the board.
+
+    Fifty-five cards, and the pass that refreshes every one of their comment
+    threads is the same two requests a one-card board costs. Fan out per card —
+    call ``fetch_comments`` in a loop instead of ``fetch_comments_bulk`` — and
+    this goes to fifty-six and fails.
+    """
+    _repositories(cards, [_A_PROJECT], token=_A_TOKEN)
+    host.for_project(_A_PROJECT).extend(_issue(n) for n in range(1, 56))
+    backoff = PollBackoff()
+    # Two passes: the first backfills in bounded batches, so run until every card
+    # has a complete thread and the steady state is what is being measured.
+    for _ in range(4):
+        _poll(cards, settings, host, backoff)
+    assert len(cards.list()) == _BIG_BACKLOG
+    assert all(card.comments_synced_at is not None for card in cards.list())
+    host.requests.clear()
+
+    _poll(cards, settings, host, backoff)
+
+    assert len(host.requests) == _CALLS_PER_INCREMENTAL_PASS
 
 
 # ── backoff, outages, and the board still serving reads ─────────────────────

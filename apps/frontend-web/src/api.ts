@@ -1343,6 +1343,14 @@ export const CardSchema = z
     // Per-stage dispatch records, keyed by stage name. Optional so a card served
     // by a pre-Phase-7 backend still parses.
     stage_runs: z.record(CardStageSchema, StageRunSchema).default({}),
+    // The imported issue DISCUSSION, as two scalars (Factory#375). The bodies are
+    // a separate GET — 46 cards each carrying a full thread is a payload nobody
+    // asked for, and the thread renders collapsed anyway. `comments_synced_at`
+    // null means the thread has never been read successfully, which is NOT the
+    // same as `comment_count === 0` beside a timestamp (an issue with no
+    // discussion). Defaulted/nullish so a pre-#375 backend still parses.
+    comment_count: z.number().default(0),
+    comments_synced_at: z.string().nullish(),
     created_at: z.string(),
     updated_at: z.string(),
   })
@@ -1391,6 +1399,45 @@ export async function createCard(card: CardCreate): Promise<Card> {
 
 export async function patchCard(cardKey: string, patch: CardPatch): Promise<Card> {
   return sendJson("PATCH", `/api/cards/${encodeURIComponent(cardKey)}`, patch, CardSchema);
+}
+
+// One imported issue comment (Factory#375). `body` is third-party markdown and
+// is rendered through the shared `Markdown` component, which emits React nodes
+// and never HTML — an issue comment is exactly the hostile input that must not
+// be able to inject markup.
+export const CardCommentSchema = z
+  .object({
+    comment_id: z.string(),
+    author: z.string(),
+    body: z.string(),
+    url: z.string(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .passthrough();
+export type CardComment = z.infer<typeof CardCommentSchema>;
+
+// `synced_at` null means the thread has never been read successfully — never
+// imported, or the last read failed. An empty `comments` list BESIDE a timestamp
+// means the issue genuinely has no discussion. The cockpit must not conflate the
+// two, so the schema keeps them apart.
+export const CardCommentsSchema = z
+  .object({
+    card_key: z.string(),
+    issue_ref: z.string().nullish(),
+    count: z.number(),
+    synced_at: z.string().nullish(),
+    comments: z.array(CardCommentSchema),
+  })
+  .passthrough();
+export type CardComments = z.infer<typeof CardCommentsSchema>;
+
+export async function fetchCardComments(cardKey: string): Promise<CardComments> {
+  return getJson(
+    `/api/cards/${encodeURIComponent(cardKey)}/comments`,
+    CardCommentsSchema,
+    "card comments",
+  );
 }
 
 // Importing a repository's EXISTING issues (RFC-0020 §3.6). Poll-based, NOT

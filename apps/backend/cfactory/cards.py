@@ -28,10 +28,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import DateTime, Index, Integer, Select, String, Text, select, update
+from sqlalchemy import DateTime, Index, Integer, Select, String, Text, func, select, update
 from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.orm import Mapped, Session, column_property, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
 
 from .audit import AuditStore
@@ -196,6 +196,17 @@ class CardRow(Base):
     # about the fact that it may now be stale.
     github_sync_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    # ── Issue comments (Factory#375) ─────────────────────────────────────────
+    # When this card's comment thread was last read IN FULL and successfully.
+    # NULL is load-bearing and is the whole reason this column exists: without
+    # it, "this issue has no discussion" and "this issue's discussion failed to
+    # download" are the same zero rows in ``card_comments``, and the board would
+    # present the second as the first. NULL means unknown — never fetched, or the
+    # last attempt failed — and a non-NULL value means the stored thread is a
+    # complete copy as of that instant. A failed fetch therefore leaves this
+    # column, and the stored rows, exactly as they were.
+    comments_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # Soft delete (RFC-0020 §3.6). Deleting a card means "not on my board", never
     # "destroy the record of truth" — the issue is untouched. The row stays for
     # two reasons: the unique index below keeps doing its job, and the next
@@ -214,6 +225,75 @@ class CardRow(Base):
         # majority of cards — the ones with no issue — are unaffected.
         Index("ix_cards_tenant_id_issue_ref", "tenant_id", "issue_ref", unique=True),
     )
+
+
+class CardCommentRow(Base):
+    """One imported issue comment (Factory#375).
+
+    A card's discussion, stored rather than fetched on card open. Storing was the
+    open question when Factory#375 was filed and the missing precondition was a
+    refresher: #374 shipped the per-repository incremental poll, so a stored copy
+    now has something keeping it current, and the board gains a searchable,
+    outage-surviving thread instead of a per-open provider call.
+
+    **Idempotent on the provider-native comment id**, enforced by the unique
+    index below rather than by an application-level "have I seen this?" check —
+    the same reasoning as the card table's ``(tenant_id, issue_ref)`` guard: the
+    check loses a race between two concurrent polls, the constraint does not. A
+    re-import of an edited comment UPDATES the row; it never adds a second one.
+
+    Comments are third-party text. ``body`` is stored verbatim — the board is not
+    in the business of rewriting somebody's issue — and the safety lives at the
+    render, where the cockpit's Markdown component emits React nodes and never
+    HTML. Nothing here is ever interpolated into a query, a header or a URL.
+    """
+
+    __tablename__ = "card_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_TENANT, server_default=DEFAULT_TENANT
+    )
+    # The card this comment belongs to, by its stable human id. Not a foreign key,
+    # for the same reason ``repository_id`` is not one: planning data outlives the
+    # rows that reference it, and a cascade here would make a card delete destroy
+    # imported discussion. A soft-deleted card's comments simply stop being read.
+    card_key: Mapped[str] = mapped_column(String(128))
+    # The PROVIDER's id for this comment, stringified — GitHub, GitLab and Azure
+    # DevOps all number them independently, and the hub's normalised
+    # ``IssueComment`` already hands it over as a string for exactly this use.
+    comment_id: Mapped[str] = mapped_column(String(128))
+    author: Mapped[str] = mapped_column(String(256), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(String(1024), default="")
+    # The provider's timestamps, not ours: when the comment was written and last
+    # edited THERE. The thread renders in ``created_at`` order.
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    __table_args__ = (
+        Index("ix_card_comments_tenant_card", "tenant_id", "card_key"),
+        Index(
+            "ix_card_comments_tenant_card_comment",
+            "tenant_id",
+            "card_key",
+            "comment_id",
+            unique=True,
+        ),
+    )
+
+
+class CardComment(BaseModel):
+    """Serialisable view of a :class:`CardCommentRow`."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    comment_id: str
+    author: str
+    body: str
+    url: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class Card(BaseModel):
@@ -243,6 +323,20 @@ class Card(BaseModel):
     # the factory was actually asked to do, so a caller must not be able to
     # assert a dispatch that never happened. Absent from CardCreate/CardUpdate.
     stage_runs: dict[str, Any]
+    # The card's discussion, as two scalars rather than the thread itself
+    # (Factory#375). The bodies are a separate GET — a backlog of 46 cards each
+    # carrying a full comment thread is a payload nobody asked for, and the
+    # cockpit renders the thread collapsed anyway. These two are what a client
+    # needs BEFORE it decides to ask:
+    #
+    # * ``comment_count`` — how many are stored, so a card with no discussion
+    #   renders no affordance at all;
+    # * ``comments_synced_at`` — NULL when the thread has never been read
+    #   successfully. ``comment_count == 0`` with a timestamp means "no
+    #   discussion"; with NULL it means "we do not know", which is the honest
+    #   answer for an issue whose comments failed to download.
+    comment_count: int = 0
+    comments_synced_at: datetime | None = None
     # Always NULL on anything a read hands back — a soft-deleted card is off the
     # board. It is on the model because the import asks for a card BY ISSUE and
     # has to be able to see the tombstone (RFC-0020 §3.6).
@@ -354,6 +448,28 @@ class ImportState(BaseModel):
     watermark_at: datetime | None = None
 
 
+# ``Card.comment_count``, computed by the DATABASE rather than maintained as a
+# denormalised counter (Factory#375). A stored count is a second copy of a fact
+# that can drift from the first one; a correlated subquery cannot. Declared here
+# rather than inline on ``CardRow`` because it references ``CardCommentRow``,
+# which is defined after it.
+#
+# ponytail: one scalar subquery per card row. A planning board is hundreds of
+# rows, and both SQLite and PostgreSQL answer this from the
+# ``(tenant_id, card_key)`` index; swap in a maintained counter only if a
+# tenant's backlog ever gets big enough to measure.
+CardRow.comment_count = column_property(
+    select(func.count(CardCommentRow.id))
+    .where(
+        CardCommentRow.tenant_id == CardRow.tenant_id,
+        CardCommentRow.card_key == CardRow.card_key,
+    )
+    .correlate_except(CardCommentRow)
+    .scalar_subquery(),
+    deferred=False,
+)
+
+
 class DuplicateCardKeyError(Exception):
     """Raised by :meth:`CardStore.create` when the tenant already has that key."""
 
@@ -387,6 +503,10 @@ _LATE_COLUMNS = {
     # Phase 8: which repository this card targets. NULL = the tenant default, so
     # every existing card keeps behaving exactly as it did.
     "repository_id": "INTEGER",
+    # Factory#375: when this card's comment thread was last read in full. NULL on
+    # every existing card, which is exactly what it means — never read — so the
+    # next poll backfills rather than claiming an empty thread is complete.
+    "comments_synced_at": "TIMESTAMP",
 }
 
 # The same guard for ``tenant_git_config``, which RFC-0020 phase 2 shipped and
@@ -680,6 +800,109 @@ class CardStore:
                 return False
             row.deleted_at = _now()
             return True
+
+    # ── Issue comments (Factory#375) ─────────────────────────────────────────
+
+    def cards_for_project(self, project: str) -> Sequence[Card]:
+        """This tenant's live cards imported from one project, oldest first.
+
+        What the comment pass iterates. Scoped by the issue ref's project half
+        rather than by ``repository_id`` because that is what the ref actually
+        carries, and it is the same key :func:`_issue_project` and the per-card
+        sync already resolve a card's host through — so a card imported from a
+        GitLab project is only ever visited by the pass that runs on the GitLab
+        connection.
+
+        Soft-deleted cards are excluded by :meth:`_select`: a card off the board
+        must not spend a provider call.
+        """
+        if not project.strip():
+            return []
+        stmt = (
+            self._select()
+            .where(CardRow.issue_ref.startswith(f"{project.strip()}#"))
+            .order_by(CardRow.created_at.asc())
+        )
+        with self._session() as session:
+            return [Card.model_validate(row) for row in session.scalars(stmt)]
+
+    def comments(self, card_key: str) -> Sequence[CardComment]:
+        """One card's stored discussion, oldest first.
+
+        Tenant-scoped like every other read here: the filter is on this store's
+        scope, so a card key from another tenant returns nothing rather than
+        somebody else's thread.
+        """
+        stmt = (
+            select(CardCommentRow)
+            .where(CardCommentRow.card_key == card_key)
+            .order_by(CardCommentRow.created_at.asc(), CardCommentRow.id.asc())
+        )
+        if self._tenant is not None:
+            stmt = stmt.where(CardCommentRow.tenant_id == self._tenant)
+        with self._session() as session:
+            return [CardComment.model_validate(row) for row in session.scalars(stmt)]
+
+    def store_comments(
+        self, card_key: str, comments: Sequence[CardComment], *, synced_at: datetime
+    ) -> int:
+        """Upsert a card's comments and mark the thread complete as of ``synced_at``.
+
+        **Idempotent on the provider-native comment id.** Re-importing an issue
+        updates the rows it already has and adds only what is new — an edited
+        comment changes in place, and no re-run can produce a second copy of one
+        comment. The unique ``(tenant_id, card_key, comment_id)`` index is the
+        guard; the lookup below is only the fast path.
+
+        Called ONLY after a successful, complete read. A failed fetch must never
+        reach here: setting ``comments_synced_at`` is the claim that what is
+        stored is the whole thread, and making that claim for a download that
+        failed is precisely the data loss Factory#375 reports. The caller
+        therefore leaves both the rows and the marker untouched on failure, and
+        the card keeps saying "unknown" rather than "no discussion".
+
+        Returns how many rows were written (inserted or updated), for the tally.
+        """
+        tenant = self._tenant or DEFAULT_TENANT
+        with self._session.begin() as session:
+            existing = {
+                row.comment_id: row
+                for row in session.scalars(
+                    select(CardCommentRow).where(
+                        CardCommentRow.tenant_id == tenant,
+                        CardCommentRow.card_key == card_key,
+                    )
+                )
+            }
+            for comment in comments:
+                row = existing.get(comment.comment_id)
+                if row is None:
+                    session.add(
+                        CardCommentRow(
+                            tenant_id=tenant,
+                            card_key=card_key,
+                            **comment.model_dump(),
+                        )
+                    )
+                    continue
+                row.author = comment.author
+                row.body = comment.body
+                row.url = comment.url
+                row.created_at = comment.created_at
+                row.updated_at = comment.updated_at
+            # ``updated_at`` is re-stated explicitly so the column's ``onupdate``
+            # does not fire: a comment refresh is not an edit to the CARD, and a
+            # board where every row looks freshly touched every five minutes
+            # cannot answer "what changed recently".
+            marker = (
+                update(CardRow)
+                .where(CardRow.card_key == card_key)
+                .values(comments_synced_at=synced_at, updated_at=CardRow.updated_at)
+            )
+            if self._tenant is not None:
+                marker = marker.where(CardRow.tenant_id == self._tenant)
+            session.execute(marker)
+        return len(comments)
 
     # ── Git connections and repositories (RFC-0020 §3.3, phase 8) ────────────
     #

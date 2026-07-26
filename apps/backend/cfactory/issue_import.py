@@ -52,10 +52,10 @@ import httpx
 from runners.github.providers.protocol import IssueData, IssueFilters
 from starlette.concurrency import run_in_threadpool
 
-from .cards import Card, CardCreate, CardStatus, CardStore, DuplicateIssueRefError
+from .cards import Card, CardComment, CardCreate, CardStatus, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
 from .git_config import PROJECT_RE
-from .git_providers import build_provider, run_sync
+from .git_providers import IssueProvider, build_provider, run_sync
 from .github_sync import IssueRef, sync_enabled
 
 logger = logging.getLogger(__name__)
@@ -297,6 +297,131 @@ def _import_one(
     return "updated"
 
 
+# How far back the comment refresh's ``since`` is rewound, for the same clock-skew
+# reason as the issue watermark's :data:`_OVERLAP`. Wider than that one because a
+# missed comment is not re-offered by a later pass the way a missed issue is: the
+# next pass asks from a NEWER cursor, so anything that fell through the skew gap is
+# gone until that comment is edited. Re-reading a few minutes of thread is one page.
+_COMMENT_OVERLAP = timedelta(minutes=5)
+
+
+def _sync_comments(
+    store: CardStore,
+    provider: IssueProvider,
+    project: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Refresh the stored comment threads for one project's cards (Factory#375).
+
+    Wired into the import rather than given a mechanism of its own, so there is
+    ONE sync path: whatever brings the issue in — a manual ``POST /api/cards/import``
+    or the #374 background poll — brings its discussion with it, on the SAME
+    provider, built from THAT repository's connection. A card on a GitLab
+    repository is only ever visited by the GitLab pass, because the cards are
+    selected by the project the pass is reading.
+
+    Two groups, because they cost different things:
+
+    * **warm** — cards whose thread has been read in full before. One
+      ``fetch_comments_bulk`` with a ``since``, which on GitHub is ONE request for
+      the entire board (the repository-wide comments endpoint) and on a provider
+      with no bulk endpoint is the hub's bounded per-issue fan-out.
+    * **cold** — cards never read. There is no window to narrow, so each costs a
+      call; :attr:`Settings.import_comment_backfill_max` bounds how many one pass
+      takes and the rest arrive on later passes. Their ``since`` is ``None``:
+      asking for "everything since the poll watermark" on a thread we have never
+      seen would store a fragment and mark it whole.
+
+    Failure is per group and NEVER partial. If a read raises, that group's cards
+    keep the copy and the marker they already had, and the reason is reported —
+    an issue with no discussion and an issue whose discussion failed to download
+    must stay distinguishable, and the only thing that distinguishes them is that
+    the second one's ``comments_synced_at`` is still NULL.
+    """
+    cards = [card for card in store.cards_for_project(project) if card.issue_ref]
+    if not cards:
+        return {"ok": True, "cards": 0, "comments": 0, "backfilled": 0, "refreshed": 0}
+
+    by_number: dict[int, Card] = {}
+    for card in cards:
+        ref = IssueRef.parse(card.issue_ref)
+        if ref is not None:
+            by_number[ref.number] = card
+
+    warm = [n for n, card in by_number.items() if card.comments_synced_at is not None]
+    cold = [n for n, card in by_number.items() if card.comments_synced_at is None]
+    # Oldest cards first, so a backlog backfills in the order it was imported
+    # rather than in whatever order the dict happens to hold.
+    cold = sorted(cold)[: max(0, settings.import_comment_backfill_max)]
+
+    since = None
+    if warm:
+        # The oldest complete copy in the group decides the window: a card synced
+        # an hour ago and one synced a minute ago share one request, and asking
+        # from the newer cursor would leave the older card with a hole.
+        oldest = min(
+            card.comments_synced_at
+            for card in by_number.values()
+            if card.comments_synced_at is not None
+        )
+        # SQLite hands back a naive datetime even for an aware one; the providers
+        # compare this against aware provider timestamps.
+        since = (oldest if oldest.tzinfo else oldest.replace(tzinfo=UTC)) - _COMMENT_OVERLAP
+
+    stored = 0
+    reasons: list[str] = []
+    for numbers, window in ((warm, since), (cold, None)):
+        if not numbers:
+            continue
+        try:
+            threads = run_sync(provider.fetch_comments_bulk(sorted(numbers), window))
+        except Exception as exc:  # noqa: BLE001 — one group's provider failure must
+            # not abandon the other, and must not take the import down. Reported,
+            # never swallowed: nothing is stored and no marker moves, so the cards
+            # keep saying "unknown" rather than "no discussion".
+            reason = f"{type(exc).__name__}: {exc}"[:512]
+            logger.warning("comment read failed for %s: %s", project, reason)
+            reasons.append(reason)
+            continue
+        synced_at = datetime.now(UTC)
+        for number, comments in threads.items():
+            target = by_number.get(number)
+            if target is None:  # pragma: no cover — we asked for these numbers
+                continue
+            try:
+                stored += store.store_comments(
+                    target.card_key,
+                    [
+                        CardComment(
+                            comment_id=comment.id,
+                            author=comment.author,
+                            body=comment.body,
+                            url=comment.url,
+                            created_at=comment.created_at,
+                            updated_at=comment.updated_at,
+                        )
+                        for comment in comments
+                    ],
+                    synced_at=synced_at,
+                )
+            except Exception as exc:  # noqa: BLE001 — one card's write must not
+                # abandon the rest of the thread pass; the marker stays unset, so
+                # the next pass retries this card.
+                logger.warning("could not store comments for %s: %s", target.card_key, exc)
+                reasons.append(f"{target.card_key}: {type(exc).__name__}")
+    return {
+        "ok": not reasons,
+        "cards": len(warm) + len(cold),
+        "comments": stored,
+        "backfilled": len(cold),
+        "refreshed": len(warm),
+        # Every card whose thread is still unknown after this pass — the honest
+        # count of what the board does NOT have, rather than silence.
+        "pending": max(0, len(by_number) - len(warm) - len(cold)),
+        **({"reason": "; ".join(reasons)[:512]} if reasons else {}),
+    }
+
+
 def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword-only
     # and independent (which repository, which project, which transport, full or
     # incremental). Collapsing them into an options object would hide the call
@@ -350,8 +475,9 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
 
     since = None if full else store.get_watermark(target)
     filters = _filters(settings, since)
+    provider = build_provider(git, target, transport=transport)
     try:
-        issues = run_sync(build_provider(git, target, transport=transport).fetch_issues(filters))
+        issues = run_sync(provider.fetch_issues(filters))
     except Exception as exc:  # noqa: BLE001 — the never-raises contract, same as
         # github_sync.sync_card: behind the protocol sits third-party provider
         # code we do not control, and an unlisted exception type must not take
@@ -374,6 +500,16 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
             # abandon the other 199. Counted as skipped and logged.
             logger.warning("could not import %s: %s", ref, exc)
             tally["skipped"] += 1
+
+    # After the cards exist, so an issue imported a moment ago gets its thread on
+    # the same pass rather than on the next one. Never raises: its own failures are
+    # reported inside the block it returns, and a comment outage must not make an
+    # otherwise-good issue import look failed.
+    comments = (
+        _sync_comments(store, provider, target, settings)
+        if settings.import_comments
+        else {"ok": True, "enabled": False}
+    )
 
     watermark = _next_watermark(issues, since)
     if watermark is not None:
@@ -398,6 +534,10 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
         # means by "last synced" is `polled_at` beside it.
         last_synced_at=watermark.isoformat() if watermark else None,
         polled_at=polled_at.isoformat(),
+        # Reported as its own block rather than folded into the tally: comments can
+        # fail while the issue import succeeded, and flattening the two would hide
+        # exactly the case that matters (Factory#375).
+        comments=comments,
         **tally,
     )
 
@@ -596,6 +736,10 @@ def _result(project: str, *, ok: bool, **extra: Any) -> dict[str, Any]:
         "truncated": False,
         "incremental": False,
         "polled_at": None,  # Set only on a successful pass — see import_issues.
+        # The comment pass (Factory#375). Present on every result so a caller never
+        # has to test for the key; ``ok`` false with a reason when the thread read
+        # failed, in which case nothing was stored and no card claims completeness.
+        "comments": {"ok": True, "cards": 0, "comments": 0},
         "live": False,  # Poll-based, by design. See the module docstring.
         **extra,
     }

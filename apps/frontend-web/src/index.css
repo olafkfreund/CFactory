@@ -1939,6 +1939,24 @@ body {
    read as a code block at all. */
 .card-pl__detail .md-pre { background: var(--bg); }
 
+/* The imported issue DISCUSSION, collapsed (Factory#375). Same <details> chrome as
+   the body peek above — reused deliberately, so a card has one disclosure idiom and
+   not two — and collapsed for the same reason: a 46-card backlog rendering every
+   thread in full is worse than the board that carried no comments at all. Nothing
+   renders when a card has none. */
+.card-pl__comments { margin: -0.15rem 0 0.55rem; }
+.card-pl__comments[open] > .card-pl__peek::before { content: "▾"; }
+.card-pl__comment-wait { font-size: 0.78rem; color: var(--faint); }
+/* One comment. The rule between entries is what keeps a long thread readable as
+   separate voices rather than as one wall of prose. */
+.card-comment { padding: 0.35rem 0; border-top: 1px solid var(--border-soft); }
+.card-comment:first-child { border-top: 0; padding-top: 0; }
+.card-comment__head {
+  display: flex; align-items: baseline; gap: 0.4rem;
+  font: 500 0.7rem var(--font-mono); color: var(--faint);
+}
+.card-comment__author { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .card-chip {
   font: 500 0.7rem var(--font-mono); color: var(--muted);
   background: var(--panel-2); border: 1px solid var(--border-soft);

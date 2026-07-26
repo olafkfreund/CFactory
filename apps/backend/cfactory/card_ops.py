@@ -285,6 +285,35 @@ def get_card(store: CardStore, card_key: str) -> Card:
     return card
 
 
+def card_comments(store: CardStore, card_key: str) -> dict[str, object]:
+    """One card's imported issue discussion, oldest first (Factory#375).
+
+    Separate from ``get_card`` on purpose: a backlog of 46 cards each carrying a
+    full comment thread is a payload nobody asked for, and the cockpit renders
+    the thread collapsed anyway — so the card itself carries only
+    ``comment_count`` and ``comments_synced_at``, and the bodies come from here
+    when somebody actually opens one.
+
+    ``synced_at`` is the honesty field, and it is why an empty ``comments`` list
+    is not the whole answer. NULL means this card's thread has never been read
+    successfully — never imported, or the last attempt failed — which is a
+    different statement from "this issue has no discussion", and a board that
+    conflated them would silently present a download failure as a quiet issue.
+
+    A read: not audited, no write scope. It exposes text the git host already
+    shows anyone who can see the issue, and no credential material.
+    """
+    card = get_card(store, card_key)
+    comments = store.comments(card_key)
+    return {
+        "card_key": card.card_key,
+        "issue_ref": card.issue_ref,
+        "count": len(comments),
+        "synced_at": card.comments_synced_at.isoformat() if card.comments_synced_at else None,
+        "comments": [c.model_dump(mode="json") for c in comments],
+    }
+
+
 def create_card(
     store: CardStore,
     ctx: AuditContext,

@@ -216,6 +216,29 @@ def get_card(
         raise _not_found(card_key) from None
 
 
+@router.get("/api/cards/{card_key}/comments")
+def get_card_comments(
+    card_key: str,
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("read"))],
+) -> dict[str, object]:
+    """This card's imported issue discussion, oldest first (Factory#375).
+
+    The body is half an issue; for planning the decision usually lives in the
+    thread. Comments are STORED, imported and refreshed on the same incremental
+    pass as the issue itself, so this read never calls the git host.
+
+    `synced_at` is when the thread was last read in full. **Null means unknown**
+    — never imported, or the last read failed — which is a different answer from
+    an empty `comments` list beside a timestamp, that being an issue with no
+    discussion. The two must not be confused, so they are not.
+    """
+    try:
+        return card_ops.card_comments(store, card_key)
+    except CardNotFoundError:
+        raise _not_found(card_key) from None
+
+
 @router.patch("/api/cards/{card_key}")
 def update_card(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; the
     # params are injected seams (store/audit/transport/scope/actor), not a

@@ -686,6 +686,50 @@ paths:
                   deleted: { type: boolean }
         "404": { description: No card for the key (in this tenant). }
 
+  /api/cards/{card_key}/comments:
+    parameters:
+      - { name: card_key, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Cards]
+      summary: The card's imported issue discussion, oldest comment first
+      description: >-
+        Comments are STORED and refreshed on the same incremental pass as the
+        issue itself, so this read never calls the git host. `synced_at` null
+        means the thread has never been read successfully — which is NOT the
+        same as an empty `comments` list beside a timestamp, that being an issue
+        with no discussion. Requires the `read` scope.
+      responses:
+        "200":
+          description: The stored thread.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card_key: { type: string }
+                  issue_ref: { type: string, nullable: true }
+                  count: { type: integer }
+                  synced_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: >-
+                      When the thread was last read IN FULL. Null means unknown.
+                  comments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        comment_id:
+                          type: string
+                          description: The provider's own id; re-import is idempotent on it.
+                        author: { type: string }
+                        body: { type: string, description: Markdown, rendered as inert nodes. }
+                        url: { type: string }
+                        created_at: { type: string, format: date-time }
+                        updated_at: { type: string, format: date-time }
+        "404": { description: No card for the key (in this tenant). }
+
   /api/audit:
     get:
       tags: [Audit]
@@ -789,6 +833,22 @@ components:
           description: A human handle or a factory runtime (e.g. "aifactory").
         milestone: { type: string, nullable: true }
         correlation_key: { type: string, nullable: true }
+        comment_count:
+          type: integer
+          description: >-
+            How many imported issue comments are stored for this card
+            (Factory#375). The bodies are a separate GET
+            `/api/cards/{card_key}/comments` — a backlog of 46 cards each
+            carrying a full thread is a payload nobody asked for.
+        comments_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            When the thread was last read IN FULL. Null means unknown — never
+            imported, or the last read failed. `comment_count == 0` beside a
+            timestamp means the issue genuinely has no discussion; beside null
+            it means the board does not know, and the two are never conflated.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     TokenUsage:

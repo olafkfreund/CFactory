@@ -73,6 +73,10 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
         "cfactory_sync_card_github",
     ),
     BoardOperation("import", "POST", "/api/cards/import", "cfactory_import_cards"),
+    # How current the board is (#374). A READ, and under the parity law like every
+    # other board capability: an agent deciding whether to trust the backlog needs
+    # the same staleness signal the cockpit shows a human.
+    BoardOperation("sync_state", "GET", "/api/cards/sync-state", "cfactory_card_sync_state"),
     BoardOperation("delete", "DELETE", "/api/cards/{card_key}", "cfactory_delete_card"),
     # Explicit stage actions (RFC-0020 §3.7, #369). Unlike update/move/reprioritise
     # these are NOT one route behind several tools: each stage is its own route and

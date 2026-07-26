@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Any
 
@@ -33,6 +34,7 @@ import httpx
 from .audit import AuditStore
 from .card_intake import dispatch_stage, maybe_dispatch, parse_stage, start_sequence
 from .cards import Card, CardCreate, CardStore, CardUpdate
+from .config import Settings, get_settings
 from .github_sync import maybe_sync, sync_card
 from .issue_import import import_issues
 
@@ -47,6 +49,11 @@ REST_ENDPOINT = "/api/cards"
 # Audit actor for a dispatch nobody typed: a sequenced card advancing to its next
 # stage on the completion event that finished the previous one (RFC-0020 §3.7).
 SEQUENCE_ACTOR = "cfactory-sequence"
+
+# How many poll cadences a repository may go without a successful read before the
+# cockpit calls it stale (#374). One late cycle is jitter — a slow host, a replica
+# restarting — and crying stale at every jitter trains people to ignore the signal.
+STALE_CYCLES = 2
 
 
 class CardNotFoundError(Exception):
@@ -209,6 +216,66 @@ def list_cards(
     narrowed to a board column / release / owner / difficulty tier."""
     cards = store.list(status=status, milestone=milestone, assignee=assignee, tier=tier)
     return {"count": len(cards), "cards": [c.model_dump(mode="json") for c in cards]}
+
+
+def sync_state(store: CardStore, settings: Settings | None = None) -> dict[str, object]:
+    """How current this board is, per repository (#374).
+
+    The answer to "is what I am looking at up to date?", which before this existed
+    only inside an import response nobody kept. One entry per configured repository
+    — including the ones that have never been imported, which is the state most
+    worth showing — plus whether the background poll is even switched on, because
+    "never synced" means something different on a deployment that polls than on one
+    where someone must click.
+
+    ``stale`` is computed HERE rather than in the cockpit so both surfaces and every
+    future client agree on the rule: no successful read at all, or the last one
+    older than :data:`STALE_CYCLES` poll cadences. Two missed cycles is the
+    threshold — one late cycle is normal jitter, two is a signal.
+
+    A read, so it is not audited and needs no write scope: it exposes timestamps and
+    project paths the board already shows, and no credential material.
+    """
+    settings = settings or get_settings()
+    states = store.import_states()
+    now = datetime.now(UTC)
+    interval = max(1.0, settings.import_poll_seconds)
+    stale_after = timedelta(seconds=interval * STALE_CYCLES)
+
+    repositories = store.repositories()
+    # A tenant with no stored repositories still has one poll target: the project
+    # the deployment's environment names (RFC-0020 §3.3's one-release bridge).
+    targets: list[tuple[int | None, str, bool]] = [
+        (repo.id, (repo.intake_project or repo.project), repo.is_default) for repo in repositories
+    ] or [(None, (settings.github_repo or "").strip(), True)]
+
+    entries = []
+    for repository_id, project, is_default in targets:
+        state = states.get(project)
+        last_polled_at = state.last_polled_at if state else None
+        entries.append(
+            {
+                "repository_id": repository_id,
+                "project": project,
+                "is_default": is_default,
+                "last_polled_at": last_polled_at.isoformat() if last_polled_at else None,
+                "watermark_at": (
+                    state.watermark_at.isoformat() if state and state.watermark_at else None
+                ),
+                "stale": last_polled_at is None or (now - last_polled_at) > stale_after,
+            }
+        )
+    return {
+        "now": now.isoformat(),
+        "poll": {
+            "enabled": settings.import_poll,
+            "interval_seconds": interval,
+            # Poll-based, never live — there is no webhook receiver. Stated in the
+            # payload so a client renders "as of" rather than "live".
+            "live": False,
+        },
+        "repositories": entries,
+    }
 
 
 def get_card(store: CardStore, card_key: str) -> Card:

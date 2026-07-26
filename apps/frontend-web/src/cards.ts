@@ -9,6 +9,7 @@
 // planning axis (backlog → done). They are deliberately separate surfaces.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  fetchCardSyncState,
   fetchCards,
   fetchGitConnections,
   fetchSettings,
@@ -19,6 +20,7 @@ import {
   type CardFilters,
   type CardImport,
   type CardPatch,
+  type CardSyncState,
   type CardStage,
   type CardStatus,
   type CardTier,
@@ -106,8 +108,66 @@ export function importNotice(result: CardImport): string {
   return (
     `Imported ${String(result.imported)}, updated ${String(result.updated)}, ` +
     `skipped ${String(result.skipped)} from ${result.project}${truncated}. ` +
-    `Last synced ${result.last_synced_at ?? "never"} — polled, not live.`
+    `Synced ${result.polled_at ?? "just now"} — polled, not live.`
   );
+}
+
+/**
+ * "4 min ago" for a timestamp, "never" for nothing (#374).
+ *
+ * A relative age, not an ISO string: the question a human is asking of the sync
+ * line is "is this current?", and `2026-07-26T09:14:02+00:00` makes them do
+ * arithmetic to answer it.
+ */
+export function relativeAge(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return "never";
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "never";
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${String(minutes)} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${String(hours)} h ago`;
+  return `${String(Math.round(hours / 24))} d ago`;
+}
+
+/**
+ * The one line that says whether the board can be trusted (#374).
+ *
+ * Three distinct states, because they need three distinct answers:
+ *
+ * - nothing configured — there is no repository to sync with, so "not connected";
+ * - the poll is off — the board will NOT catch up on its own, whatever the
+ *   timestamp says, and that is the thing worth saying first;
+ * - otherwise — how long ago the freshest / stalest repository was read.
+ *
+ * A board that is merely a few minutes behind is normal and says so quietly; one
+ * that has gone more than two cadences without a successful read is stale, which is
+ * the state that used to be invisible.
+ */
+export function syncSummary(state: CardSyncState | null, now: number = Date.now()): string {
+  if (!state) return "Sync state unavailable";
+  const repos = state.repositories.filter((repo) => repo.project);
+  if (repos.length === 0) return "No repository connected — nothing to sync";
+  const stale = repos.filter((repo) => repo.stale);
+  const newest = repos
+    .map((repo) => repo.last_polled_at)
+    .filter((stamp): stamp is string => Boolean(stamp))
+    .sort()
+    .at(-1);
+  const cadence = Math.round(state.poll.interval_seconds / 60);
+  const age = `Synced ${relativeAge(newest, now)}`;
+  if (!state.poll.enabled) {
+    return `${age} — automatic sync is OFF (CFACTORY_IMPORT_POLL), so use Sync now`;
+  }
+  if (stale.length === repos.length) {
+    return `${age} — STALE, and the board may be behind the repository`;
+  }
+  if (stale.length > 0) {
+    return `${age}, but ${String(stale.length)} of ${String(repos.length)} repositories are stale`;
+  }
+  return `${age} — polls every ${String(cadence)} min, not live`;
 }
 
 /**
@@ -306,6 +366,8 @@ export type CardsState = {
   runStage: (cardKey: string, action: StageAction) => Promise<void>;
   /** True while an import is in flight, so the trigger can disable itself. */
   importing: boolean;
+  /** How current the board is, per repository (#374). Null until the first read. */
+  syncState: CardSyncState | null;
   /** Pull the connected repo's EXISTING issues onto the board (RFC-0020 §3.6). */
   importIssues: () => Promise<void>;
   /** Re-run the list query (after a create/delete). */
@@ -323,6 +385,7 @@ export function useCards(filters: CardFilters, reloadSignal: number): CardsState
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [syncState, setSyncState] = useState<CardSyncState | null>(null);
   const [tick, setTick] = useState(0);
   // Serialise the filter object so the effect re-runs on value (not identity).
   const filterKey = JSON.stringify(filters);
@@ -347,6 +410,24 @@ export function useCards(filters: CardFilters, reloadSignal: number): CardsState
       alive = false;
     };
   }, [filterKey, reloadSignal, tick]);
+
+  // Staleness rides the same trigger as the card list, so "Sync now" refreshes the
+  // line that told the human to press it. A failure here is deliberately NOT an
+  // error banner: not knowing how fresh the board is must not look like the board
+  // being broken — `syncSummary(null)` says so quietly instead.
+  useEffect(() => {
+    let alive = true;
+    fetchCardSyncState()
+      .then((state) => {
+        if (alive) setSyncState(state);
+      })
+      .catch(() => {
+        if (alive) setSyncState(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [reloadSignal, tick]);
 
   const mutate = useCallback(
     async (cardKey: string, patch: CardPatch) => {
@@ -412,6 +493,7 @@ export function useCards(filters: CardFilters, reloadSignal: number): CardsState
     runStage,
     importing,
     importIssues,
+    syncState,
     reload,
     setError,
   };

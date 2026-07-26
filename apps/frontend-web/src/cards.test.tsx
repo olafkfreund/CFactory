@@ -2,7 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  CardImportSchema,
   CardSchema,
+  CardSyncStateSchema,
+  fetchCardSyncState,
   fetchCards,
   GitConnectionsSchema,
   patchCard,
@@ -12,14 +15,17 @@ import {
 } from "./api";
 import {
   byPriority,
+  importNotice,
   issueUrl,
   issueUrlResolver,
   matchesQuery,
   peek,
   optimisticPatch,
   replaceCard,
+  relativeAge,
   stageBlocker,
   stageNotice,
+  syncSummary,
 } from "./cards";
 import { CardBody } from "./CardParts";
 import BacklogView from "./BacklogView";
@@ -609,5 +615,117 @@ describe("card body rendering (#213)", () => {
     const html = render({ ...IMPORTED, description: "<img src=x onerror=alert(1)>" });
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
+  });
+});
+
+
+// ── the board says how current it is (#374) ─────────────────────────────────
+
+describe("sync freshness (#374)", () => {
+  const STATE = {
+    now: "2026-07-26T12:00:00Z",
+    poll: { enabled: true, interval_seconds: 300, live: false },
+    repositories: [
+      {
+        repository_id: 1,
+        project: "acme/widgets",
+        is_default: true,
+        last_polled_at: "2026-07-26T11:58:00Z",
+        watermark_at: "2026-07-20T10:00:00Z",
+        stale: false,
+      },
+    ],
+  };
+  const NOW = Date.parse("2026-07-26T12:00:00Z");
+
+  it("parses the sync-state payload at the HTTP boundary", () => {
+    const parsed = CardSyncStateSchema.parse(STATE);
+    expect(parsed.repositories[0].stale).toBe(false);
+    expect(parsed.poll.live).toBe(false);
+  });
+
+  it("fetches it from the literal path, not as a card key", async () => {
+    const spy = stubFetch(() => json(STATE));
+    await fetchCardSyncState();
+    expect(spy.mock.calls[0][0]).toBe("/api/cards/sync-state");
+  });
+
+  it("renders an age a human can read, not an ISO timestamp", () => {
+    expect(relativeAge("2026-07-26T11:58:00Z", NOW)).toBe("2 min ago");
+    expect(relativeAge("2026-07-26T11:59:40Z", NOW)).toBe("just now");
+    expect(relativeAge("2026-07-26T09:00:00Z", NOW)).toBe("3 h ago");
+    expect(relativeAge("2026-07-22T12:00:00Z", NOW)).toBe("4 d ago");
+    expect(relativeAge(null, NOW)).toBe("never");
+  });
+
+  it("says the board is current, and that it is a poll rather than live", () => {
+    const summary = syncSummary(STATE, NOW);
+    expect(summary).toContain("Synced 2 min ago");
+    expect(summary).toContain("polls every 5 min");
+    expect(summary).toContain("not live");
+    expect(summary).not.toContain("STALE");
+  });
+
+  it("says STALE when every repository has gone unread — the invisible failure", () => {
+    const stale = {
+      ...STATE,
+      repositories: [{ ...STATE.repositories[0], last_polled_at: null, stale: true }],
+    };
+    const summary = syncSummary(stale, NOW);
+    expect(summary).toContain("Synced never");
+    expect(summary).toContain("STALE");
+  });
+
+  it("names the ONE lagging repository rather than crying stale for the board", () => {
+    const mixed = {
+      ...STATE,
+      repositories: [
+        STATE.repositories[0],
+        { ...STATE.repositories[0], repository_id: 2, project: "acme/gadgets", stale: true },
+      ],
+    };
+    expect(syncSummary(mixed, NOW)).toContain("1 of 2 repositories are stale");
+  });
+
+  it("says the poll is OFF, because no timestamp means the board will catch up", () => {
+    const off = { ...STATE, poll: { ...STATE.poll, enabled: false } };
+    const summary = syncSummary(off, NOW);
+    expect(summary).toContain("automatic sync is OFF");
+    expect(summary).toContain("Sync now");
+  });
+
+  it("says so when there is nothing connected to sync with", () => {
+    expect(syncSummary({ ...STATE, repositories: [] }, NOW)).toContain("No repository connected");
+  });
+
+  it("degrades quietly when the staleness read itself fails", () => {
+    // Not knowing how fresh the board is must not look like the board being broken.
+    expect(syncSummary(null, NOW)).toBe("Sync state unavailable");
+  });
+
+  it("reports the READ time in the import notice, not the incremental cursor", () => {
+    const notice = importNotice(
+      CardImportSchema.parse({
+        ok: true,
+        project: "acme/widgets",
+        imported: 3,
+        updated: 1,
+        skipped: 0,
+        truncated: false,
+        last_synced_at: "2026-07-20T09:59:00Z",
+        polled_at: "2026-07-26T11:58:00Z",
+      }),
+    );
+    expect(notice).toContain("Imported 3, updated 1");
+    expect(notice).toContain("Synced 2026-07-26T11:58:00Z");
+  });
+
+  it("puts the sync line and a Sync now control on the planning board", () => {
+    stubFetch((url) =>
+      url.includes("sync-state") ? json(STATE) : json({ count: 0, cards: [] }),
+    );
+    const html = renderToStaticMarkup(<PlanningBoard reloadSignal={0} />);
+    expect(html).toContain("card-sync");
+    expect(html).toContain("Sync now");
   });
 });

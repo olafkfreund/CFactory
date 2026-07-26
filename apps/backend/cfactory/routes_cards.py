@@ -180,6 +180,30 @@ def import_cards(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; se
     )
 
 
+@router.get("/api/cards/sync-state")
+def card_sync_state(
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("read"))],
+) -> dict[str, object]:
+    """How current this board is, per configured repository (#374).
+
+    Declared BEFORE `/api/cards/{card_key}` so the literal path wins the match —
+    FastAPI resolves in declaration order, and a card called `sync-state` is not a
+    thing anybody has.
+
+    One entry per repository: when its issues were last read successfully
+    (`last_polled_at`), how far that read has got (`watermark_at` — the incremental
+    cursor, which does NOT move on a repository nobody has touched), and whether the
+    board is `stale`, meaning no successful read for more than two poll cadences.
+    `poll.enabled` says whether anything is reconciling at all, and `poll.live` is
+    always false: this is a poll, not a webhook.
+
+    Reconciliation is automatic (`CFACTORY_IMPORT_POLL`, on by default) — this is
+    what makes a stale board visible rather than silently wrong.
+    """
+    return card_ops.sync_state(store)
+
+
 @router.get("/api/cards/{card_key}")
 def get_card(
     card_key: str,

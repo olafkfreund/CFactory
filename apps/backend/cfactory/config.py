@@ -137,14 +137,28 @@ class Settings(BaseSettings):
     # the result, never silent — a board holding the first 1000 of 3000 issues
     # looks complete and is not.
     import_max: int = 1000
-    # Background reconciliation. Import is POLL-BASED, not live: there is no
-    # webhook receiver, so an issue filed after the last pass appears at the next
-    # one. Off unless switched on, like every other background loop here
-    # (subscribe_upstreams, live_progress); the cadence default is the RFC's five
-    # minutes — fast enough that a board is rarely more than a coffee out of
-    # date, slow enough that a hundred tenants do not exhaust a rate limit.
-    import_poll: bool = False
+    # Background reconciliation (#374). Import is POLL-BASED, not live: there is
+    # no webhook receiver, so an issue filed after the last pass appears at the
+    # next one. The cadence default is the RFC's five minutes — fast enough that a
+    # board is rarely more than a coffee out of date, slow enough that a hundred
+    # tenants do not exhaust a rate limit.
+    #
+    # ON by default, unlike the other background loops here (subscribe_upstreams,
+    # live_progress), and deliberately: "will the issues be imported
+    # automatically?" is a question whose only defensible answer is yes. A board
+    # that silently drifts from the repository is worse than no import at all,
+    # because it looks current. The loop is inert on a deployment with no
+    # configured repository or no credential — it resolves nothing and calls
+    # nobody — so switching it on costs an unconfigured deploy one no-op per five
+    # minutes. Set CFACTORY_IMPORT_POLL=false to stop it.
+    import_poll: bool = True
     import_poll_seconds: float = 300.0
+    # Pause between two repositories inside one cycle. THE RATE-LIMIT GUARD: a
+    # tenant with forty repositories must not fire forty reads at one host in one
+    # tick, however cheap each one is. Two seconds spreads forty repositories over
+    # eighty seconds of a three-hundred-second cycle, which no provider notices.
+    # Zero disables the pacing and is a deliberate foot-gun, not a tuning.
+    import_poll_gap_seconds: float = 2.0
 
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None

@@ -469,8 +469,78 @@ paths:
                   live:
                     type: boolean
                     description: Always false. Import is a poll; webhooks remain deferred.
-                  last_synced_at: { type: string, format: date-time, nullable: true }
+                  last_synced_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: >-
+                      The incremental CURSOR (newest issue updated_at seen, minus a
+                      clock-skew overlap) — NOT when the read happened. It does not
+                      move on a repository nobody has touched; use `polled_at`.
+                  polled_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: >-
+                      When this pass read the provider successfully — what "last
+                      synced" means to a human. Null on a failed pass.
                   reason: { type: string }
+
+  /api/cards/sync-state:
+    get:
+      tags: [Cards]
+      summary: How current the board is, per repository (requires `read`)
+      description: >-
+        Issue #374. Reconciliation runs on a background poll
+        (`CFACTORY_IMPORT_POLL`, on by default) rather than a webhook, so the board
+        is recent and never live — this says how recent, per connected repository,
+        which is what makes a stale board visible rather than silently wrong. The
+        MCP twin is `cfactory_card_sync_state`.
+      responses:
+        "200":
+          description: One entry per configured repository, including never-synced ones.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  now: { type: string, format: date-time }
+                  poll:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                        description: Whether anything reconciles on its own (CFACTORY_IMPORT_POLL).
+                      interval_seconds: { type: number }
+                      live:
+                        type: boolean
+                        description: Always false. This is a poll; webhooks remain deferred.
+                  repositories:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        repository_id:
+                          type: integer
+                          nullable: true
+                          description: Null for the environment-variable bridge target.
+                        project: { type: string }
+                        is_default: { type: boolean }
+                        last_polled_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                          description: Last SUCCESSFUL read. Null means never synced.
+                        watermark_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                          description: The incremental cursor. Do not read staleness off it.
+                        stale:
+                          type: boolean
+                          description: >-
+                            No successful read for more than two poll cadences (or
+                            never). Computed server-side so every client agrees.
 
   /api/tenants/{tenant}/git-config:
     parameters:

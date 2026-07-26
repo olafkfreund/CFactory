@@ -1404,7 +1404,10 @@ export const CardImportSchema = z
     updated: z.number(),
     skipped: z.number(),
     truncated: z.boolean(),
+    // The incremental cursor. `polled_at` beside it is when the read happened,
+    // which is what "last synced" means to a human (#374).
     last_synced_at: z.string().nullish(),
+    polled_at: z.string().nullish(),
     reason: z.string().nullish(),
   })
   .passthrough();
@@ -1412,6 +1415,36 @@ export type CardImport = z.infer<typeof CardImportSchema>;
 
 export async function importCards(): Promise<CardImport> {
   return sendJson("POST", "/api/cards/import", {}, CardImportSchema);
+}
+
+// How CURRENT the board is, per connected repository (#374). `last_polled_at` is
+// when that repository's issues were last read successfully — which is NOT
+// `watermark_at`, the incremental cursor, because the cursor does not move on a
+// repository nobody has touched. `stale` is the server's rule (no successful read
+// for more than two poll cadences), computed there so every client agrees.
+export const CardSyncRepoSchema = z.object({
+  repository_id: z.number().nullable(),
+  project: z.string(),
+  is_default: z.boolean(),
+  last_polled_at: z.string().nullable(),
+  watermark_at: z.string().nullable(),
+  stale: z.boolean(),
+});
+export type CardSyncRepo = z.infer<typeof CardSyncRepoSchema>;
+
+export const CardSyncStateSchema = z.object({
+  now: z.string(),
+  poll: z.object({
+    enabled: z.boolean(),
+    interval_seconds: z.number(),
+    live: z.boolean(),
+  }),
+  repositories: z.array(CardSyncRepoSchema),
+});
+export type CardSyncState = z.infer<typeof CardSyncStateSchema>;
+
+export async function fetchCardSyncState(): Promise<CardSyncState> {
+  return getJson("/api/cards/sync-state", CardSyncStateSchema, "card sync-state");
 }
 
 // What a stage action answers with: what the dispatch did, and the card as it now

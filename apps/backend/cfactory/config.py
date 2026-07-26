@@ -25,6 +25,26 @@ DEV_AUDIT_HMAC_SECRET = "dev-insecure-audit-hmac-secret-change-me"
 
 
 class Settings(BaseSettings):
+    """Deployment configuration, including every secret the cockpit holds.
+
+    **Every credential-bearing field below carries ``repr=False`` (Factory#377).**
+    A ``BaseSettings`` instance renders all of its fields in ``repr()`` exactly
+    like a dataclass, and this object is a long-lived process singleton: it sits
+    in the traceback frame of anything that reads configuration, which put nine
+    live secrets one unhandled exception away from the log sink.
+
+    ``repr=False`` rather than ``SecretStr`` here, deliberately. Settings values
+    are interpolated directly — ``f"Bearer {settings.upstream_token}"`` in
+    :mod:`cfactory.actions` and :mod:`cfactory.upstream_ws` — and under
+    ``SecretStr`` that line still compiles while silently sending
+    ``Authorization: Bearer **********``. A masked credential at the point of use
+    is a broken auth path, not a secure one. ``repr=False`` loses nothing that
+    ``SecretStr`` would gain, because no Settings instance is ever
+    ``model_dump()``-ed. Request models, whose secret is read at exactly one call
+    site where a miss fails loudly, use ``SecretStr`` instead — see
+    :class:`cfactory.routes_git_config.GitCredentialUpdate`.
+    """
+
     model_config = SettingsConfigDict(
         env_prefix="CFACTORY_", env_file=".env", extra="ignore", populate_by_name=True
     )
@@ -59,14 +79,14 @@ class Settings(BaseSettings):
     # this token on every adapter request, the live-progress poll, and each
     # upstream WS subscription. Leave unset for local dev where the factories run
     # with APP_DISABLE_AUTH=true. Stays server-side — never sent to the browser.
-    upstream_token: str | None = None
+    upstream_token: str | None = Field(default=None, repr=False)
 
     # Service token for AIFactory's live agent console WebSocket (#34). When set,
     # the live-agents proxy sends it as `Authorization: Bearer <token>` to the
     # upstream rmux WS. Falls back to `upstream_token` when unset. Leave both unset
     # for local dev where AIFactory runs with DISABLE_AUTH. The token stays
     # server-side — it is never sent to the browser.
-    aifactory_token: str | None = None
+    aifactory_token: str | None = Field(default=None, repr=False)
 
     # ── DEPRECATED: a one-release SEED, not configuration (RFC-0020 §3.3) ────
     # AIFactory project a dispatched planning card is built in (RFC-0019 §3.2).
@@ -92,7 +112,7 @@ class Settings(BaseSettings):
     # logged in, and this credential OPENS ISSUES in someone's repo — inheriting
     # it would turn the feature on by accident for every developer, which is
     # exactly what happened the first time this was wired that way.
-    github_token: str | None = None
+    github_token: str | None = Field(default=None, repr=False)
     # DEPRECATED as configuration, a one-release SEED (RFC-0020 §3.3), exactly
     # like intake_project_id above: the repository a card's issue is OPENED in is
     # now the TENANT's `project`, editable in Settings > Git integration. Format
@@ -115,7 +135,7 @@ class Settings(BaseSettings):
     # deliberate omission — the bare GITHUB_TOKEN / GH_TOKEN is NOT accepted,
     # because it is ambient wherever `gh` is logged in and this credential opens
     # issues in someone's repo.
-    git_provider_token: str | None = None
+    git_provider_token: str | None = Field(default=None, repr=False)
     # Base URL of the provider instance — a self-hosted GitLab, an Azure DevOps
     # server, a GitHub Enterprise. Unset means the provider's public default
     # (`github_api_url` for GitHub, https://gitlab.com, https://dev.azure.com).
@@ -195,19 +215,20 @@ class Settings(BaseSettings):
     ollama_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("CFACTORY_OLLAMA_API_KEY", "OLLAMA_API_KEY"),
+        repr=False,
     )
 
     # Scoped API keys (#20). Local-first: when empty/None, auth enforcement is
     # OPEN (single-user local mode). When set, requests must carry a known key
     # with the required scope. Format: "<key>:read,write;<key2>:read".
-    api_keys: str | None = None
+    api_keys: str | None = Field(default=None, repr=False)
 
     # Bearer token the MCP transport (POST /mcp) requires (#113). Treated as a
     # LEGACY FULL-SCOPE credential since RFC-0019 Phase 2a: a caller presenting it
     # holds both read and write. Existing prod clients keep working unchanged.
     # Routed through Settings so every secret flows through one typed boundary
     # rather than an inline os.environ read in mcp.py.
-    mcp_secret: str | None = None
+    mcp_secret: str | None = Field(default=None, repr=False)
 
     # Explicit dev opt-in that re-opens /mcp when NO credential is configured
     # (RFC-0019 Phase 2a). Unconfigured used to mean "open"; it now means DENY, so
@@ -248,14 +269,14 @@ class Settings(BaseSettings):
     # to writing plaintext, and it never invents a key — an unset KEK is an
     # operator decision not to hold credentials, not a reason to hold them badly.
     # Losing this value makes every stored credential permanently undecryptable.
-    credential_key: str | None = None
+    credential_key: str | None = Field(default=None, repr=False)
 
     # HMAC secret anchoring the tamper-evident audit chain (#21). Each audit
     # entry's hash is HMAC-SHA256 over its canonical fields chained to the prior
     # entry's hash, so any after-the-fact mutation breaks the chain. The default
     # below is a CLEARLY-LABELLED dev secret: set CFACTORY_AUDIT_HMAC_SECRET to a
     # real secret in any hosted/shared deployment.
-    audit_hmac_secret: str = DEV_AUDIT_HMAC_SECRET
+    audit_hmac_secret: str = Field(default=DEV_AUDIT_HMAC_SECRET, repr=False)
 
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""

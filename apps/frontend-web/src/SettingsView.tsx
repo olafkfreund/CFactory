@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchSettings, updateCopilotSettings, type CopilotSettings } from "./api";
-import GitConfigPanel from "./GitConfigPanel";
+import GitConnectionsPanel from "./GitConnectionsPanel";
 import { IconRobot, IconCheck } from "./icons";
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -75,8 +75,8 @@ export default function SettingsView({ reloadSignal }: { reloadSignal: number })
       <div className="page-head">
         <h1>Settings</h1>
         <p>
-          Cockpit configuration. Choose which LLM powers the copilot, and which git host and
-          project this board syncs with.
+          Cockpit configuration. Choose which LLM powers the copilot, and which git hosts and
+          repositories this board syncs with.
         </p>
       </div>
 
@@ -157,9 +157,9 @@ export default function SettingsView({ reloadSignal }: { reloadSignal: number })
             )}
           </div>
         </div>
-
-        <GitConfigPanel tenant={tenant} reloadSignal={reloadSignal} />
       </div>
+
+      <GitConnectionsPanel tenant={tenant} reloadSignal={reloadSignal} />
     </>
   );
 }

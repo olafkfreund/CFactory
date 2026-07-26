@@ -806,10 +806,32 @@ body {
 .set-toggle-btn.active { background: color-mix(in srgb, var(--cyan) 16%, transparent); color: var(--text); }
 .set-conn { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.7rem; }
 .set-hint { font-size: 0.74rem; color: var(--muted); }
+/* A hint under the provider toggle is a paragraph, not a caption beside it: the
+   toggle is inline-flex, so without this the sentence wraps around the buttons. */
+.set-toggle + .set-hint { display: block; margin-top: 0.4rem; }
 .set-actions { display: flex; align-items: center; gap: 0.7rem; margin-top: 1.1rem; }
 /* The credential's masked state line, above its (write-only) input. */
 .set-cred-state { margin-bottom: 0.35rem; }
 .set-saved { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--green); font-size: 0.8rem; }
+
+/* Git connections (#373): a growing LIST of cards rather than one, so it gets a
+   heading of its own above its .set-grid. */
+.set-section { margin-top: 1.6rem; }
+/* A resolved host is a URL, which has nothing to wrap at either. */
+.set-card .svc-role { overflow-wrap: anywhere; }
+.set-section-head { margin-bottom: 0.8rem; }
+.set-section-title { font-size: 1rem; margin: 0 0 0.25rem; }
+.set-section-note { color: var(--muted); font-size: 0.82rem; margin: 0; max-width: 68ch; }
+/* One repository inside a connection card. A project path has no spaces to wrap
+   at, so it is told explicitly that it may break — otherwise a long
+   organization/project/repo widens the grid track and scrolls the page sideways. */
+.set-repo { border: 1px solid var(--border); border-radius: 9px; padding: 0.55rem 0.6rem; margin-bottom: 0.5rem; }
+.set-repo-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.set-repo-name { font-size: 0.82rem; color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.set-repo-meta { display: flex; flex-direction: column; gap: 0.1rem; margin-top: 0.3rem; font-size: 0.74rem; color: var(--muted); overflow-wrap: anywhere; }
+.set-repo-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.45rem; }
+.set-repo-form { border-top: 1px dashed var(--border); margin-top: 0.6rem; padding-top: 0.2rem; }
+.set-badge { font-family: var(--font-mono); font-size: 0.68rem; color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 30%, transparent); border-radius: 999px; padding: 0.1rem 0.5rem; white-space: nowrap; }
 
 /* Task detail drawer (#44) */
 .card-wi--clickable { cursor: pointer; }

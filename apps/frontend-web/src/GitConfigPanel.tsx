@@ -26,19 +26,23 @@ const PROJECT_PLACEHOLDER: Record<string, string> = {
   azure_devops: "organization/project/repo",
 };
 
-// The derived status, rendered as the pill class + sentence a human reads.
+// The derived status: a short state word for the pill, and the sentence that
+// explains it as a note under the card's role line. A whole sentence in a pill
+// wraps to three lines and runs across the card title (#211), and the
+// explanation reads better as body text anyway.
 // Deliberately explicit about credential_missing: that state is not a mistake
 // the user made, it is the deployment's credential, and saying so avoids an
 // afternoon spent re-typing a project path that was always correct.
 // Typed as possibly-absent on purpose: a status the backend adds later must fall
 // back to showing the raw value rather than rendering "undefined".
-const STATUS: Record<string, { tone: string; text: string } | undefined> = {
-  unconfigured: { tone: "warn", text: "not configured — no project set" },
+const STATUS: Record<string, { tone: string; text: string; note?: string } | undefined> = {
+  unconfigured: { tone: "warn", text: "not configured", note: "No project set." },
   credential_missing: {
     tone: "warn",
-    text: "no usable credential — the project cannot be reached",
+    text: "no credential",
+    note: "No usable credential — the project cannot be reached.",
   },
-  configured: { tone: "ok", text: "configured — not yet verified" },
+  configured: { tone: "ok", text: "configured", note: "Not verified yet." },
   verified: { tone: "ok", text: "verified" },
 };
 
@@ -233,6 +237,7 @@ export default function GitConfigPanel({
       <div className="svc-role">
         Which host and project this board syncs cards with, and where its builds land
       </div>
+      {status.note && <div className="set-status-note">{status.note}</div>}
 
       {err && <div className="banner banner--error">{err}</div>}
 
@@ -322,8 +327,7 @@ export default function GitConfigPanel({
         <span className="set-hint">
           The AIFactory project a dispatched card is BUILT in — a project id, not a
           repository path. Empty means low/medium cards cannot be dispatched and the code
-          and test stages refuse. An autonomous build writes real code there, so choose it
-          deliberately.
+          and test stages refuse. Builds write real code there, so choose it deliberately.
         </span>
       </div>
 
@@ -359,7 +363,7 @@ export default function GitConfigPanel({
                 : "Using the deployment's environment credential, shared by every tenant."}
             </span>
           ) : (
-            <span className="set-hint">No credential stored — the project cannot be reached.</span>
+            <span className="set-hint">No credential stored for this board.</span>
           )}
         </div>
         <input
@@ -375,9 +379,9 @@ export default function GitConfigPanel({
           }}
         />
         <span className="set-hint">
-          Encrypted before it is stored, and never shown again — not here, not in any API
-          response. Replacing it is the only way to change it; Remove revokes it from this
-          board. Every use of it is written to the audit trail.
+          Encrypted at rest and never shown again — not here, not in any API response.
+          Replacing it is the only way to change it; Remove revokes it from this board.
+          Every use is written to the audit trail.
         </span>
         <div className="set-actions">
           <button

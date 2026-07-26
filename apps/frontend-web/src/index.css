@@ -763,7 +763,17 @@ body {
 .chat-input input:focus { outline: none; border-color: var(--cyan); }
 
 /* ── Settings view ─────────────────────────────────────── */
-.set-card { max-width: 520px; }
+/* Settings cards are dense forms, not the Services view's status tiles, so they
+   get their own track instead of borrowing .svc-grid's 240px (#211): wide enough
+   that a label and its help text stay readable. min() keeps a narrow viewport
+   from overflowing the track. */
+.set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); gap: 1rem; align-items: start; }
+.set-card { max-width: 560px; }
+/* The status drops below the title rather than running across it (#211). */
+.set-card .svc-top { flex-wrap: wrap; }
+.set-card .svc-ident { min-width: auto; }
+/* Whatever the pill is too short to say, said under the card's role line. */
+.set-status-note { color: var(--muted); font-size: 0.78rem; margin: -0.35rem 0 0.7rem; }
 .set-field { margin-top: 0.9rem; }
 .set-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.35rem; }
 .set-toggle { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }

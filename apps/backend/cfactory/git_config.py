@@ -25,12 +25,18 @@ behaves precisely as it did before this module existed. That fallback is the
 one-release bridge; when the env vars are removed, resolution simply returns
 ``unconfigured`` until somebody fills the panel in.
 
-**Credentials are deliberately absent.** Phases 3 and 4 of RFC-0020 own
-credential storage and OAuth; the token still comes from the environment
-(:func:`provider_token`). That is what the derived ``credential_missing`` status
-is *for*: the tenant has said which project it wants, and no usable credential is
-present to reach it. This follows the copilot-settings precedent exactly —
-provider and model are persisted, the API key never is.
+**The credential is a separate resource, not a field here.** RFC-0020 §3.4
+(phase 3) gives a tenant its own encrypted credential — see
+:mod:`cfactory.credentials` — stored in its own table and reached through
+:class:`~cfactory.credentials.Credential`, which carries *whether* there is one
+and a way to fetch it for a single provider call. What this module holds is the
+masked view (:class:`~cfactory.credentials.CredentialInfo`), and that is all any
+read of a configuration ever sees. A deployment that still sets
+``CFACTORY_GIT_PROVIDER_TOKEN`` keeps working: :func:`provider_token` is the
+environment fallback for a tenant that has stored none, and a stored one wins.
+``credential_missing`` is the status for a tenant that named a project and has no
+usable credential to reach it with — absent, undecryptable, or rejected by the
+host on the last verify.
 
 **Two intake fields, not one.** RFC-0020 §3.3 lists one ``intake_project``,
 described as "where intake files if different from the sync target". In this
@@ -58,11 +64,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import DateTime, Index, Integer, String
+from sqlalchemy import Boolean, DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from .config import DEFAULT_TENANT, Settings
+from .credentials import Credential, CredentialInfo, env_credential
 from .db import Base
 
 logger = logging.getLogger(__name__)
@@ -147,6 +154,14 @@ class GitConfigRow(Base):
     # config that was verified, so it cannot survive that config changing.
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     verify_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # True when the last verify was refused by the HOST for the credential (401 /
+    # 403), as opposed to failing for any other reason. RFC-0020 §3.4 requires a
+    # REJECTED credential to read as ``credential_missing`` and not as a green
+    # ``configured``: from the board's point of view a token the host will not
+    # accept is a token it does not have. NULL means "not known" — nothing has
+    # been proved either way. Cleared by any config edit and by storing a
+    # credential, both of which make the last answer obsolete.
+    credential_rejected: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -173,6 +188,10 @@ class GitConfig(BaseModel):
     aifactory_project_id: str | None
     default_labels: list[str]
     status: str
+    # THE MASKED INDICATOR (RFC-0020 §3.4). Whether this tenant has a credential,
+    # when it was stored and which key wraps it — never the credential. This is
+    # the only thing any read surface says about it, over REST and over MCP.
+    credential: CredentialInfo
     verified_at: datetime | None = None
     verify_error: str | None = None
     source: str  # "stored" | "env"
@@ -266,17 +285,19 @@ def validated_fields(update: GitConfigUpdate) -> dict[str, Any]:
         "aifactory_project_id": (update.aifactory_project_id or "").strip() or None,
         "default_labels": validate_labels(update.default_labels),
         # An edit invalidates any earlier verification: it proved a different
-        # configuration.
+        # configuration, and it proved it against whatever credential was in
+        # play then.
         "verified_at": None,
         "verify_error": None,
+        "credential_rejected": None,
     }
 
 
-# ── credential (still environment-sourced until RFC-0020 phase 3) ────────────
+# ── credential (the DEPLOYMENT's, when a tenant has stored none) ─────────────
 
 
 def provider_token(settings: Settings) -> str | None:
-    """The configured credential, or ``None`` when sync is not configured at all.
+    """The deployment's environment credential, or ``None``.
 
     ``git_provider_token`` is the provider-neutral name; ``github_token`` is the
     pre-RFC-0020 one and still works, so a deploy that set it keeps working
@@ -284,9 +305,12 @@ def provider_token(settings: Settings) -> str | None:
     the comment on those settings in :mod:`cfactory.config` for why that omission
     is load-bearing rather than an oversight.
 
-    Deliberately NOT part of the stored configuration: credential custody is
-    RFC-0020 §3.4 (phases 3 and 4). A tenant that has named a project but has no
-    usable credential is exactly what ``credential_missing`` reports.
+    Since RFC-0020 §3.4 this is the FALLBACK, not the answer: a tenant with a
+    stored credential uses its own, and this one covers every tenant that has
+    not stored one (which is every tenant of a single-tenant deployment on the
+    day phase 3 ships). A multi-tenant deployment on this path shares the
+    operator's token across tenants and is explicitly not isolated — storing a
+    per-tenant credential is what fixes that.
     """
     return settings.git_provider_token or settings.github_token
 
@@ -312,36 +336,61 @@ class GitTarget:
     import_project: str | None
     aifactory_project_id: str | None
     default_labels: tuple[str, ...]
-    token: str | None
+    # NOT a token. A handle that says whether there is a credential and can fetch
+    # it for exactly one provider call — see :class:`cfactory.credentials.Credential`.
+    credential: Credential
     stored: bool
     verified_at: datetime | None = None
     verify_error: str | None = None
+    credential_rejected: bool | None = None
 
     @property
     def status(self) -> str:
-        return derive_status(project=self.project, token=self.token, verified_at=self.verified_at)
+        return derive_status(
+            project=self.project,
+            has_credential=self.credential.configured,
+            verified_at=self.verified_at,
+            credential_rejected=self.credential_rejected,
+        )
 
 
-def derive_status(*, project: str | None, token: str | None, verified_at: Any) -> str:
+def derive_status(
+    *,
+    project: str | None,
+    has_credential: bool,
+    verified_at: Any,
+    credential_rejected: bool | None = None,
+) -> str:
     """The RFC-0020 §3.3 derived status, in the order the questions are asked.
 
-    ``credential_missing`` outranks ``verified`` on purpose: a tenant whose token
-    has been withdrawn since the last successful verification cannot reach its
-    project now, and reporting the stale green would be the most misleading
-    answer available.
+    ``credential_missing`` outranks ``verified`` on purpose, and covers two
+    cases the board cannot usefully tell apart: no credential at all, and a
+    credential the host REFUSED on the last verify (RFC-0020 §3.4). A tenant
+    whose token has been withdrawn or revoked since the last successful
+    verification cannot reach its project now, and reporting the stale green
+    would be the most misleading answer available.
+
+    An undecryptable stored credential lands here too, by construction:
+    ``has_credential`` is false when nothing can be unsealed, so a lost or
+    rotated-away KEK reads as "no credential", which is exactly what it is from
+    the board's point of view.
     """
     if not project:
         return UNCONFIGURED
-    if not token:
+    if not has_credential or credential_rejected:
         return CREDENTIAL_MISSING
     return VERIFIED if verified_at else CONFIGURED
 
 
-def target_from_settings(settings: Settings, tenant: str = DEFAULT_TENANT) -> GitTarget:
+def target_from_settings(
+    settings: Settings, tenant: str = DEFAULT_TENANT, credential: Credential | None = None
+) -> GitTarget:
     """The target a deployment's ENVIRONMENT describes — the one-release bridge.
 
     Used for a tenant with no stored row (including every unit test that never
-    writes one), and as the source the one-release seed materialises from.
+    writes one), and as the source the one-release seed materialises from. A
+    tenant may still have stored its own credential without storing a
+    configuration, so ``credential`` is supplied here too.
     """
     provider = (settings.git_provider or GITHUB).strip().lower()
     base_url = (
@@ -358,13 +407,20 @@ def target_from_settings(settings: Settings, tenant: str = DEFAULT_TENANT) -> Gi
         import_project=project,
         aifactory_project_id=(settings.intake_project_id or "").strip() or None,
         default_labels=(),
-        token=provider_token(settings),
+        credential=credential or env_credential(provider_token(settings)),
         stored=False,
     )
 
 
-def target_from_row(row: GitConfigRow, settings: Settings) -> GitTarget:
-    """The target a stored row describes. Only the credential comes from env."""
+def target_from_row(
+    row: GitConfigRow, settings: Settings, credential: Credential | None = None
+) -> GitTarget:
+    """The target a stored row describes.
+
+    ``credential`` is supplied by the store (which is what knows how to unseal a
+    tenant's own), falling back to the deployment's environment credential for a
+    tenant that has stored none.
+    """
     provider = (row.provider or GITHUB).strip().lower()
     return GitTarget(
         tenant=row.tenant_id,
@@ -376,10 +432,11 @@ def target_from_row(row: GitConfigRow, settings: Settings) -> GitTarget:
         default_labels=tuple(
             label for label in (row.default_labels or []) if isinstance(label, str)
         ),
-        token=provider_token(settings),
+        credential=credential or env_credential(provider_token(settings)),
         stored=True,
         verified_at=row.verified_at,
         verify_error=row.verify_error,
+        credential_rejected=row.credential_rejected,
     )
 
 
@@ -396,6 +453,7 @@ def config_view(target: GitTarget) -> GitConfig:
         aifactory_project_id=target.aifactory_project_id,
         default_labels=list(target.default_labels),
         status=target.status,
+        credential=target.credential.info,
         verified_at=target.verified_at,
         verify_error=target.verify_error,
         source="stored" if target.stored else "env",

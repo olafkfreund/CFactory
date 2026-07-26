@@ -35,7 +35,7 @@ from cfactory.mcp import MCP_TOOLS, TOOL_SCOPES
 # project every card action talks to — so its mutations are under the same parity
 # law, and a REST route added there without an MCP twin fails this build.
 BOARD_ROUTE_PREFIXES = ("/api/cards", "/api/tenants")
-BOARD_TOOL_MARKERS = ("card", "git_config")
+BOARD_TOOL_MARKERS = ("card", "git_config", "git_credential")
 
 
 @dataclass(frozen=True)
@@ -98,6 +98,21 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
         "POST",
         "/api/tenants/{tenant}/git-config:verify",
         "cfactory_verify_git_config",
+    ),
+    # Tenant git credential (RFC-0020 §3.4, #364). Two operations, both writes,
+    # and no read: the credential is write-only, so there is no GET to pair a
+    # read tool with. Whether one exists rides on get_git_config's masked block.
+    BoardOperation(
+        "set_git_credential",
+        "PUT",
+        "/api/tenants/{tenant}/git-credential",
+        "cfactory_set_git_credential",
+    ),
+    BoardOperation(
+        "delete_git_credential",
+        "DELETE",
+        "/api/tenants/{tenant}/git-credential",
+        "cfactory_delete_git_credential",
     ),
 )
 

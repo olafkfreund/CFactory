@@ -33,6 +33,17 @@ from .git_providers import build_provider, run_sync
 
 logger = logging.getLogger(__name__)
 
+# HTTP statuses that mean "the host looked at your credential and said no", as
+# opposed to any other reason a verify can fail. These are what turn the derived
+# status into ``credential_missing`` rather than leaving a green ``configured``
+# on a token the host will not accept (RFC-0020 §3.4).
+#
+# ponytail: status codes only. A provider that signals refusal some other way
+# (GitHub answers 404 for a private repo the token cannot see) reads as a plain
+# failure, which is honest — from one 404 the board genuinely cannot tell "wrong
+# credential" from "wrong project", and guessing would be worse than not saying.
+_REJECTED_STATUSES = frozenset({401, 403})
+
 # Audit ``target_service`` for a git-config mutation. The same value the import
 # uses — the thing being configured is the connection to the git provider.
 _TARGET = "git_provider"
@@ -42,19 +53,23 @@ _TARGET = "git_provider"
 _KEY_PREFIX = "tenant:"
 
 
-def _record(ctx: AuditContext, store: CardStore, *, kind: str, ok: bool) -> None:
+def _record(
+    ctx: AuditContext, store: CardStore, *, kind: str, ok: bool, resource: str = "git-config"
+) -> None:
     """Append a git-config mutation to the shared tamper-evident audit chain.
 
     Every mutation here is chained exactly as a card mutation is: who changed a
     tenant's git connection, and when, is precisely the kind of change an
-    operator later needs to be able to reconstruct.
+    operator later needs to be able to reconstruct. Credential mutations use the
+    same chain and the same key, naming ``git-credential`` as the resource — one
+    chain per RFC-0001a, not a second one for secrets.
     """
     ctx.audit.record(
         actor=ctx.actor,
         kind=kind,
         correlation_key=f"{_KEY_PREFIX}{store.tenant}",
         target_service=_TARGET,
-        endpoint=f"{ctx.endpoint}/{store.tenant}/git-config",
+        endpoint=f"{ctx.endpoint}/{store.tenant}/{resource}",
         status_code=int(HTTPStatus.OK) if ok else 0,
         ok=ok,
     )
@@ -104,19 +119,19 @@ def verify_git_config(
     ``ok=False`` plus the reason, not a 500.
     """
     settings = get_settings()
-    target = store.git_target(settings)
+    target = store.git_target(settings, actor=ctx.actor, audit=ctx.audit)
     if target.project is None:
         return _result(
             store, ok=False, status=UNCONFIGURED, reason="no project configured", settings=settings
         )
-    if not target.token:
+    if not target.credential.configured:
         return _result(
             store,
             ok=False,
             status=CREDENTIAL_MISSING,
             reason=(
-                "no credential is configured for this deployment, so the project cannot "
-                "be reached (RFC-0020 phase 3 moves credentials into the tenant)"
+                "no credential is configured for this tenant, so the project cannot be "
+                "reached — store one in Settings > Git integration"
             ),
             settings=settings,
         )
@@ -132,7 +147,9 @@ def verify_git_config(
         # config, returned, and audited.
         reason = f"{type(exc).__name__}: {exc}"[:512]
         logger.warning("git config verify failed for tenant %s: %s", store.tenant, reason)
-        store.record_git_verification(error=reason, settings=settings)
+        store.record_git_verification(
+            error=reason, rejected=_is_credential_rejection(exc), settings=settings
+        )
         _record(ctx, store, kind="verify_git_config", ok=False)
         return {"ok": False, "reason": reason, "config": get_git_config(store, settings)}
 
@@ -145,6 +162,47 @@ def verify_git_config(
         # whole metadata payload through the panel.
         "repository": info.get("full_name") or info.get("path_with_namespace") or info.get("name"),
         "config": get_git_config(store, settings),
+    }
+
+
+def _is_credential_rejection(exc: Exception) -> bool:
+    """Whether the host refused the CREDENTIAL, as opposed to failing otherwise."""
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in _REJECTED_STATUSES
+
+
+# ── the credential (RFC-0020 §3.4) ───────────────────────────────────────────
+
+
+def set_git_credential(store: CardStore, ctx: AuditContext, secret: str) -> dict[str, Any]:
+    """Store (or replace) this tenant's git credential, encrypted, and audit it.
+
+    WRITE-ONLY: what comes back is the masked indicator — that there is one, when
+    it was stored, which key wraps it — and never the credential, on this
+    response or on any other. Raises
+    :class:`~cfactory.credentials.CredentialError` when the deployment has no
+    encryption key, which is the fail-closed rule: no key means no credential is
+    stored at all, rather than one stored in the clear.
+
+    Storing one also clears any recorded rejection, since that rejection was
+    about the credential this one replaces.
+    """
+    info = store.set_git_credential(secret)
+    _record(ctx, store, kind="set_git_credential", ok=True, resource="git-credential")
+    return {"ok": True, "credential": info.model_dump(mode="json")}
+
+
+def clear_git_credential(store: CardStore, ctx: AuditContext) -> dict[str, Any]:
+    """Forget this tenant's git credential, and audit it.
+
+    Idempotent: removing one that is not there is ``removed: false`` and a 200,
+    not a 404 — the caller asked for a state, and that state now holds.
+    """
+    removed = store.clear_git_credential()
+    _record(ctx, store, kind="delete_git_credential", ok=True, resource="git-credential")
+    return {
+        "ok": True,
+        "removed": removed,
+        "credential": store.git_credential().info.model_dump(mode="json"),
     }
 
 

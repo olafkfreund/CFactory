@@ -71,6 +71,7 @@ from .config import get_settings
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import rollups as compute_rollups
 from .copilot.tools import summarize_timeline
+from .credentials import CredentialError
 from .enterprise import identity_dep
 from .git_config import SUPPORTED_PROVIDERS, GitConfigError, GitConfigUpdate
 from .store import get_store
@@ -490,6 +491,44 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    # ── Tenant git credential (RFC-0020 §3.4) ────────────────────────────────
+    # Write-only, like the panel: there is no read tool, because there is no read
+    # of a credential anywhere on this board. Whether one exists is reported by
+    # cfactory_get_git_config's masked "credential" block.
+    {
+        "name": "cfactory_set_git_credential",
+        "description": (
+            "Store (or replace) the credential this tenant's board authenticates to its "
+            "git provider with. WRITE-ONLY: it is encrypted at rest and no tool, endpoint "
+            "or panel ever returns it; cfactory_get_git_config reports only WHETHER one "
+            "is configured. Refused when the deployment has no credential encryption key, "
+            "rather than stored unencrypted. Every later use of it is written to the "
+            "audit chain."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "credential": {
+                    "type": "string",
+                    "description": (
+                        "Whichever credential the provider issues for API access. Sent "
+                        "once, never read back."
+                    ),
+                }
+            },
+            "required": ["credential"],
+        },
+    },
+    {
+        "name": "cfactory_delete_git_credential",
+        "description": (
+            "Forget this tenant's git credential — the revocation path for one that has "
+            "leaked or been rotated at the provider. Idempotent: removing one that is not "
+            "there is not an error. The board keeps serving afterwards; its git status "
+            "simply becomes credential_missing."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 MCP_TOOLS += BOARD_TOOLS
@@ -524,6 +563,11 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_get_git_config": READ,
     "cfactory_set_git_config": WRITE,
     "cfactory_verify_git_config": WRITE,
+    # The credential (RFC-0020 §3.4). Both WRITE, and there is deliberately no
+    # READ counterpart to scope: a read-scoped key cannot obtain a credential
+    # because nothing can.
+    "cfactory_set_git_credential": WRITE,
+    "cfactory_delete_git_credential": WRITE,
 }
 
 
@@ -726,6 +770,16 @@ def _tool_verify_git_config(_args: dict[str, Any], ctx: ToolContext) -> Any:
     return git_config_ops.verify_git_config(ctx.cards, ctx.audit, transport=ctx.transport)
 
 
+def _tool_set_git_credential(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.set_git_credential(
+        ctx.cards, ctx.audit, str(args.get("credential") or "")
+    )
+
+
+def _tool_delete_git_credential(_args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.clear_git_credential(ctx.cards, ctx.audit)
+
+
 def _tool_stage_card(stage: str) -> Callable[[dict[str, Any], ToolContext], Any]:
     """Handler for one stage tool — the whole sequence when ``stage`` is empty.
 
@@ -769,6 +823,8 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_get_git_config": _tool_get_git_config,
     "cfactory_set_git_config": _tool_set_git_config,
     "cfactory_verify_git_config": _tool_verify_git_config,
+    "cfactory_set_git_credential": _tool_set_git_credential,
+    "cfactory_delete_git_credential": _tool_delete_git_credential,
 }
 
 
@@ -787,6 +843,9 @@ _TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...
     (StageRefusedError, lambda exc: {"error": exc.message, "reason": exc.code}),
     # A rejected git configuration: 400 over REST, the same sentence here.
     (GitConfigError, lambda exc: {"error": str(exc)}),
+    # A credential that could not be stored: 503 over REST, the same sentence
+    # here. Its message names the misconfiguration and never the credential.
+    (CredentialError, lambda exc: {"error": str(exc)}),
     (
         ValidationError,
         lambda exc: {"error": "invalid arguments", "details": exc.errors(include_url=False)},

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import {
+  deleteGitCredential,
   fetchGitConfig,
+  setGitCredential,
   updateGitConfig,
   verifyGitConfig,
   type GitConfig,
@@ -34,7 +36,7 @@ const STATUS: Record<string, { tone: string; text: string } | undefined> = {
   unconfigured: { tone: "warn", text: "not configured — no project set" },
   credential_missing: {
     tone: "warn",
-    text: "no credential on this deployment — the project cannot be reached",
+    text: "no usable credential — the project cannot be reached",
   },
   configured: { tone: "ok", text: "configured — not yet verified" },
   verified: { tone: "ok", text: "verified" },
@@ -77,6 +79,12 @@ export default function GitConfigPanel({
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [verifyNote, setVerifyNote] = useState<string | null>(null);
+  // The credential box. Write-only in both directions: it is never populated
+  // from a response (there is nothing to populate it WITH), and it is emptied
+  // the moment the value has been sent, so it does not sit in the DOM.
+  const [credential, setCredential] = useState("");
+  const [savingCredential, setSavingCredential] = useState(false);
+  const [credentialNote, setCredentialNote] = useState<string | null>(null);
 
   function load(c: GitConfig) {
     setConfig(c);
@@ -128,6 +136,55 @@ export default function GitConfigPanel({
       })
       .finally(() => {
         setSaving(false);
+      });
+  }
+
+  // Re-read the configuration after a credential write: the masked indicator and
+  // the derived status both live on it, and both just changed.
+  function reload() {
+    if (!tenant) return;
+    fetchGitConfig(tenant)
+      .then(load)
+      .catch((e: unknown) => {
+        setErr(e instanceof Error ? e.message : String(e));
+      });
+  }
+
+  function storeCredential() {
+    if (!tenant || !credential.trim()) return;
+    setSavingCredential(true);
+    setErr(null);
+    setCredentialNote(null);
+    setVerifyNote(null);
+    setGitCredential(tenant, credential.trim())
+      .then(() => {
+        setCredential("");
+        setCredentialNote("Credential stored. It cannot be displayed again.");
+        reload();
+      })
+      .catch((e: unknown) => {
+        setErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        setSavingCredential(false);
+      });
+  }
+
+  function removeCredential() {
+    if (!tenant) return;
+    setSavingCredential(true);
+    setErr(null);
+    setCredentialNote(null);
+    deleteGitCredential(tenant)
+      .then((r) => {
+        setCredentialNote(r.removed ? "Credential removed." : "There was no credential to remove.");
+        reload();
+      })
+      .catch((e: unknown) => {
+        setErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        setSavingCredential(false);
       });
   }
 
@@ -286,6 +343,66 @@ export default function GitConfigPanel({
           Put on issues the board opens. A factory:&lt;tier&gt; label is refused — it is the
           fleet's intake trigger and would build the same card twice.
         </span>
+      </div>
+
+      <div className="set-field">
+        <label className="set-label" htmlFor="git-credential">Credential</label>
+        <div className="set-cred-state">
+          {config?.credential.configured ? (
+            <span className="set-hint">
+              {config.credential.source === "tenant"
+                ? `Stored for this tenant${
+                    config.credential.updated_at
+                      ? ` on ${new Date(config.credential.updated_at).toLocaleDateString()}`
+                      : ""
+                  }${config.credential.key_version ? ` (key ${config.credential.key_version})` : ""}.`
+                : "Using the deployment's environment credential, shared by every tenant."}
+            </span>
+          ) : (
+            <span className="set-hint">No credential stored — the project cannot be reached.</span>
+          )}
+        </div>
+        <input
+          id="git-credential"
+          className="svc-edit-input mono"
+          type="password"
+          autoComplete="off"
+          value={credential}
+          placeholder={config?.credential.configured ? "replace the stored credential" : "paste a provider token"}
+          onChange={(e) => {
+            setCredential(e.target.value);
+            setCredentialNote(null);
+          }}
+        />
+        <span className="set-hint">
+          Encrypted before it is stored, and never shown again — not here, not in any API
+          response. Replacing it is the only way to change it; Remove revokes it from this
+          board. Every use of it is written to the audit trail.
+        </span>
+        <div className="set-actions">
+          <button
+            className="btn"
+            onClick={storeCredential}
+            disabled={savingCredential || !credential.trim() || !tenant}
+            type="button"
+          >
+            {savingCredential ? "Saving…" : "Store credential"}
+          </button>
+          <button
+            className="btn"
+            onClick={removeCredential}
+            disabled={savingCredential || config?.credential.source !== "tenant"}
+            title={
+              config?.credential.source === "tenant"
+                ? undefined
+                : "Nothing stored for this tenant — the deployment's own credential is set in its environment"
+            }
+            type="button"
+          >
+            Remove
+          </button>
+          {credentialNote && <span className="set-hint">{credentialNote}</span>}
+        </div>
       </div>
 
       <div className="set-conn">

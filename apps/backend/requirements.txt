@@ -9,6 +9,11 @@ httpx>=0.28
 websockets>=14.0
 wsproto>=1.2
 psycopg[binary]>=3.2
+# AES-GCM for the per-tenant credential store (RFC-0020 §3.4). The standard
+# library has hashing and HMAC and no AEAD at all, so there is no stdlib way to
+# encrypt a credential with authentication — and an unauthenticated mode, or a
+# hand-rolled construction, is precisely what must not be here.
+cryptography>=44.0
 sqlalchemy>=2.0
 alembic>=1.14
 claude-agent-sdk>=0.1.16

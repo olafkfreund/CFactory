@@ -218,12 +218,15 @@ def test_an_ambient_gh_login_does_not_switch_issue_writing_on(monkeypatch, ambie
     monkeypatch.delenv("CFACTORY_GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("CFACTORY_GIT_PROVIDER_TOKEN", raising=False)
 
-    assert github_sync.sync_enabled(Settings()) is False
+    assert github_sync.sync_enabled(_target(Settings())) is False
 
 
 def test_either_token_setting_switches_it_on():
-    assert github_sync.sync_enabled(Settings(github_token=_TEST_TOKEN)) is True
-    assert github_sync.sync_enabled(Settings(git_provider_token=_TEST_TOKEN)) is True
+    """The deployment credential still switches sync on for a tenant that has
+    stored none of its own — RFC-0020 §3.4 adds a per-tenant credential, it does
+    not retire the environment one out from under an existing deploy."""
+    assert github_sync.sync_enabled(_target(Settings(github_token=_TEST_TOKEN))) is True
+    assert github_sync.sync_enabled(_target(Settings(git_provider_token=_TEST_TOKEN))) is True
 
 
 # ── card -> GitLab issue ─────────────────────────────────────────────────────

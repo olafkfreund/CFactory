@@ -1329,10 +1329,15 @@ export const CardSchema = z
     // Mirrored FROM the git host and never pushed to it (RFC-0019 §3.5): which
     // issue this card is the projection of ("owner/repo#123"), that issue's state
     // there, and its labels. The ref carries no HOST — the board is
-    // multi-provider, so a link out is built from the tenant's git config, never
-    // from a hardcoded github.com (see `issueUrl` in cards.ts). Nullish/defaulted
-    // so a card served by a pre-Phase-6 backend still parses.
+    // multi-provider, so a link out is built from the connection THIS CARD's
+    // repository is reached through, never from a hardcoded github.com (see
+    // `issueUrlResolver` in cards.ts). Nullish/defaulted so a card served by a
+    // pre-Phase-6 backend still parses.
     issue_ref: z.string().nullish(),
+    // Which of the tenant's repositories this card targets (RFC-0020 §3.3).
+    // Null/absent means the tenant DEFAULT repository, which is what every card
+    // created before there was more than one means.
+    repository_id: z.number().nullish(),
     issue_state: z.string().nullish(),
     labels: z.array(z.string()).default([]),
     // Per-stage dispatch records, keyed by stage name. Optional so a card served

@@ -7,10 +7,10 @@
 // Planning statuses are NOT the PARR pipeline stage statuses rendered by
 // Board.tsx: that board is execution (plan → code → test); this one is the
 // planning axis (backlog → done). They are deliberately separate surfaces.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchCards,
-  fetchGitConfig,
+  fetchGitConnections,
   fetchSettings,
   importCards,
   patchCard,
@@ -22,6 +22,7 @@ import {
   type CardStage,
   type CardStatus,
   type CardTier,
+  type GitConnections,
   type StageActionResult,
 } from "./api";
 
@@ -146,35 +147,77 @@ export function issueUrl(
   return null;
 }
 
+/** The provider and host one repository is reached through. */
+export type IssueHost = { provider: string; baseUrl: string };
+
 /**
- * Resolve this tenant's git host once, and hand back an `issue_ref -> URL` builder.
+ * Turn the tenant's connections into a `card -> issue URL` builder.
+ *
+ * Resolved per CARD, not per tenant. A tenant has several connections and a card
+ * carries `repository_id`, so "the tenant's host" is not a thing that exists: a
+ * card whose repository lives on a self-hosted GitLab would be handed a
+ * github.com URL by any single tenant-wide host, and that link would be
+ * confidently wrong. The whole `repository_id -> host` map comes out of the ONE
+ * `git-connections` read, so this is still one fetch for the whole board rather
+ * than one per card.
+ *
+ * `repository_id` is null for the tenant DEFAULT repository, and a card naming a
+ * repository that has since been deleted falls back to the default too — which is
+ * exactly what the backend does when it resolves that card's target.
+ *
+ * A tenant with no connections (or no default) yields a builder that returns
+ * null: the ref renders as text, and no link beats a wrong link.
+ */
+export function issueUrlResolver(
+  connections: GitConnections | null,
+): (card: Card) => string | null {
+  if (!connections) return () => null;
+  const byRepository = new Map<number, IssueHost>();
+  for (const connection of connections.connections) {
+    for (const repository of connection.repositories) {
+      byRepository.set(repository.id, {
+        provider: connection.provider,
+        baseUrl: connection.base_url,
+      });
+    }
+  }
+  const fallback =
+    connections.default_repository_id != null
+      ? (byRepository.get(connections.default_repository_id) ?? null)
+      : null;
+  return (card) => {
+    const named = card.repository_id != null ? byRepository.get(card.repository_id) : undefined;
+    const host = named ?? fallback;
+    return host ? issueUrl(card.issue_ref, host.provider, host.baseUrl) : null;
+  };
+}
+
+/**
+ * Resolve this tenant's git connections once, and hand back the URL builder.
  *
  * Two GETs on mount rather than a field on the card: the cockpit cannot know its
  * own tenant (the backend resolves it from the header oauth2-proxy injects, see
- * `fetchSettings`), and the host lives on that tenant's git config. A failure is
- * swallowed deliberately — an unconfigured or unreachable git config must cost the
+ * `fetchSettings`), and the hosts live on that tenant's connections. A failure is
+ * swallowed deliberately — an unconfigured or unreachable git setup must cost the
  * board its issue LINKS, never its cards.
  */
-export function useIssueUrl(): (issueRef: string | null | undefined) => string | null {
-  const [host, setHost] = useState<{ provider: string; baseUrl: string } | null>(null);
+export function useIssueUrl(): (card: Card) => string | null {
+  const [connections, setConnections] = useState<GitConnections | null>(null);
   useEffect(() => {
     let alive = true;
     fetchSettings()
-      .then((s) => fetchGitConfig(s.tenant))
-      .then((c) => {
-        if (alive) setHost({ provider: c.provider, baseUrl: c.base_url });
+      .then((s) => fetchGitConnections(s.tenant))
+      .then((data) => {
+        if (alive) setConnections(data);
       })
       .catch(() => {
-        /* no host known — cards still render, they just carry no link */
+        /* no hosts known — cards still render, they just carry no link */
       });
     return () => {
       alive = false;
     };
   }, []);
-  return useCallback(
-    (ref: string | null | undefined) => (host ? issueUrl(ref, host.provider, host.baseUrl) : null),
-    [host],
-  );
+  return useMemo(() => issueUrlResolver(connections), [connections]);
 }
 
 // How much of the body a collapsed card shows. Long enough to tell two cards

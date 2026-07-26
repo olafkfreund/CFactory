@@ -1,10 +1,19 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CardSchema, fetchCards, patchCard, runCardStage, type Card, type CardPatch } from "./api";
+import {
+  CardSchema,
+  fetchCards,
+  GitConnectionsSchema,
+  patchCard,
+  runCardStage,
+  type Card,
+  type CardPatch,
+} from "./api";
 import {
   byPriority,
   issueUrl,
+  issueUrlResolver,
   matchesQuery,
   peek,
   optimisticPatch,
@@ -417,6 +426,95 @@ describe("issueUrl (multi-provider link out)", () => {
     expect(issueUrl(null, "github", "https://api.github.com")).toBeNull();
     expect(issueUrl(undefined, "github", "https://api.github.com")).toBeNull();
     expect(issueUrl("acme/widgets", "github", "https://api.github.com")).toBeNull();
+  });
+});
+
+// A board holds cards across SEVERAL connections now, so the link out is resolved
+// through the card's own repository (#373). One tenant-wide host would hand a
+// GitLab card a github.com URL, which is the failure this replaces.
+const CONNECTIONS = GitConnectionsSchema.parse({
+  connections: [
+    {
+      id: 1,
+      tenant_id: "acme",
+      provider: "github",
+      base_url: "https://api.github.com",
+      label: "Work GitHub",
+      status: "verified",
+      repositories: [
+        { id: 11, connection_id: 1, tenant_id: "acme", project: "acme/widgets", is_default: true },
+      ],
+    },
+    {
+      id: 2,
+      tenant_id: "acme",
+      provider: "gitlab",
+      base_url: "https://gitlab.corp",
+      label: "self-hosted GitLab",
+      status: "configured",
+      repositories: [
+        { id: 21, connection_id: 2, tenant_id: "acme", project: "grp/sub/proj" },
+      ],
+    },
+  ],
+  default_repository_id: 11,
+});
+
+describe("issueUrlResolver (the link out follows the card's repository)", () => {
+  const resolve = issueUrlResolver(CONNECTIONS);
+
+  it("sends a card on connection A and a card on connection B to DIFFERENT hosts", () => {
+    const onGithub = resolve({ ...CARD, repository_id: 11, issue_ref: "acme/widgets#7" });
+    const onGitlab = resolve({ ...CARD, repository_id: 21, issue_ref: "grp/sub/proj#12" });
+    expect(onGithub).toBe("https://github.com/acme/widgets/issues/7");
+    expect(onGitlab).toBe("https://gitlab.corp/grp/sub/proj/-/issues/12");
+    expect(onGithub).not.toBe(onGitlab);
+  });
+
+  it("resolves a card that names no repository through the tenant default", () => {
+    expect(resolve({ ...CARD, issue_ref: "acme/widgets#7" })).toBe(
+      "https://github.com/acme/widgets/issues/7",
+    );
+    expect(resolve({ ...CARD, repository_id: null, issue_ref: "acme/widgets#7" })).toBe(
+      "https://github.com/acme/widgets/issues/7",
+    );
+  });
+
+  it("falls back to the default when the named repository is gone, as the backend does", () => {
+    expect(resolve({ ...CARD, repository_id: 999, issue_ref: "acme/widgets#7" })).toBe(
+      "https://github.com/acme/widgets/issues/7",
+    );
+  });
+
+  it("gives a card no link at all rather than a wrong one when nothing is configured", () => {
+    const unknown = issueUrlResolver(null);
+    expect(unknown({ ...CARD, issue_ref: "acme/widgets#7" })).toBeNull();
+    const empty = issueUrlResolver(
+      GitConnectionsSchema.parse({ connections: [], default_repository_id: null }),
+    );
+    expect(empty({ ...CARD, issue_ref: "acme/widgets#7" })).toBeNull();
+  });
+
+  it("still returns null for a provider whose URL shape is not derivable", () => {
+    const azure = issueUrlResolver(
+      GitConnectionsSchema.parse({
+        connections: [
+          {
+            id: 3,
+            tenant_id: "acme",
+            provider: "azure_devops",
+            base_url: "https://dev.azure.com",
+            label: "Azure DevOps",
+            status: "configured",
+            repositories: [
+              { id: 31, connection_id: 3, tenant_id: "acme", project: "org/proj/repo", is_default: true },
+            ],
+          },
+        ],
+        default_repository_id: 31,
+      }),
+    );
+    expect(azure({ ...CARD, repository_id: 31, issue_ref: "org/proj/repo#12" })).toBeNull();
   });
 });
 

@@ -213,8 +213,9 @@ function CardDetails({ card }: { card: Card }) {
  * run-all stage actions.
  *
  * `issueHref` is passed in rather than derived here: the host lives on the
- * tenant's git config, which is one fetch for the whole list and not one per card
- * (see `useIssueUrl`). Null means the host is unknown or the provider's URL shape
+ * connection this card's repository is reached through, and the whole
+ * repository-to-host map is one fetch for the list rather than one per card (see
+ * `issueUrlResolver`). Null means the host is unknown or the provider's URL shape
  * is not derivable, and the ref renders as text instead.
  *
  * ponytail: keyboard-first controls rather than drag-and-drop. They are

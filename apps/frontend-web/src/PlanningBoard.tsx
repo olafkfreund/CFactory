@@ -76,7 +76,7 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
                       key={card.card_key}
                       card={card}
                       busy={false}
-                      issueHref={hrefOf(card.issue_ref)}
+                      issueHref={hrefOf(card)}
                       onMutate={(patch) => {
                         void mutate(card.card_key, patch);
                       }}

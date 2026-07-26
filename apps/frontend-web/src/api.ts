@@ -29,6 +29,23 @@ async function getJson<T>(
   return schema.parse(await resp.json());
 }
 
+// A non-2xx from the backend, carrying the status alongside the message.
+//
+// Extends Error, so every existing `e instanceof Error ? e.message : ...` caller
+// is unaffected and still shows exactly the same sentence. The status is here for
+// the handful of codes that mean something specific to a caller rather than
+// "that failed" — a 503 on a credential write is the deployment having no
+// encryption key, which the user has to be told plainly (RFC-0020 §3.4).
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 // Shared write helper (PUT/POST + JSON body). On a non-2xx it surfaces the
 // backend's `{detail}` message when present (falling back to `HTTP <status>`),
 // then validates the body against `schema`. Identical behavior to the
@@ -44,7 +61,7 @@ async function sendJson<T>(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!resp.ok) throw new Error(await errorDetail(resp));
+  if (!resp.ok) throw new ApiError(await errorDetail(resp), resp.status);
   return schema.parse(await resp.json());
 }
 
@@ -528,64 +545,180 @@ export const CredentialInfoSchema = z.object({
 });
 export type CredentialInfo = z.infer<typeof CredentialInfoSchema>;
 
-export const GitConfigSchema = z.object({
+// A tenant has many CONNECTIONS (a provider, a host, a credential) and each
+// connection has many REPOSITORIES (a project path, where issues are imported
+// from, which AIFactory project its builds land in). Exactly one repository is
+// the tenant DEFAULT — what a card that names no repository resolves to.
+//
+// `GET .../git-connections` returns the whole tree in one call, so every mutation
+// below is followed by a re-read rather than a local patch: `status` is derived
+// on the backend and deleting a repository can promote a new default, so guessing
+// at either here would make the panel a second, wrong source of truth.
+
+export const GitRepositorySchema = z.object({
+  id: z.number(),
+  connection_id: z.number(),
+  tenant_id: z.string(),
+  project: z.string(),
+  intake_project: z.string().nullable().optional(),
+  // An AIFactory PROJECT ID (a UUID), not a repository path — the two are
+  // separate fields precisely because confusing them is easy.
+  aifactory_project_id: z.string().nullable().optional(),
+  default_labels: z.array(z.string()).default([]),
+  is_default: z.boolean().default(false),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+});
+export type GitRepository = z.infer<typeof GitRepositorySchema>;
+
+export const GitConnectionSchema = z.object({
+  id: z.number(),
   tenant_id: z.string(),
   provider: z.string(), // "github" | "gitlab" | "azure_devops"
+  // Always the RESOLVED host (the tenant's own, or the provider default).
   base_url: z.string(),
-  project: z.string().nullable(),
-  intake_project: z.string().nullable(),
-  aifactory_project_id: z.string().nullable(),
-  default_labels: z.array(z.string()),
+  label: z.string(),
   // unconfigured | credential_missing | configured | verified — derived, never stored.
   status: z.string(),
-  // Defaulted rather than required so a cockpit that reaches a backend from
-  // before RFC-0020 phase 3 renders "no credential" instead of failing to parse
-  // the whole configuration — the panel must survive a rolling deploy.
+  // Defaulted rather than required so a cockpit that reaches an older backend
+  // renders "no credential" instead of failing to parse the whole panel.
   credential: CredentialInfoSchema.default({ configured: false, source: "none" }),
   verified_at: z.string().nullable().optional(),
   verify_error: z.string().nullable().optional(),
-  source: z.string(), // "stored" once saved, "env" while still seeded from the deployment
+  repositories: z.array(GitRepositorySchema).default([]),
 });
-export type GitConfig = z.infer<typeof GitConfigSchema>;
+export type GitConnection = z.infer<typeof GitConnectionSchema>;
 
+export const GitConnectionsSchema = z.object({
+  connections: z.array(GitConnectionSchema).default([]),
+  default_repository_id: z.number().nullable().optional(),
+});
+export type GitConnections = z.infer<typeof GitConnectionsSchema>;
+
+// A verify never fails the request: an unreachable host is `ok: false` with the
+// reason. `connection` is the connection as it stands after the attempt.
 export const GitVerifySchema = z.object({
   ok: z.boolean(),
-  reason: z.string().optional(),
+  reason: z.string().nullable().optional(),
   repository: z.string().nullable().optional(),
-  config: GitConfigSchema.optional(),
+  verified_project: z.string().nullable().optional(),
+  status: z.string().optional(),
+  connection: GitConnectionSchema.optional(),
 });
 export type GitVerify = z.infer<typeof GitVerifySchema>;
 
-function gitConfigPath(tenant: string): string {
-  return `/api/tenants/${encodeURIComponent(tenant)}/git-config`;
+// The shape every delete answers with. Deliberately loose about the rest: the
+// panel re-reads the tree afterwards, so only "it worked" is consumed here.
+export const GitDeleteSchema = z
+  .object({ ok: z.boolean(), deleted: z.boolean().optional() })
+  .passthrough();
+
+export type GitRepositoryBody = {
+  project: string;
+  intake_project?: string | null;
+  aifactory_project_id?: string | null;
+  default_labels?: string[];
+};
+
+function tenantPath(tenant: string, rest: string): string {
+  return `/api/tenants/${encodeURIComponent(tenant)}/${rest}`;
 }
 
-export async function fetchGitConfig(tenant: string): Promise<GitConfig> {
-  return getJson(gitConfigPath(tenant), GitConfigSchema, "git-config");
+export async function fetchGitConnections(tenant: string): Promise<GitConnections> {
+  return getJson(tenantPath(tenant, "git-connections"), GitConnectionsSchema, "git-connections");
 }
 
-// A full replacement, matching the PUT: an omitted field is cleared.
-export async function updateGitConfig(
+export async function createGitConnection(
   tenant: string,
-  body: {
-    provider: string;
-    base_url?: string | null;
-    project?: string | null;
-    intake_project?: string | null;
-    aifactory_project_id?: string | null;
-    default_labels?: string[];
-  },
-): Promise<GitConfig> {
-  return sendJson("PUT", gitConfigPath(tenant), body, GitConfigSchema);
+  body: { provider: string; base_url?: string | null; label?: string | null },
+): Promise<GitConnection> {
+  return sendJson("POST", tenantPath(tenant, "git-connections"), body, GitConnectionSchema);
 }
 
-export async function verifyGitConfig(tenant: string): Promise<GitVerify> {
-  return sendJson("POST", `${gitConfigPath(tenant)}:verify`, {}, GitVerifySchema);
+// A patch: only the fields sent are applied. Moving a connection's provider or
+// host clears its verification, which proved a connection it no longer is.
+export async function updateGitConnection(
+  tenant: string,
+  id: number,
+  body: { provider?: string; base_url?: string | null; label?: string | null },
+): Promise<GitConnection> {
+  return sendJson(
+    "PATCH",
+    tenantPath(tenant, `git-connections/${String(id)}`),
+    body,
+    GitConnectionSchema,
+  );
 }
 
-// ── Tenant git credential (RFC-0020 §3.4) ───────────────────────────────────
-// Write-only. There is no fetch here and there is no endpoint to write one
-// against: the credential goes up, and only the masked indicator comes back.
+// Takes the connection's repositories and its credential with it.
+export async function deleteGitConnection(tenant: string, id: number): Promise<unknown> {
+  return sendJson(
+    "DELETE",
+    tenantPath(tenant, `git-connections/${String(id)}`),
+    undefined,
+    GitDeleteSchema,
+  );
+}
+
+export async function verifyGitConnection(tenant: string, id: number): Promise<GitVerify> {
+  return sendJson(
+    "POST",
+    tenantPath(tenant, `git-connections/${String(id)}:verify`),
+    {},
+    GitVerifySchema,
+  );
+}
+
+export async function createGitRepository(
+  tenant: string,
+  connectionId: number,
+  body: GitRepositoryBody & { make_default?: boolean },
+): Promise<GitRepository> {
+  return sendJson(
+    "POST",
+    tenantPath(tenant, `git-connections/${String(connectionId)}/repositories`),
+    body,
+    GitRepositorySchema,
+  );
+}
+
+// A patch, and `null` on intake_project / aifactory_project_id CLEARS it.
+export async function updateGitRepository(
+  tenant: string,
+  id: number,
+  body: Partial<GitRepositoryBody>,
+): Promise<GitRepository> {
+  return sendJson(
+    "PATCH",
+    tenantPath(tenant, `git-repositories/${String(id)}`),
+    body,
+    GitRepositorySchema,
+  );
+}
+
+export async function deleteGitRepository(tenant: string, id: number): Promise<unknown> {
+  return sendJson(
+    "DELETE",
+    tenantPath(tenant, `git-repositories/${String(id)}`),
+    undefined,
+    GitDeleteSchema,
+  );
+}
+
+export async function setDefaultGitRepository(tenant: string, id: number): Promise<GitRepository> {
+  return sendJson(
+    "POST",
+    tenantPath(tenant, `git-repositories/${String(id)}:default`),
+    {},
+    GitRepositorySchema,
+  );
+}
+
+// ── Connection credential (RFC-0020 §3.4) ───────────────────────────────────
+// Write-only. There is no fetch here and no endpoint to write one against: the
+// credential goes up, and only the masked indicator comes back. A credential
+// belongs to a CONNECTION, not to a repository — it authenticates to a host, and
+// two repositories on one host are reached with the same token.
 
 export const GitCredentialResultSchema = z.object({
   ok: z.boolean(),
@@ -594,19 +727,33 @@ export const GitCredentialResultSchema = z.object({
 });
 export type GitCredentialResult = z.infer<typeof GitCredentialResultSchema>;
 
-function gitCredentialPath(tenant: string): string {
-  return `/api/tenants/${encodeURIComponent(tenant)}/git-credential`;
+function credentialPath(tenant: string, connectionId: number): string {
+  return tenantPath(tenant, `git-connections/${String(connectionId)}/credential`);
 }
 
-export async function setGitCredential(
+export async function setConnectionCredential(
   tenant: string,
+  connectionId: number,
   credential: string,
 ): Promise<GitCredentialResult> {
-  return sendJson("PUT", gitCredentialPath(tenant), { credential }, GitCredentialResultSchema);
+  return sendJson(
+    "PUT",
+    credentialPath(tenant, connectionId),
+    { credential },
+    GitCredentialResultSchema,
+  );
 }
 
-export async function deleteGitCredential(tenant: string): Promise<GitCredentialResult> {
-  return sendJson("DELETE", gitCredentialPath(tenant), undefined, GitCredentialResultSchema);
+export async function deleteConnectionCredential(
+  tenant: string,
+  connectionId: number,
+): Promise<GitCredentialResult> {
+  return sendJson(
+    "DELETE",
+    credentialPath(tenant, connectionId),
+    undefined,
+    GitCredentialResultSchema,
+  );
 }
 
 export async function updateCopilotSettings(
@@ -1182,10 +1329,15 @@ export const CardSchema = z
     // Mirrored FROM the git host and never pushed to it (RFC-0019 §3.5): which
     // issue this card is the projection of ("owner/repo#123"), that issue's state
     // there, and its labels. The ref carries no HOST — the board is
-    // multi-provider, so a link out is built from the tenant's git config, never
-    // from a hardcoded github.com (see `issueUrl` in cards.ts). Nullish/defaulted
-    // so a card served by a pre-Phase-6 backend still parses.
+    // multi-provider, so a link out is built from the connection THIS CARD's
+    // repository is reached through, never from a hardcoded github.com (see
+    // `issueUrlResolver` in cards.ts). Nullish/defaulted so a card served by a
+    // pre-Phase-6 backend still parses.
     issue_ref: z.string().nullish(),
+    // Which of the tenant's repositories this card targets (RFC-0020 §3.3).
+    // Null/absent means the tenant DEFAULT repository, which is what every card
+    // created before there was more than one means.
+    repository_id: z.number().nullish(),
     issue_state: z.string().nullish(),
     labels: z.array(z.string()).default([]),
     // Per-stage dispatch records, keyed by stage name. Optional so a card served

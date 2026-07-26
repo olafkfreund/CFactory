@@ -25,7 +25,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from . import git_config_ops
 from .api_deps import action_transport_dep, audit_dep, cards_store_dep
@@ -158,9 +158,18 @@ class GitCredentialUpdate(BaseModel):
     ``max_length`` is generous rather than tight: a GitHub App installation JWT
     is far longer than a PAT, and RFC-0020 §3.4 has this store holding whichever
     of them phase 4's install flow produces.
+
+    ``SecretStr`` rather than ``str`` (Factory#377). A plain ``str`` here rendered
+    the PAT verbatim in ``repr()``, ``str()``, ``model_dump()`` and
+    ``model_dump_json()`` — and a FastAPI request model is exactly the object
+    sitting in a traceback frame when the call below raises, so the credential
+    landed in logs and error sinks. That contradicted RFC-0020 §3.4's own
+    "never logged" guarantee at the one point where a user pastes a token.
+    ``SecretStr`` masks all four surfaces; :meth:`~pydantic.SecretStr.get_secret_value`
+    at the point of use is the only way back to the plaintext.
     """
 
-    credential: str = Field(min_length=1, max_length=8192)
+    credential: SecretStr = Field(min_length=1, max_length=8192)
 
 
 @router.put("/api/tenants/{tenant}/git-credential")
@@ -186,7 +195,9 @@ def put_git_credential(
     """
     try:
         return git_config_ops.set_git_credential(
-            store, AuditContext(audit, actor, endpoint=REST_ENDPOINT), body.credential
+            store,
+            AuditContext(audit, actor, endpoint=REST_ENDPOINT),
+            body.credential.get_secret_value(),
         )
     except CredentialError as exc:
         raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=str(exc)) from None
@@ -395,7 +406,7 @@ def put_connection_credential(
     """
     try:
         return git_config_ops.set_connection_credential(
-            store, _ctx(audit, actor), connection_id, body.credential
+            store, _ctx(audit, actor), connection_id, body.credential.get_secret_value()
         )
     except GitResourceNotFoundError as exc:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None

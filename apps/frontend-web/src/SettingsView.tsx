@@ -82,7 +82,7 @@ export default function SettingsView({ reloadSignal }: { reloadSignal: number })
 
       {err && <div className="banner banner--error">{err}</div>}
 
-      <div className="svc-grid">
+      <div className="set-grid">
         <div className="svc-card svc-card--code set-card">
           <div className="svc-top">
             <span className="svc-ident">

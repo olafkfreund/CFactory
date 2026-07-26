@@ -5,10 +5,12 @@ import {
   createGitRepository,
   deleteConnectionCredential,
   deleteGitConnection,
+  deleteGitInstall,
   deleteGitRepository,
   fetchGitConnections,
   setConnectionCredential,
   setDefaultGitRepository,
+  startGitInstall,
   updateGitConnection,
   updateGitRepository,
   verifyGitConnection,
@@ -327,6 +329,142 @@ function RepositoryRow({
   );
 }
 
+// ── the install block ───────────────────────────────────────────────────────
+// The RFC-0020 §3.4 phase-4 alternative to pasting a token: the human clicks
+// through the provider's own consent screen and CFactory ends up holding an
+// installation id (GitHub) rather than a credential. It is shown above the paste
+// box, not instead of it — Azure DevOps has no install flow, and neither does a
+// deployment whose operator has not registered an app.
+
+/** Why an install beats a pasted token, in the one sentence each host allows. */
+const INSTALL_PITCH: Record<string, string> = {
+  github:
+    "Installing the GitHub App lets you choose exactly which repositories it may see, " +
+    "and it acts as its own identity — so the audit trail says the app, not you, and " +
+    "nothing breaks when you leave. Short-lived tokens are minted per call and never stored.",
+  gitlab:
+    "Connecting through GitLab's OAuth flow means no token is pasted anywhere. " +
+    "Only the refresh credential is kept, encrypted; access tokens are obtained from it " +
+    "on demand.",
+};
+
+function InstallBlock({
+  connection,
+  available,
+  busy,
+  actions,
+}: {
+  connection: GitConnection;
+  available: boolean;
+  busy: boolean;
+  actions: Actions;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const install = connection.install;
+  const pitch = INSTALL_PITCH[connection.provider];
+
+  // Azure DevOps has no install flow at all (RFC-0020 §3.4), and a deployment
+  // that has registered no app cannot start one. Showing a button that can only
+  // produce an error would be worse than showing none.
+  if (!install && (!available || !pitch)) {
+    return null;
+  }
+
+  if (!install) {
+    return (
+      <div className="set-field">
+        <label className="set-label">Connect</label>
+        <span className="set-hint">{pitch}</span>
+        <div className="set-actions">
+          <button
+            className="btn btn--sm"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              actions.startInstall(connection.id);
+            }}
+          >
+            Connect {PROVIDER_LABEL[connection.provider] ?? connection.provider}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const degraded = install.status !== "installed";
+  return (
+    <div className="set-field">
+      <label className="set-label">Connected app</label>
+      <span className="set-hint">
+        {install.account
+          ? `Installed on ${install.account}.`
+          : "Installed."}{" "}
+        {degraded
+          ? "The last token refresh FAILED, so this connection cannot reach its repositories " +
+            "until it is reconnected. Board writes will fail rather than silently do nothing."
+          : "A fresh short-lived token is minted for each call and never stored."}
+      </span>
+      {degraded && install.error && (
+        <div className="set-status-note">last refresh failed: {install.error}</div>
+      )}
+      <div className="set-actions">
+        <button
+          className="btn btn--sm"
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            actions.startInstall(connection.id);
+          }}
+        >
+          {degraded ? "Reconnect" : "Reconnect or change repositories"}
+        </button>
+        {confirming ? (
+          <>
+            <button
+              className="btn btn--sm"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setConfirming(false);
+                actions.removeInstall(connection.id);
+              }}
+            >
+              Confirm disconnect
+            </button>
+            <button
+              className="btn btn--sm btn--ghost"
+              type="button"
+              onClick={() => {
+                setConfirming(false);
+              }}
+            >
+              Keep
+            </button>
+          </>
+        ) : (
+          <button
+            className="btn btn--sm btn--ghost"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setConfirming(true);
+            }}
+          >
+            Disconnect
+          </button>
+        )}
+      </div>
+      {confirming && (
+        <span className="set-hint">
+          CFactory forgets this install. It does NOT remove the app&apos;s access to your
+          repositories — do that on {PROVIDER_LABEL[connection.provider] ?? connection.provider}
+          &apos;s own settings page.
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── the credential box ──────────────────────────────────────────────────────
 // Write-only in both directions: never populated from a response (there is
 // nothing to populate it WITH), and emptied the moment the value has been sent,
@@ -343,6 +481,10 @@ function CredentialField({
 }) {
   const [credential, setCredential] = useState("");
   const configured = connection.credential.configured;
+  // An install supersedes a pasted credential — the backend resolves it first —
+  // so offering "replace the stored credential" here would offer to change
+  // something that is no longer being used.
+  const installed = connection.install != null;
 
   return (
     <div className="set-field">
@@ -350,7 +492,12 @@ function CredentialField({
         Credential
       </label>
       <div className="set-cred-state">
-        {configured ? (
+        {installed ? (
+          <span className="set-hint">
+            This connection authenticates through its connected app, above. A pasted credential
+            is not used while an app is connected.
+          </span>
+        ) : configured ? (
           <span className="set-hint">
             {connection.credential.source === "tenant"
               ? `Stored for this connection${
@@ -421,6 +568,8 @@ export type Actions = {
   verify: (id: number) => void;
   storeCredential: (id: number, credential: string) => void;
   removeCredential: (id: number) => void;
+  startInstall: (id: number) => void;
+  removeInstall: (id: number) => void;
   addRepository: (connectionId: number, body: GitRepositoryBody) => void;
   updateRepository: (id: number, body: GitRepositoryBody) => void;
   removeRepository: (id: number) => void;
@@ -437,11 +586,16 @@ export function ConnectionCard({
   connection,
   busy,
   note,
+  installAvailable = false,
   actions,
 }: {
   connection: GitConnection;
   busy: boolean;
   note?: string;
+  // Whether the DEPLOYMENT has registered an app for this connection's provider.
+  // Defaulted false so a cockpit talking to a backend that predates phase 4 shows
+  // the paste box, which is all that backend has.
+  installAvailable?: boolean;
   actions: Actions;
 }) {
   const [editing, setEditing] = useState(false);
@@ -519,6 +673,12 @@ export function ConnectionCard({
         )}
       </div>
 
+      <InstallBlock
+        connection={connection}
+        available={installAvailable}
+        busy={busy}
+        actions={actions}
+      />
       <CredentialField connection={connection} busy={busy} actions={actions} />
 
       {editing && (
@@ -872,6 +1032,27 @@ export default function GitConnectionsPanel({
         note(id, result.removed ? "Credential removed." : "There was no credential to remove.");
       });
     },
+    startInstall: (id) => {
+      // A full navigation, not a popup: the provider's consent screen is where
+      // the human chooses which repositories the app may see, and it must be seen
+      // in a real address bar rather than a window that could be spoofing one.
+      // The state in this URL is single-use and expires, so following it twice is
+      // refused by the callback.
+      run(async () => {
+        const started = await startGitInstall(tenant, id);
+        window.location.assign(started.authorize_url);
+      });
+    },
+    removeInstall: (id) => {
+      run(async () => {
+        await deleteGitInstall(tenant, id);
+        note(
+          id,
+          "Disconnected. Remove the app's access to your repositories on the provider's own " +
+            "settings page — CFactory cannot do that for you.",
+        );
+      });
+    },
     addRepository: (connectionId, body) => {
       run(() => createGitRepository(tenant, connectionId, body));
     },
@@ -906,6 +1087,7 @@ export default function GitConnectionsPanel({
             connection={connection}
             busy={busy}
             note={notes[connection.id]}
+            installAvailable={data?.install_available[connection.provider] ?? false}
             actions={actions}
           />
         ))}

@@ -26,6 +26,8 @@ from .cards import CardStore
 from .config import Settings, get_settings
 from .git_config import (
     CREDENTIAL_MISSING,
+    GITHUB,
+    GITLAB,
     UNCONFIGURED,
     GitConfigUpdate,
     GitTarget,
@@ -39,6 +41,19 @@ from .git_connections import (
     GitRepositoryUpdate,
     connection_view,
     repository_view,
+    resolved_base_url,
+)
+from .git_install import (
+    INSTALLABLE_PROVIDERS,
+    STATE_TTL_SECONDS,
+    CallbackClaim,
+    InstallError,
+    authorize_url,
+    callback_url,
+    exchange_code,
+    install_available,
+    persistable_secret,
+    verify_installation,
 )
 from .git_providers import build_provider, run_sync
 
@@ -178,12 +193,17 @@ def _verify_target(
     """
     if target.project is None:
         return _Outcome(False, reason="no project configured", status=UNCONFIGURED)
-    if not target.credential.configured:
+    # A DEGRADED INSTALL is deliberately let through (RFC-0020 §3.4 phase 4). It
+    # has no usable credential either, but the useful answer for it is not "store
+    # one" — it is whatever the provider says when the mint is attempted, which is
+    # what a verify exists to find out. Only a connection with nothing configured
+    # at all short-circuits here.
+    if not (target.credential.configured or target.credential.installed):
         return _Outcome(
             False,
             reason=(
                 "no credential is configured for this connection, so the project cannot be "
-                "reached — store one in Settings > Git integration"
+                "reached — store one, or connect it, in Settings > Git connections"
             ),
             status=CREDENTIAL_MISSING,
         )
@@ -300,6 +320,7 @@ def _connection_payload(
         row,
         store.repositories(row.id),
         store.connection_credential(row.id, settings).info,
+        store.install_row(row.id),
     ).model_dump(mode="json")
 
 
@@ -308,11 +329,17 @@ def list_git_connections(store: CardStore, settings: Settings | None = None) -> 
 
     Never a 404 and never an error: a tenant that has configured nothing gets an
     empty list, which is the honest answer and the one the panel can render.
+
+    ``install_available`` is a property of the DEPLOYMENT, not of the tenant: it
+    says which providers an operator has registered an App / OAuth application
+    for, which is what the panel needs to choose between an install button and the
+    paste box. It reports capability only — no App id, no slug, no secret.
     """
     settings = settings or get_settings()
     return {
         "connections": [_connection_payload(store, row, settings) for row in store.connections()],
         "default_repository_id": _default_repository_id(store),
+        "install_available": install_available(settings),
     }
 
 
@@ -435,6 +462,171 @@ def clear_connection_credential(
         "connection_id": connection_id,
         "credential": store.connection_credential(connection_id).info.model_dump(mode="json"),
     }
+
+
+# ── the install flow (RFC-0020 §3.4, phase 4) ────────────────────────────────
+#
+# Two tenant-facing operations, both twinned over MCP like everything else here,
+# plus the callback's completion — which is NOT twinned, and deliberately: it is
+# not a board action a tenant takes, it is the provider handing a browser back.
+# There is nothing for an agent to invoke, and exposing "complete an install with
+# this state" as a tool would publish the one input the whole flow is defended by.
+
+
+def start_git_install(store: CardStore, ctx: AuditContext, connection_id: int) -> dict[str, Any]:
+    """Begin an install for one connection, and audit it.
+
+    Hands back the provider URL to send a browser to. On GitHub that is the App's
+    install page, where the human chooses WHICH REPOSITORIES the App may see —
+    the choice that makes an App a smaller blast radius than a PAT, and one this
+    software must not make on their behalf.
+
+    Nothing is authenticated by this call: it mints a state, and the state is
+    worthless until the provider redirects back with it. Raises
+    :class:`~cfactory.git_install.InstallError` when the deployment has registered
+    no App for this provider, or when the provider has no install flow at all
+    (Azure DevOps — it keeps the stored-credential path).
+    """
+    settings = get_settings()
+    connection = store.connection(connection_id)
+    provider = (connection.provider or "").strip().lower()
+    if provider not in INSTALLABLE_PROVIDERS:
+        raise InstallError(
+            f"{provider} has no install flow (RFC-0020 §3.4 covers "
+            f"{' and '.join(INSTALLABLE_PROVIDERS)}) — store a credential for this connection "
+            "instead"
+        )
+    if not install_available(settings).get(provider):
+        raise InstallError(
+            f"this deployment has no {provider} app registered, so an install cannot be "
+            "started. An operator registers one and supplies its credentials as deployment "
+            "configuration — see docs/guides/git-app-install.md"
+        )
+    redirect_uri = callback_url(settings)
+    state = store.start_install(connection_id, redirect_uri)
+    _record(ctx, store, kind="start_git_install", ok=True, resource="git-install")
+    return {
+        "ok": True,
+        "connection_id": connection_id,
+        "provider": provider,
+        # The URL carries the state. It is returned exactly once, to the caller
+        # that asked for it, and never stored in a form anyone else can present.
+        "authorize_url": authorize_url(
+            provider, resolved_base_url(provider, connection.base_url or ""), state, settings
+        ),
+        "redirect_uri": redirect_uri,
+        "expires_in_seconds": STATE_TTL_SECONDS,
+    }
+
+
+def delete_git_install(store: CardStore, ctx: AuditContext, connection_id: int) -> dict[str, Any]:
+    """Disconnect a connection's install, and audit it. Idempotent.
+
+    Forgets the ``installation_id``, any sealed refresh token and any cached
+    token. It does NOT uninstall at the provider — only the account owner can do
+    that, on the provider's own page — so the response says so rather than
+    implying a revocation that did not happen.
+    """
+    removed = store.delete_install(connection_id)
+    _record(ctx, store, kind="delete_git_install", ok=True, resource="git-install")
+    return {
+        "ok": True,
+        "removed": removed,
+        "connection_id": connection_id,
+        "note": (
+            "CFactory has forgotten this install. Removing the app's access to your "
+            "repositories is done on the provider's own settings page."
+        ),
+        "connection": _connection_payload(store, store.connection(connection_id), get_settings()),
+    }
+
+
+@dataclass(frozen=True)
+class CompletedInstall:
+    """Where a finished callback landed, for the redirect and the audit entry."""
+
+    tenant: str
+    connection_id: int
+    provider: str
+    account: str | None
+
+
+def complete_git_install(
+    store: CardStore,
+    claim: CallbackClaim,
+    *,
+    settings: Settings | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> CompletedInstall:
+    """Finish an install from the provider's redirect. THE SECURITY BOUNDARY.
+
+    *store* must be UNSCOPED: a provider redirect carries no session and no
+    ``X-Tenant-Id`` (a browser navigation cannot), so the tenant is not taken from
+    the request at all — it is read off the state row, and everything after that
+    runs on a store scoped to THAT tenant. This is what makes it impossible to
+    complete an install for a tenant other than the one that started it, whatever
+    the request claims.
+
+    In order, and every step refuses rather than guesses:
+
+    1. the ``state`` is matched against a stored SHA-256, consumed (so a replay
+       finds nothing) and checked for expiry;
+    2. the tenant, connection and provider come from that row;
+    3. the PROVIDER is asked to confirm what the redirect claims — GitHub, whether
+       the ``installation_id`` is an installation of this App (an App JWT signed
+       with the deployment's private key is the only way to ask); GitLab, by
+       exchanging the ``code`` on a back-channel call carrying the client secret;
+    4. only then is anything written, and what is written is an identifier
+       (GitHub) or a sealed refresh token (GitLab) — never a minted token.
+
+    Raises :class:`~cfactory.git_install.InstallError` on any of those, having
+    written nothing.
+    """
+    settings = settings or get_settings()
+    claimed = store.consume_install_state(claim.state)
+    if claimed is None:
+        # ONE message for forged, replayed and expired alike: telling a caller
+        # which of the three it was tells them how close they got.
+        raise InstallError(
+            "this install link is not valid. It may have already been used, or expired — "
+            "start the install again from Settings > Git connections."
+        )
+    scoped = store.scoped(claimed.tenant_id)
+    connection = scoped.connection(claimed.connection_id)
+    provider = claimed.provider
+    base_url = resolved_base_url(provider, connection.base_url or "")
+
+    account: str | None = None
+    if provider == GITHUB:
+        installation_id = (claim.installation_id or "").strip()
+        if not installation_id.isdigit():
+            raise InstallError("GitHub returned no installation id, so nothing was stored")
+        account = verify_installation(installation_id, base_url, settings, transport=transport)
+    elif provider == GITLAB:
+        code = (claim.code or "").strip()
+        if not code:
+            raise InstallError("GitLab returned no authorization code, so nothing was stored")
+        tokens = exchange_code(code, claimed.redirect_uri, base_url, settings, transport=transport)
+        # persistable_secret is the ONE gate on what an install may write down: it
+        # returns the refresh token and raises for anything else, so an access
+        # token cannot reach the store even by mistake here.
+        scoped.store_install_secret(claimed.connection_id, persistable_secret(GITLAB, tokens))
+    else:  # pragma: no cover — start_git_install refuses these before a state exists
+        raise InstallError(f"{provider} has no install flow")
+
+    scoped.record_install(
+        claimed.connection_id,
+        provider,
+        installation_id=installation_id if provider == GITHUB else None,
+        account=account,
+    )
+    logger.info(
+        "install completed for tenant %s connection %s (%s)",
+        claimed.tenant_id,
+        claimed.connection_id,
+        provider,
+    )
+    return CompletedInstall(claimed.tenant_id, claimed.connection_id, provider, account)
 
 
 def list_git_repositories(store: CardStore, connection_id: int | None = None) -> dict[str, Any]:

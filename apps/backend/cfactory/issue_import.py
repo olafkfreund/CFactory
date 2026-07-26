@@ -475,8 +475,14 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
 
     since = None if full else store.get_watermark(target)
     filters = _filters(settings, since)
-    provider = build_provider(git, target, transport=transport)
     try:
+        # Inside the try since RFC-0020 phase 4: building a provider RESOLVES the
+        # credential, and on an installed connection that mints a short-lived
+        # token — which can fail (a refresh the provider refuses). That failure is
+        # loud by design and must land in this function's documented
+        # ``ok=False, reason`` result rather than escaping a never-raises contract
+        # the background poll depends on.
+        provider = build_provider(git, target, transport=transport)
         issues = run_sync(provider.fetch_issues(filters))
     except Exception as exc:  # noqa: BLE001 — the never-raises contract, same as
         # github_sync.sync_card: behind the protocol sits third-party provider

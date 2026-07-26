@@ -32,6 +32,8 @@ const NOOP: Actions = {
   updateRepository: () => {},
   removeRepository: () => {},
   makeDefault: () => {},
+  startInstall: () => {},
+  removeInstall: () => {},
 };
 
 function repo(id: number, project: string, extra: Record<string, unknown> = {}) {
@@ -261,6 +263,116 @@ describe("ConnectionCard", () => {
       <ConnectionCard connection={leaky} busy={false} actions={NOOP} />,
     );
     expect(html).not.toContain("ghp_LEAKED");
+  });
+});
+
+// The install flow (RFC-0020 section 3.4 phase 4, #365). What the panel must get
+// right is which of the two paths it offers and what it says about a broken one —
+// the flow itself lives on the backend, where it is tested end to end.
+describe("the install block", () => {
+  function withInstall(overrides: Record<string, unknown> | null, provider = "github") {
+    return GitConnectionsSchema.parse({
+      connections: [{ ...PAYLOAD.connections[0], provider, install: overrides }],
+    }).connections[0];
+  }
+
+  it("offers to connect an app when the deployment has registered one", () => {
+    const html = renderToStaticMarkup(
+      <ConnectionCard
+        connection={withInstall(null)}
+        busy={false}
+        installAvailable
+        actions={NOOP}
+      />,
+    );
+    expect(html).toContain("Connect GitHub");
+    expect(html).toContain("choose exactly which repositories");
+    // The paste box stays: a self-hosted operator with no App registered still
+    // needs it, and so does Azure DevOps.
+    expect(html).toContain('type="password"');
+  });
+
+  it("offers nothing when the deployment has registered no app", () => {
+    const html = renderToStaticMarkup(
+      <ConnectionCard connection={withInstall(null)} busy={false} actions={NOOP} />,
+    );
+    // A button that can only produce an error is worse than no button.
+    expect(html).not.toContain("Connect GitHub");
+    expect(html).toContain('type="password"');
+  });
+
+  it("never offers an install for azure_devops, which has no install flow", () => {
+    const html = renderToStaticMarkup(
+      <ConnectionCard
+        connection={withInstall(null, "azure_devops")}
+        busy={false}
+        installAvailable
+        actions={NOOP}
+      />,
+    );
+    expect(html).not.toContain("Connect Azure DevOps");
+    expect(html).toContain('type="password"');
+  });
+
+  it("names the account an app landed on, so a human can confirm it", () => {
+    const html = renderToStaticMarkup(
+      <ConnectionCard
+        connection={withInstall({ provider: "github", installation_id: "4242", account: "acme-org", status: "installed" })}
+        busy={false}
+        installAvailable
+        actions={NOOP}
+      />,
+    );
+    expect(html).toContain("Installed on acme-org.");
+    expect(html).toContain("minted for each call and never stored");
+    expect(html).toContain("Disconnect");
+  });
+
+  it("surfaces a failed refresh instead of showing a connected app as fine", () => {
+    const html = renderToStaticMarkup(
+      <ConnectionCard
+        connection={withInstall({
+          provider: "gitlab",
+          account: "acme-group",
+          status: "credential_missing",
+          error: "InstallError: GitLab refused the token request (401)",
+        })}
+        busy={false}
+        installAvailable
+        actions={NOOP}
+      />,
+    );
+    expect(html).toContain("last refresh failed: InstallError: GitLab refused");
+    expect(html).toContain("Board writes will fail rather than silently do nothing");
+    expect(html).toContain("Reconnect");
+  });
+
+  it("carries no credential field, whatever a backend puts in the install block", () => {
+    const leaky = GitConnectionsSchema.parse({
+      connections: [
+        {
+          ...PAYLOAD.connections[0],
+          install: {
+            provider: "github",
+            status: "installed",
+            installation_id: "4242",
+            token: "ghs_LEAKED",
+            private_key: "-----BEGIN RSA PRIVATE KEY-----",
+          },
+        },
+      ],
+    }).connections[0];
+    const html = renderToStaticMarkup(
+      <ConnectionCard connection={leaky} busy={false} installAvailable actions={NOOP} />,
+    );
+    expect(JSON.stringify(leaky.install)).not.toContain("ghs_LEAKED");
+    expect(html).not.toContain("ghs_LEAKED");
+    expect(html).not.toContain("BEGIN RSA PRIVATE KEY");
+  });
+
+  it("defaults install_available, so an older backend just shows the paste box", () => {
+    const data = GitConnectionsSchema.parse({ connections: [], default_repository_id: null });
+    expect(data.install_available).toEqual({});
   });
 });
 

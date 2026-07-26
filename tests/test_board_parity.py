@@ -177,6 +177,24 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
         "/api/tenants/{tenant}/git-connections/{connection_id}/credential",
         "cfactory_delete_git_connection_credential",
     ),
+    # The install flow (RFC-0020 §3.4 phase 4, #365). Two operations, both writes.
+    # The CALLBACK is deliberately absent: it is not a board action a tenant takes
+    # but the provider handing a browser back, it lives outside /api/ (so this
+    # test's route sweep never sees it), and it has nothing for an agent to
+    # invoke — a tool that completed an install from a state would publish the one
+    # input the flow is defended by.
+    BoardOperation(
+        "start_git_install",
+        "POST",
+        "/api/tenants/{tenant}/git-connections/{connection_id}/install:start",
+        "cfactory_start_git_install",
+    ),
+    BoardOperation(
+        "delete_git_install",
+        "DELETE",
+        "/api/tenants/{tenant}/git-connections/{connection_id}/install",
+        "cfactory_delete_git_install",
+    ),
     BoardOperation(
         "list_git_repositories",
         "GET",

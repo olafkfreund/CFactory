@@ -488,6 +488,19 @@ class Credential:
     def configured(self) -> bool:
         return self.info.configured
 
+    @property
+    def installed(self) -> bool:
+        """Whether an INSTALL is what authenticates this — working or not.
+
+        The distinction ``configured`` cannot make and RFC-0020 §3.4 phase 4
+        needs: a connection somebody installed a GitHub App on, whose last token
+        mint failed, is not the same thing as a connection nobody ever set up.
+        Both have ``configured=False``; only one of them should make a board write
+        proceed far enough to FAIL LOUDLY instead of returning "sync not
+        configured" and doing nothing.
+        """
+        return self.info.source == "install"
+
     def token(self) -> str | None:
         """The plaintext, for ONE provider invocation. Audited by the fetcher."""
         return self.fetch()

@@ -76,7 +76,21 @@ from .git_connections import (
     connection_fields,
     repository_fields,
     repository_patch,
+    resolved_base_url,
     target_from_repository,
+)
+from .git_install import (
+    CREDENTIAL_MISSING as INSTALL_DEGRADED,
+)
+from .git_install import (
+    INSTALLED,
+    GitInstallRow,
+    InstallStateRow,
+    InstallTokenSource,
+    forget_token,
+    new_state,
+    state_digest,
+    state_expiry,
 )
 
 logger = logging.getLogger(__name__)
@@ -1016,6 +1030,7 @@ class CardStore:
         a default to fall back to.
         """
         self.connection(connection_id)
+        forget_token(self.tenant, connection_id)
         with self._session.begin() as session:
             for repo in session.scalars(
                 select(GitRepositoryRow).where(GitRepositoryRow.connection_id == connection_id)
@@ -1025,6 +1040,17 @@ class CardStore:
                 select(GitCredentialRow).where(GitCredentialRow.connection_id == connection_id)
             ):
                 session.delete(cred)
+            # The install goes with it too: an installation_id for a connection
+            # that no longer exists points at nothing, and leaving it would let a
+            # recreated connection reusing the id inherit somebody's install.
+            for install in session.scalars(
+                select(GitInstallRow).where(GitInstallRow.connection_id == connection_id)
+            ):
+                session.delete(install)
+            for pending in session.scalars(
+                select(InstallStateRow).where(InstallStateRow.connection_id == connection_id)
+            ):
+                session.delete(pending)
             row = session.get(GitConnectionRow, connection_id)
             if row is not None:
                 session.delete(row)
@@ -1539,6 +1565,15 @@ class CardStore:
         alternative is decrypting a secret to render a boolean on every poll.
         """
         settings = settings or get_settings()
+        # AN INSTALL WINS OVER A STORED CREDENTIAL (RFC-0020 §3.4 phase 4). Both
+        # can be present — a GitLab install keeps its refresh token in exactly the
+        # row below — and reading that row as the provider token would send a
+        # refresh token where an access token is required. The install is also the
+        # more current answer: a connection somebody installed an App on is not one
+        # they still mean to reach with an older pasted PAT.
+        install = self.install_row(connection_id)
+        if install is not None:
+            return self._install_credential(install, settings, actor=actor, audit=audit)
         row = self.credential_row(connection_id)
         if row is None:
             return env_credential(provider_token(settings))
@@ -1817,6 +1852,241 @@ class CardStore:
             status_code=200 if ok else 0,
             ok=ok,
         )
+
+    # ── The install flow (RFC-0020 §3.4, phase 4) ────────────────────────────
+    #
+    # An install is the OTHER way a connection becomes authenticated: instead of a
+    # human pasting a token, a human clicks through the provider's own consent
+    # screen and what lands here is an ``installation_id`` (GitHub — not a secret)
+    # or a sealed refresh token (GitLab, in the phase-3 store above). The
+    # per-invocation token is minted by :class:`~cfactory.git_install.
+    # InstallTokenSource`, which is handed the three store-shaped things it needs
+    # as callbacks so that module never has to import this one.
+
+    def install_row(self, connection_id: int) -> GitInstallRow | None:
+        """One connection's install, or None. Scoped by tenant as well as id."""
+        stmt = select(GitInstallRow).where(
+            GitInstallRow.connection_id == connection_id,
+            GitInstallRow.tenant_id == self.tenant,
+        )
+        with self._session() as session:
+            return session.scalars(stmt).first()
+
+    def _install_credential(
+        self,
+        install: GitInstallRow,
+        settings: Settings,
+        *,
+        actor: str = SYSTEM_ACTOR,
+        audit: AuditStore | None = None,
+    ) -> Credential:
+        """The credential handle for an INSTALLED connection.
+
+        ``configured`` is the install's own status, so a connection whose last
+        refresh failed reports ``credential_missing`` on the next panel poll
+        WITHOUT anything having to mint again — which is what makes the
+        degradation visible rather than only discoverable by trying a board write.
+
+        ``fetch`` mints. Nothing is decrypted or minted to answer ``info``.
+        """
+        connection = self._connection_or_none(install.connection_id)
+        base_url = resolved_base_url(
+            install.provider, (connection.base_url if connection is not None else "") or ""
+        )
+        source = InstallTokenSource(
+            tenant=self.tenant,
+            connection_id=install.connection_id,
+            provider=install.provider,
+            installation_id=install.installation_id,
+            base_url=base_url,
+            settings=settings,
+            read_secret=lambda: self._fetch_credential(
+                install.connection_id, settings, actor=actor, audit=audit
+            ),
+            write_secret=lambda secret: self.store_install_secret(install.connection_id, secret),
+            degrade=lambda reason: self.degrade_install(install.connection_id, reason),
+            recover=lambda: self.recover_install(install.connection_id),
+        )
+        return Credential(
+            CredentialInfo(
+                configured=install.status == INSTALLED,
+                # A THIRD source word beside "tenant" and "env", because it is a
+                # third thing: nothing reusable was stored, and the panel must not
+                # offer to "remove the credential" for a connection whose answer is
+                # to disconnect the install.
+                source="install",
+                updated_at=_as_utc(install.updated_at),
+            ),
+            source.token,
+        )
+
+    def start_install(self, connection_id: int, redirect_uri: str) -> str:
+        """Begin an install for one of THIS tenant's connections. Returns the state.
+
+        The returned token is the only time it exists in this process: what is
+        stored is its SHA-256, so the row a callback matches against cannot be
+        turned back into a state by anyone who reads the database.
+
+        The connection is looked up through :meth:`connection`, which is
+        tenant-scoped — so a tenant cannot start an install against another
+        tenant's connection, and the state row it would need therefore never
+        exists.
+        """
+        connection = self.connection(connection_id)
+        state = new_state()
+        with self._session.begin() as session:
+            session.add(
+                InstallStateRow(
+                    state_hash=state_digest(state),
+                    tenant_id=self.tenant,
+                    connection_id=connection.id,
+                    provider=connection.provider,
+                    redirect_uri=redirect_uri,
+                    expires_at=state_expiry(),
+                )
+            )
+        return state
+
+    def consume_install_state(self, state: str) -> InstallStateRow | None:
+        """Match a callback's state, ONCE. Deliberately not tenant-scoped.
+
+        A provider redirect carries no session and no ``X-Tenant-Id`` — so this
+        lookup cannot be scoped by a tenant, and the tenant is instead READ OFF the
+        row it finds. That is the whole cross-tenant guarantee: the tenant a
+        callback lands on is the tenant that started the install, and nothing the
+        request says can move it.
+
+        Single-use: the row is deleted inside the same transaction that reads it,
+        so a replayed callback URL matches nothing. Expired states are deleted and
+        report as no match, which is the same answer a forged one gets.
+        """
+        if not (state or "").strip():
+            return None
+        digest = state_digest(state)
+        with self._session.begin() as session:
+            row = session.scalars(
+                select(InstallStateRow).where(InstallStateRow.state_hash == digest)
+            ).first()
+            if row is None:
+                return None
+            # Copied out and the stored row deleted in the same transaction, so
+            # what the caller inspects can never be re-matched by a second
+            # callback carrying the same URL.
+            claimed = InstallStateRow(
+                state_hash=row.state_hash,
+                tenant_id=row.tenant_id,
+                connection_id=row.connection_id,
+                provider=row.provider,
+                redirect_uri=row.redirect_uri,
+                expires_at=row.expires_at,
+            )
+            session.delete(row)
+        expires_at = _as_utc(claimed.expires_at)
+        # A row with no expiry cannot be shown to be live, so it is treated as
+        # expired. Fail-closed: the column is NOT NULL and this is unreachable,
+        # and if it ever became reachable the safe answer is to refuse.
+        if expires_at is None or expires_at < _now():
+            logger.info("install state for connection %s expired unused", claimed.connection_id)
+            return None
+        return claimed
+
+    def record_install(
+        self, connection_id: int, provider: str, *, installation_id: str | None, account: str | None
+    ) -> GitInstallRow:
+        """Attach a completed install to one of this tenant's connections.
+
+        Replaces any previous install on the connection — reconnecting after
+        revoking at the provider is the normal repair, and it must not need a
+        delete first. Any cached token for the connection is dropped, since it was
+        minted from the install being replaced.
+        """
+        connection = self.connection(connection_id)
+        forget_token(self.tenant, connection_id)
+        with self._session.begin() as session:
+            row = session.scalars(
+                select(GitInstallRow).where(
+                    GitInstallRow.connection_id == connection_id,
+                    GitInstallRow.tenant_id == self.tenant,
+                )
+            ).first()
+            if row is None:
+                row = GitInstallRow(tenant_id=self.tenant, connection_id=connection.id)
+                session.add(row)
+            row.provider = provider
+            row.installation_id = installation_id
+            row.account = account
+            row.status = INSTALLED
+            row.error = None
+            row.updated_at = _now()
+            session.flush()
+            session.expunge(row)
+        return row
+
+    def delete_install(self, connection_id: int) -> bool:
+        """Disconnect an install. True if there was one.
+
+        The GitLab refresh token goes with it — a refresh token for an install
+        nothing points at is a secret kept for no reason — and so does any cached
+        token. This does NOT revoke at the provider: uninstalling the App is done
+        on the provider's own settings page, and the runbook says so.
+        """
+        self.connection(connection_id)
+        forget_token(self.tenant, connection_id)
+        with self._session.begin() as session:
+            row = session.scalars(
+                select(GitInstallRow).where(
+                    GitInstallRow.connection_id == connection_id,
+                    GitInstallRow.tenant_id == self.tenant,
+                )
+            ).first()
+            if row is None:
+                return False
+            session.delete(row)
+        self.clear_connection_credential(connection_id)
+        return True
+
+    def degrade_install(self, connection_id: int, reason: str) -> None:
+        """Mark an install unusable, with why (RFC-0020 §3.4).
+
+        The requirement in one method: a refresh that FAILS drops the tenant to
+        ``credential_missing`` — because ``_install_credential`` reports
+        ``configured=False`` for any status but ``installed``, and
+        :func:`~cfactory.git_config.derive_status` turns that into exactly that
+        word — and the reason is stored where the Settings panel renders it.
+        """
+        self._patch_install(connection_id, status=INSTALL_DEGRADED, error=reason[:512])
+
+    def recover_install(self, connection_id: int) -> None:
+        """Clear a degradation after a mint works again. A no-op when there is none."""
+        row = self.install_row(connection_id)
+        if row is not None and row.status != INSTALLED:
+            self._patch_install(connection_id, status=INSTALLED, error=None)
+
+    def _patch_install(self, connection_id: int, *, status: str, error: str | None) -> None:
+        with self._session.begin() as session:
+            row = session.scalars(
+                select(GitInstallRow).where(
+                    GitInstallRow.connection_id == connection_id,
+                    GitInstallRow.tenant_id == self.tenant,
+                )
+            ).first()
+            if row is None:
+                return
+            row.status = status
+            row.error = error
+            row.updated_at = _now()
+
+    def store_install_secret(self, connection_id: int, secret: str) -> None:
+        """Seal the ONE value an install may keep — GitLab's refresh token.
+
+        A thin pass-through to the phase-3 store on purpose: the install flow gets
+        no second credential table and no second crypto path. What may be handed
+        here is decided by
+        :func:`~cfactory.git_install.persistable_secret`, and a GitHub
+        installation token cannot reach this method because that function raises
+        rather than returning one.
+        """
+        self.set_connection_credential(connection_id, secret)
 
     def record_connection_verification(
         self, connection_id: int, *, error: str | None, rejected: bool | None = None

@@ -81,6 +81,7 @@ from .git_connections import (
     GitRepositoryUpdate,
     GitResourceNotFoundError,
 )
+from .git_install import InstallError
 from .store import get_store
 
 logger = logging.getLogger(__name__)
@@ -742,6 +743,39 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "cfactory_start_git_install",
+        "description": (
+            "Begin a GitHub App / GitLab OAuth install for one connection (RFC-0020 §3.4). "
+            "Returns an 'authorize_url' for a HUMAN to open in a browser: on GitHub it is the "
+            "App's install page, where they choose which repositories the App may see. That "
+            "choice cannot be made by an agent, and this tool does not authenticate anything "
+            "on its own — the connection stays as it is until the provider redirects back. The "
+            "URL carries a single-use state that expires in ten minutes. Refused when the "
+            "deployment has registered no app for this connection's provider, and for "
+            "azure_devops, which has no install flow and uses a stored credential instead."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["connection_id"],
+            "properties": {"connection_id": _CONNECTION_ID_PROP},
+        },
+    },
+    {
+        "name": "cfactory_delete_git_install",
+        "description": (
+            "Disconnect one connection's install — the phase-4 revocation path. Forgets the "
+            "installation id, any stored refresh credential and any short-lived one held in "
+            "memory; idempotent. The connection keeps its repositories and reads as "
+            "credential_missing. It does NOT uninstall the app at the provider, which only "
+            "the account owner can do on the provider's own settings page."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["connection_id"],
+            "properties": {"connection_id": _CONNECTION_ID_PROP},
+        },
+    },
+    {
         "name": "cfactory_list_git_repositories",
         "description": (
             "List this tenant's repositories as a flat list — everything a card can be "
@@ -903,6 +937,11 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_verify_git_connection": WRITE,
     "cfactory_set_git_connection_credential": WRITE,
     "cfactory_delete_git_connection_credential": WRITE,
+    # The install flow (RFC-0020 §3.4, phase 4). Starting one is a WRITE even
+    # though it authenticates nothing: it mints a state row and is the first half
+    # of changing how a connection authenticates.
+    "cfactory_start_git_install": WRITE,
+    "cfactory_delete_git_install": WRITE,
     "cfactory_list_git_repositories": READ,
     "cfactory_create_git_repository": WRITE,
     "cfactory_update_git_repository": WRITE,
@@ -1193,6 +1232,14 @@ def _tool_delete_git_connection_credential(args: dict[str, Any], ctx: ToolContex
     return git_config_ops.clear_connection_credential(ctx.cards, ctx.audit, _connection_id(args))
 
 
+def _tool_start_git_install(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.start_git_install(ctx.cards, ctx.audit, _connection_id(args))
+
+
+def _tool_delete_git_install(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.delete_git_install(ctx.cards, ctx.audit, _connection_id(args))
+
+
 def _tool_list_git_repositories(args: dict[str, Any], ctx: ToolContext) -> Any:
     raw = args.get("connection_id")
     return git_config_ops.list_git_repositories(
@@ -1276,6 +1323,8 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_verify_git_connection": _tool_verify_git_connection,
     "cfactory_set_git_connection_credential": _tool_set_git_connection_credential,
     "cfactory_delete_git_connection_credential": _tool_delete_git_connection_credential,
+    "cfactory_start_git_install": _tool_start_git_install,
+    "cfactory_delete_git_install": _tool_delete_git_install,
     "cfactory_list_git_repositories": _tool_list_git_repositories,
     "cfactory_create_git_repository": _tool_create_git_repository,
     "cfactory_update_git_repository": _tool_update_git_repository,
@@ -1305,6 +1354,9 @@ _TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...
     # A credential that could not be stored: 503 over REST, the same sentence
     # here. Its message names the misconfiguration and never the credential.
     (CredentialError, lambda exc: {"error": str(exc)}),
+    # An install that cannot be started or completed: 400 over REST, the same
+    # sentence here. Its message never names a state, a token or a private key.
+    (InstallError, lambda exc: {"error": str(exc)}),
     (
         ValidationError,
         lambda exc: {"error": "invalid arguments", "details": exc.errors(include_url=False)},

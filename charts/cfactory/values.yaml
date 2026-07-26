@@ -117,6 +117,18 @@ config:
   importPoll: true
   importPollSeconds: 300
   importPollGapSeconds: 2
+  # Issue COMMENTS on cards (Factory#375). The thread comes in with the issue and
+  # refreshes on the same pass; for planning the decision usually lives there. On
+  # GitHub a refresh is ONE repository-wide request however big the board is, so a
+  # 55-card cycle costs two API calls in total. GitLab and Azure DevOps have no
+  # bulk comments endpoint, so a refresh there is one call per card — set
+  # importComments: false if that is not a trade you want.
+  #
+  # importCommentBackfillMax bounds the cold path: a never-read card has no `since`
+  # window to narrow and costs a call, so a freshly connected 200-issue repository
+  # fills in over consecutive passes instead of firing 200 requests in one tick.
+  importComments: true
+  importCommentBackfillMax: 25
   # Extra free-form CFACTORY_* (or other) env vars, e.g.
   #   - name: ANTHROPIC_API_KEY
   #     valueFrom: { secretKeyRef: { name: cfactory-llm, key: anthropic-key } }

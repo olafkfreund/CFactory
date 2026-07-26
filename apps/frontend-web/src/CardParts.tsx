@@ -2,8 +2,9 @@
 // (RFC-0019 Phase 1, #302): the filter bar and the card body with its move /
 // reprioritise controls. Split from cards.ts so this file exports components
 // only (react-refresh) and the two views hold nothing but their own layout.
-import type { ReactNode } from "react";
-import type { Card, CardFilters, CardPatch, CardStatus } from "./api";
+import { useState, type ReactNode } from "react";
+import { fetchCardComments } from "./api";
+import type { Card, CardComment, CardFilters, CardPatch, CardStatus } from "./api";
 import {
   CARD_STAGE_ACTIONS,
   CARD_STAGES,
@@ -205,6 +206,92 @@ function CardDetails({ card }: { card: Card }) {
   );
 }
 
+/** How a comment's timestamp reads on a card: date only, the thread is not a log. */
+function commentDate(iso: string): string {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? "" : at.toLocaleDateString();
+}
+
+/**
+ * The thread itself, once loaded.
+ *
+ * Its own component so it can be rendered — and asserted on — without driving a
+ * disclosure open first, which the static-markup tests in this frontend have no
+ * way to do. Comment bodies are third-party text and go through `Markdown`, which
+ * emits React nodes and never `dangerouslySetInnerHTML`, with an http(s)
+ * allowlist on every href: a `javascript:` URL in somebody's comment stays inert
+ * text rather than becoming a clickable one.
+ */
+export function CommentThread({ comments }: { comments: CardComment[] }) {
+  return (
+    <>
+      {comments.map((comment) => (
+        <article className="card-comment" key={comment.comment_id}>
+          <div className="card-comment__head">
+            <span className="card-comment__author">@{comment.author}</span>
+            <span className="card-comment__when">{commentDate(comment.created_at)}</span>
+          </div>
+          <Markdown text={comment.body} className="card-md" />
+        </article>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The imported issue DISCUSSION, collapsed (Factory#375).
+ *
+ * Collapsed for the same reason the body peek is: a 46-card backlog where every
+ * card renders a full comment thread is worse than the board that had no comments
+ * at all. `<details>` again rather than a `useState` toggle for the open state —
+ * the platform's collapse is keyboard-operable and screen-reader-announced for
+ * free.
+ *
+ * The bodies are fetched ON FIRST OPEN, not with the list: the card already
+ * carries `comment_count`, which is all that is needed to decide whether to offer
+ * the affordance, and shipping every thread with every board load is the payload
+ * this design exists to avoid. Fetched once and kept — reopening does not re-ask.
+ *
+ * Nothing renders when the count is zero, so an issue with no discussion adds no
+ * chrome. That is deliberately keyed on the COUNT and not on `comments_synced_at`:
+ * a card whose thread failed to download has nothing to show either, and inventing
+ * an "unknown" badge on every un-synced card would be noise on a board that is
+ * simply mid-backfill.
+ *
+ * Comment bodies are third-party text and go through `Markdown`, which emits
+ * React nodes and never `dangerouslySetInnerHTML`, with an http(s) allowlist on
+ * every href — so a `javascript:` URL in somebody's comment stays inert text.
+ */
+function CardComments({ card }: { card: Card }) {
+  const [comments, setComments] = useState<CardComment[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (card.comment_count === 0) return null;
+  const load = () => {
+    if (comments || error) return;
+    fetchCardComments(card.card_key)
+      .then((thread) => {
+        setComments(thread.comments);
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "could not load the discussion");
+      });
+  };
+  return (
+    <details className="card-pl__comments" onToggle={load}>
+      <summary className="card-pl__peek">
+        <span className="card-pl__peek-text">
+          {card.comment_count} {card.comment_count === 1 ? "comment" : "comments"}
+        </span>
+      </summary>
+      <div className="card-pl__detail">
+        {error && <div className="banner banner--error">{error}</div>}
+        {!comments && !error && <div className="card-pl__comment-wait">Loading the discussion…</div>}
+        {comments && <CommentThread comments={comments} />}
+      </div>
+    </details>
+  );
+}
+
 /**
  * The card body both views render: key, title, the collapsed issue body and
  * acceptance criteria, tier / assignee / milestone / label / issue chips, the two
@@ -251,6 +338,7 @@ export function CardBody({
       </div>
       <div className="card-pl__title">{card.title}</div>
       <CardDetails card={card} />
+      <CardComments card={card} />
       <div className="card-pl__chips">
         {card.tier && <span className={`card-tier card-tier--${card.tier}`}>{card.tier}</span>}
         {card.issue_state && (

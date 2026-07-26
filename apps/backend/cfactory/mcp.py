@@ -264,6 +264,23 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "cfactory_card_comments",
+        "description": (
+            "Read the imported issue DISCUSSION on one card, oldest comment first. "
+            "The card's description is only the issue body; for planning the decision "
+            "usually lives in the thread, so read this before proposing what to build. "
+            "Comments are stored and refreshed by the same background poll as the "
+            "issues, so this never calls the git host. 'synced_at' null means the "
+            "thread has never been read successfully — which is NOT the same as an "
+            "empty list beside a timestamp, that being an issue with no discussion."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key"],
+            "properties": {"card_key": _CARD_KEY_PROP},
+        },
+    },
+    {
         "name": "cfactory_create_card",
         "description": (
             "Add a card to the planning backlog. Omit card_key to have the next "
@@ -853,6 +870,7 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_list_cards": READ,
     "cfactory_card_sync_state": READ,
     "cfactory_get_card": READ,
+    "cfactory_card_comments": READ,
     "cfactory_create_card": WRITE,
     "cfactory_update_card": WRITE,
     "cfactory_move_card": WRITE,
@@ -1038,6 +1056,10 @@ def _tool_list_cards(args: dict[str, Any], ctx: ToolContext) -> Any:
 
 def _tool_get_card(args: dict[str, Any], ctx: ToolContext) -> Any:
     return card_ops.get_card(ctx.cards, args.get("card_key", "")).model_dump(mode="json")
+
+
+def _tool_card_comments(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return card_ops.card_comments(ctx.cards, args.get("card_key", ""))
 
 
 def _tool_create_card(args: dict[str, Any], ctx: ToolContext) -> Any:
@@ -1230,6 +1252,7 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_list_cards": _tool_list_cards,
     "cfactory_card_sync_state": _tool_card_sync_state,
     "cfactory_get_card": _tool_get_card,
+    "cfactory_card_comments": _tool_card_comments,
     "cfactory_create_card": _tool_create_card,
     "cfactory_update_card": _tool_update_card,
     "cfactory_move_card": _tool_update_card,

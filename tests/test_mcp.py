@@ -102,6 +102,8 @@ def test_initialize_and_tools_list(mcp_client):
         # RFC-0019 Phase 2b board tools.
         "cfactory_list_cards",
         "cfactory_get_card",
+        # The imported issue discussion (Factory#375).
+        "cfactory_card_comments",
         "cfactory_create_card",
         # RFC-0019 Phase 6 GitHub sync.
         "cfactory_sync_card_github",

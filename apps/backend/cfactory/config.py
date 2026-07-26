@@ -159,6 +159,26 @@ class Settings(BaseSettings):
     # eighty seconds of a three-hundred-second cycle, which no provider notices.
     # Zero disables the pacing and is a deliberate foot-gun, not a tuning.
     import_poll_gap_seconds: float = 2.0
+    # Import an issue's COMMENTS along with its body (Factory#375). On by default:
+    # for planning, the thread is usually where the decision lives, and a card that
+    # silently drops it is the failure this feature exists to fix.
+    #
+    # Affordable because the refresh uses the provider's BULK path where it has one
+    # — GitHub answers a whole board's comment refresh in ONE request via the
+    # repository-wide endpoint with `since`. The cold backfill has no window to
+    # narrow and costs one call per card, which is why it is spread across passes
+    # rather than fired in one tick (see `import_comment_backfill_max`). Providers
+    # with no bulk endpoint (GitLab, Azure DevOps) refresh one call per card; set
+    # this false if that is not a trade you want.
+    import_comments: bool = True
+    # How many NEVER-READ cards one pass may backfill. The bound on the only
+    # unbounded path: a freshly connected 200-issue repository would otherwise
+    # spend 200 comment calls in a single tick, which is exactly the stampede
+    # `import_poll_gap_seconds` exists to prevent one level up. Cards are taken
+    # oldest first, so a board becomes comment-complete over consecutive passes
+    # instead of all at once, and every already-read card still refreshes on
+    # every pass. Zero disables the backfill without disabling the refresh.
+    import_comment_backfill_max: int = 25
 
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None

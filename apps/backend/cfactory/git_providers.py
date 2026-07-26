@@ -47,7 +47,16 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 
 import httpx
 from runners.github.providers.factory import get_provider
-from runners.github.providers.protocol import IssueData, IssueFilters, ProviderType
+from runners.github.providers.protocol import (
+    IssueComment,
+    IssueData,
+    IssueFilters,
+    ProviderCommentError,
+    ProviderType,
+    fanout_comments,
+    oldest_first,
+    to_iso_utc,
+)
 
 from .git_config import ADO_PATH_PARTS as _ADO_PATH_PARTS
 from .git_config import (
@@ -69,6 +78,11 @@ __all__ = [
 _TIMEOUT_SECONDS = 10.0
 # GitHub's maximum page size for a list endpoint.
 _GITHUB_PAGE_SIZE = 100
+# Pages a comment read will walk before giving up (Factory#375). The cap bounds a
+# repository-wide fetch (50 x 100 = 5000 comments) rather than paging forever
+# against an unknown history size; hitting it is an ERROR, never a truncation —
+# the same rule, and the same numbers, as the canonical GitHub provider.
+_COMMENT_MAX_PAGES = 50
 
 _T = TypeVar("_T")
 
@@ -105,6 +119,20 @@ class IssueProvider(Protocol):
     async def fetch_issue(self, number: int) -> IssueData: ...
 
     async def fetch_issues(self, filters: IssueFilters | None = None) -> list[IssueData]: ...
+
+    # The comment READ half of the protocol (Factory#375). Both are in the slice
+    # because the board uses both and for different reasons: the bulk one is what
+    # the incremental poll calls (one request covers the whole board where the
+    # provider has a repository-wide endpoint), the single one is what a cold
+    # backfill fans out over. Neither returns a partial thread — see
+    # ``ProviderCommentError``.
+    async def fetch_comments(
+        self, issue_number: int, since: datetime | None = None
+    ) -> list[IssueComment]: ...
+
+    async def fetch_comments_bulk(
+        self, issue_numbers: list[int], since: datetime | None = None
+    ) -> dict[int, list[IssueComment]]: ...
 
     async def get_repository_info(self) -> dict[str, Any]: ...
 
@@ -251,6 +279,110 @@ class HttpGitHubProvider:
                 page += 1
         return issues[: filters.limit]
 
+    async def fetch_comments(
+        self, issue_number: int, since: datetime | None = None
+    ) -> list[IssueComment]:
+        """Read ONE issue's comment thread (Factory#375).
+
+        GitHub takes ``since`` server-side on the per-issue endpoint, so an
+        incremental read transfers only what changed. This is the path a cold
+        backfill fans out over — one call per card, bounded by the caller's list.
+        """
+        params: dict[str, Any] = {}
+        if since is not None:
+            params["since"] = to_iso_utc(since)
+        path = f"/repos/{self._repo}/issues/{issue_number}/comments"
+        raw = await self._comment_pages(path, params)
+        return oldest_first([self._parse_comment(item, issue_number) for item in raw])
+
+    async def fetch_comments_bulk(
+        self, issue_numbers: list[int], since: datetime | None = None
+    ) -> dict[int, list[IssueComment]]:
+        """Read MANY issues' threads — the call the poll actually makes.
+
+        ``GET /repos/{repo}/issues/comments`` streams every issue comment in the
+        repository and honours ``since`` server-side, so one request answers the
+        whole board: a 55-card refresh costs ONE call, not 55. That is what makes
+        storing comments affordable at all, and it is the reason this method
+        exists rather than a loop at the call site.
+
+        Without ``since`` there is no window to narrow, so the repository-wide
+        stream would page over the project's entire comment history to answer a
+        question about a handful of issues. A cold backfill therefore fans out per
+        issue instead — ``len(issue_numbers)`` calls, bounded by the caller's own
+        list and independent of how big the repository is. Same reasoning, same
+        shape, as the canonical ``GitHubProvider``; only the transport differs.
+        """
+        wanted = sorted({int(number) for number in issue_numbers})
+        if not wanted:
+            return {}
+        if since is None:
+            return await fanout_comments(self, wanted, since=None)
+
+        raw = await self._comment_pages(
+            f"/repos/{self._repo}/issues/comments",
+            {"since": to_iso_utc(since), "sort": "updated", "direction": "asc"},
+        )
+        grouped: dict[int, list[IssueComment]] = {number: [] for number in wanted}
+        for item in raw:
+            number = _issue_number_from_url(item.get("issue_url", ""))
+            # A repository-wide read answers for issues this board does not track
+            # (and for pull-request comments, which share the endpoint); those are
+            # dropped rather than stored against nothing.
+            if number in grouped:
+                grouped[number].append(self._parse_comment(item, number))
+        return {number: oldest_first(comments) for number, comments in grouped.items()}
+
+    async def _comment_pages(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """Page through a comments endpoint, or FAIL — never truncate.
+
+        A truncated thread stored as a whole one is indistinguishable from a short
+        one, so every failure mode here raises :class:`ProviderCommentError` and
+        the caller keeps whatever complete copy it already had.
+        """
+        collected: list[dict[str, Any]] = []
+        async with self._client() as client:
+            for page in range(1, _COMMENT_MAX_PAGES + 1):
+                try:
+                    resp = await client.get(
+                        path, params={**params, "per_page": _GITHUB_PAGE_SIZE, "page": page}
+                    )
+                    resp.raise_for_status()
+                    batch = resp.json()
+                except Exception as exc:
+                    raise ProviderCommentError(
+                        f"GitHub comment read failed for {path} (page {page}): {exc}"
+                    ) from exc
+                if not isinstance(batch, list):
+                    raise ProviderCommentError(
+                        f"GitHub returned a non-list comment page for {path}: "
+                        f"{type(batch).__name__}"
+                    )
+                collected.extend(item for item in batch if isinstance(item, dict))
+                if len(batch) < _GITHUB_PAGE_SIZE:
+                    return collected
+        raise ProviderCommentError(
+            f"GitHub comment read for {path} exceeded {_COMMENT_MAX_PAGES} pages; "
+            "narrow the `since` window rather than accept a truncated thread"
+        )
+
+    def _parse_comment(self, data: dict[str, Any], issue_number: int) -> IssueComment:
+        """GitHub's comment JSON as the provider-neutral :class:`IssueComment`."""
+        user = data.get("user")
+        author = user.get("login", "") if isinstance(user, dict) else str(user or "")
+        created = data.get("created_at")
+        return IssueComment(
+            id=str(data.get("id", "")),
+            issue_number=issue_number,
+            author=author,
+            body=data.get("body") or "",
+            created_at=_parse_datetime(created),
+            updated_at=_parse_datetime(data.get("updated_at") or created),
+            url=data.get("html_url") or "",
+            provider=ProviderType.GITHUB,
+            raw_data=data,
+        )
+
     async def get_repository_info(self) -> dict[str, Any]:
         """One cheap authenticated read of the repository (RFC-0020 §3.3 verify).
 
@@ -301,6 +433,16 @@ class HttpGitHubProvider:
             provider=ProviderType.GITHUB,
             raw_data=issue,
         )
+
+
+def _issue_number_from_url(url: str) -> int | None:
+    """Recover the issue number from a comment's ``issue_url``.
+
+    The repository-wide comments endpoint does not carry the issue number as a
+    field; the only link back is the URL it was made against.
+    """
+    tail = (url or "").rstrip("/").rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else None
 
 
 def _milestone_title(milestone: Any) -> str | None:

@@ -458,7 +458,7 @@ class ImportState(BaseModel):
 # rows, and both SQLite and PostgreSQL answer this from the
 # ``(tenant_id, card_key)`` index; swap in a maintained counter only if a
 # tenant's backlog ever gets big enough to measure.
-CardRow.comment_count = column_property(  # type: ignore[assignment]
+CardRow.comment_count = column_property(
     select(func.count(CardCommentRow.id))
     .where(
         CardCommentRow.tenant_id == CardRow.tenant_id,
@@ -803,7 +803,7 @@ class CardStore:
 
     # ── Issue comments (Factory#375) ─────────────────────────────────────────
 
-    def cards_for_project(self, project: str) -> list[Card]:
+    def cards_for_project(self, project: str) -> Sequence[Card]:
         """This tenant's live cards imported from one project, oldest first.
 
         What the comment pass iterates. Scoped by the issue ref's project half
@@ -826,7 +826,7 @@ class CardStore:
         with self._session() as session:
             return [Card.model_validate(row) for row in session.scalars(stmt)]
 
-    def comments(self, card_key: str) -> list[CardComment]:
+    def comments(self, card_key: str) -> Sequence[CardComment]:
         """One card's stored discussion, oldest first.
 
         Tenant-scoped like every other read here: the filter is on this store's

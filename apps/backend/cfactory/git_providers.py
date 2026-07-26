@@ -53,7 +53,6 @@ from runners.github.providers.protocol import (
     IssueFilters,
     ProviderCommentError,
     ProviderType,
-    fanout_comments,
     oldest_first,
     to_iso_utc,
 )
@@ -317,7 +316,12 @@ class HttpGitHubProvider:
         if not wanted:
             return {}
         if since is None:
-            return await fanout_comments(self, wanted, since=None)
+            # The hub's ``fanout_comments`` is the same loop, but its signature
+            # names the full canonical ``GitProvider`` and this class implements
+            # the narrower :class:`IssueProvider` slice on purpose (see the module
+            # docstring). Deduping and ordering are already done above, so the
+            # helper would only add a cast.
+            return {number: await self.fetch_comments(number, since=None) for number in wanted}
 
         raw = await self._comment_pages(
             f"/repos/{self._repo}/issues/comments",

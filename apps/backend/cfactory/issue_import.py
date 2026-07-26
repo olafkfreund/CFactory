@@ -385,12 +385,12 @@ def _sync_comments(
             continue
         synced_at = datetime.now(UTC)
         for number, comments in threads.items():
-            card = by_number.get(number)
-            if card is None:  # pragma: no cover — we asked for these numbers
+            target = by_number.get(number)
+            if target is None:  # pragma: no cover — we asked for these numbers
                 continue
             try:
                 stored += store.store_comments(
-                    card.card_key,
+                    target.card_key,
                     [
                         CardComment(
                             comment_id=comment.id,
@@ -407,8 +407,8 @@ def _sync_comments(
             except Exception as exc:  # noqa: BLE001 — one card's write must not
                 # abandon the rest of the thread pass; the marker stays unset, so
                 # the next pass retries this card.
-                logger.warning("could not store comments for %s: %s", card.card_key, exc)
-                reasons.append(f"{card.card_key}: {type(exc).__name__}")
+                logger.warning("could not store comments for %s: %s", target.card_key, exc)
+                reasons.append(f"{target.card_key}: {type(exc).__name__}")
     return {
         "ok": not reasons,
         "cards": len(warm) + len(cold),

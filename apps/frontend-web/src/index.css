@@ -139,9 +139,14 @@ body {
 
 /* ── Main + topbar ─────────────────────────────────────── */
 .main { display: flex; flex-direction: column; min-width: 0; }
+/* flex-wrap at every width, not just on phones (#211): between 641px and the
+   width the whole row happens to fit, none of these controls shrink, so the row
+   used to run past the viewport and scroll the whole page sideways. Wrapping
+   only engages when the row genuinely does not fit, so wide layouts are
+   unchanged — and nothing has to be hidden to make it fit. */
 .topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0.6rem 1.4rem; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 0.5rem; padding: 0.6rem 1.4rem; border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 60%, transparent); backdrop-filter: blur(6px);
 }
 /* Portal switcher (#149): the four portals as one product, in the topbar. */
@@ -171,7 +176,9 @@ body {
   letter-spacing: 0.03em; color: var(--muted);
 }
 .tab.active { color: var(--text); background: var(--panel-2); box-shadow: inset 0 -2px 0 var(--cyan); }
-.topbar-right { display: flex; align-items: center; gap: 0.7rem; }
+/* Wraps for the same reason .topbar does: the cluster is itself wider than a
+   narrow viewport, so it folds onto a second line instead of overflowing. */
+.topbar-right { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem 0.7rem; }
 .icon-btn {
   display: grid; place-items: center; width: 32px; height: 32px;
   border-radius: 8px; border: 1px solid var(--border); background: var(--panel);
@@ -1083,7 +1090,6 @@ body {
   .tabs { display: none; }
   .cmdk-trigger span, .cmdk-trigger kbd { display: none; }
   .cmdk-trigger { padding: 0.4rem; }
-  .topbar { flex-wrap: wrap; }
   .portal-label { display: none; } /* dots-only switcher on phones */
   .portal-opt { padding: 0.28rem 0.4rem; }
   .content { padding: 0.9rem 0.9rem 2rem; }
@@ -1298,9 +1304,14 @@ body {
 .token-back:hover { text-decoration: underline; }
 
 /* ── Persistent PARR pipeline strip (under the topbar, every view) ── */
+/* Three stage nodes joined by connectors: it cannot wrap without breaking the
+   connectors, and dropping a stage would lose a stage. So below the width it
+   fits, the STRIP scrolls sideways rather than the whole page (#211) — the same
+   technique as the phone nav rail. Everything stays reachable. */
 .pstrip {
   display: flex; align-items: center; gap: 0.5rem;
   height: 72px; padding: 0 1.4rem; flex: none;
+  overflow-x: auto;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 55%, var(--bg));
 }

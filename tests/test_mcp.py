@@ -117,6 +117,11 @@ def test_initialize_and_tools_list(mcp_client):
         "cfactory_test_card",
         "cfactory_run_card",
         "cfactory_delete_card",
+        # Tenant git configuration (RFC-0020 §3.3) — the twins of
+        # GET/PUT /api/tenants/{tenant}/git-config and its :verify.
+        "cfactory_get_git_config",
+        "cfactory_set_git_config",
+        "cfactory_verify_git_config",
     }
 
 

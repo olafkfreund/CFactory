@@ -31,6 +31,7 @@ tags:
   - name: Copilot
   - name: Actions
   - name: Audit
+  - name: Git config
 
 paths:
   /health:
@@ -439,7 +440,7 @@ paths:
         filed since the last run appears on the next one. Audited.
       parameters:
         - { name: project, in: query, schema: { type: string },
-            description: "Project path to import from; defaults to CFACTORY_GITHUB_REPO." }
+            description: "Project path to import from; defaults to the tenant's configured intake project." }
         - { name: full, in: query, schema: { type: boolean, default: false },
             description: "Ignore the last-synced watermark and re-read every issue." }
       responses:
@@ -470,6 +471,104 @@ paths:
                     description: Always false. Import is a poll; webhooks remain deferred.
                   last_synced_at: { type: string, format: date-time, nullable: true }
                   reason: { type: string }
+
+  /api/tenants/{tenant}/git-config:
+    parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema: { type: string }
+        description: >-
+          The tenant. CHECKED, not trusted: it must equal the tenant the request
+          resolved to (X-Tenant-Id, injected by oauth2-proxy from the Keycloak
+          claim), else 403. Single-tenant deployments resolve to `default`.
+    get:
+      tags: [Git config]
+      summary: This tenant's git configuration (requires `read`)
+      description: >-
+        RFC-0020 §3.3. Which git host the board syncs cards with, which project,
+        which project issues are imported from, and which AIFactory project a
+        dispatched card is built in. `status` is derived, never stored. No
+        credential is ever returned — credentials stay deployment-level until
+        RFC-0020 phase 3. Never 404s: an unconfigured tenant is a state.
+      responses:
+        "200":
+          description: The configuration, with its derived status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitConfig" }
+        "403": { description: The tenant in the path is not the caller's tenant. }
+    put:
+      tags: [Git config]
+      summary: Replace this tenant's git configuration (requires `write`)
+      description: >-
+        A FULL replacement — an omitted optional field is cleared — which also
+        clears any recorded verification, because it proved a configuration this
+        one no longer is. Audited on the tamper-evident HMAC chain. No credential
+        is accepted here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider: { type: string, enum: [github, gitlab, azure_devops], default: github }
+                base_url:
+                  type: string
+                  nullable: true
+                  description: Host root; omit for the provider's public default.
+                project:
+                  type: string
+                  nullable: true
+                  description: "owner/repo, a GitLab group path, or organization/project/repo."
+                intake_project:
+                  type: string
+                  nullable: true
+                  description: Import issues from here instead; defaults to `project`.
+                aifactory_project_id:
+                  type: string
+                  nullable: true
+                  description: AIFactory project a dispatched card is BUILT in. Not a repo path.
+                default_labels:
+                  type: array
+                  items: { type: string }
+                  description: Labels put on issues the board opens. A `factory:<tier>` label is refused.
+      responses:
+        "200":
+          description: The stored configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitConfig" }
+        "400": { description: Unknown provider, unaddressable project path, non-http base_url, or an intake-trigger label. }
+        "403": { description: The tenant in the path is not the caller's tenant. }
+
+  /api/tenants/{tenant}/git-config:verify:
+    parameters:
+      - { name: tenant, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Git config]
+      summary: Check the configuration reaches its project (requires `write`)
+      description: >-
+        ONE cheap authenticated read of the repository (`get_repository_info` on
+        the shared provider protocol) — enough to prove the host resolves, the
+        credential is accepted and the project is visible. Records the outcome,
+        so `status` becomes `verified` or keeps the failure reason. Always 200:
+        an unreachable host is `ok: false` with the reason, not a board error.
+      responses:
+        "200":
+          description: The verification result and the configuration as it now stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  reason: { type: string }
+                  repository: { type: string, nullable: true }
+                  status: { type: string }
+                  config: { $ref: "#/components/schemas/GitConfig" }
+        "403": { description: The tenant in the path is not the caller's tenant. }
 
   /api/cards/{card_key}:
     parameters:
@@ -552,6 +651,45 @@ components:
       type: string
       description: RFC-0011 difficulty tier.
       enum: [low, medium, hard]
+    GitConfig:
+      type: object
+      description: >-
+        RFC-0020 §3.3 tenant git configuration. Exactly one per tenant. Holds
+        provider + project only — never a credential (the copilot-settings
+        precedent), which is what the derived `credential_missing` status
+        reports.
+      properties:
+        tenant_id: { type: string }
+        provider: { type: string, enum: [github, gitlab, azure_devops] }
+        base_url:
+          type: string
+          description: Always populated on a read — the tenant's value, or the provider default.
+        project: { type: string, nullable: true, description: Where a ready card opens its issue. }
+        intake_project:
+          type: string
+          nullable: true
+          description: Where imports read from. Null means "the same as project".
+        aifactory_project_id:
+          type: string
+          nullable: true
+          description: AIFactory project a dispatched card is BUILT in. Not a repository path.
+        default_labels: { type: array, items: { type: string } }
+        status:
+          type: string
+          enum: [unconfigured, credential_missing, configured, verified]
+          description: >-
+            Derived on every read, never stored: no project -> unconfigured; a
+            project with no usable deployment credential -> credential_missing;
+            otherwise configured, or verified once a `:verify` call proved it.
+        verified_at: { type: string, format: date-time, nullable: true }
+        verify_error: { type: string, nullable: true }
+        source:
+          type: string
+          enum: [stored, env]
+          description: >-
+            `env` while the tenant is still falling back to the deployment's
+            (deprecated, one-release) environment variables; `stored` once saved.
+
     Card:
       type: object
       description: >-

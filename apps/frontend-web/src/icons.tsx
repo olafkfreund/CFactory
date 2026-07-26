@@ -150,3 +150,14 @@ export const IconCheck = (p: IconProps) => (
     <path d="M20 6L9 17l-5-5" />
   </Svg>
 );
+// Git integration (RFC-0020 §3.3): a branch, deliberately host-neutral — the
+// panel configures GitHub, GitLab or Azure DevOps alike.
+export const IconGitBranch = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="7" cy="5" r="2.2" />
+    <circle cx="7" cy="19" r="2.2" />
+    <circle cx="17" cy="9" r="2.2" />
+    <path d="M7 7.2v9.6" />
+    <path d="M17 11.2a5 5 0 0 1-5 5H9" />
+  </Svg>
+);

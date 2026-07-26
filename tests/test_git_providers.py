@@ -31,6 +31,7 @@ from cfactory import card_ops, github_sync
 from cfactory.card_ops import AuditContext
 from cfactory.cards import CardCreate, CardStore
 from cfactory.config import Settings
+from cfactory.git_config import target_from_settings
 from cfactory.git_providers import (
     SUPPORTED_PROVIDERS,
     HttpGitHubProvider,
@@ -136,12 +137,23 @@ def _make(cards, ctx, **fields):
     return card_ops.create_card(cards, ctx, CardCreate(**data))
 
 
+def _target(settings: Settings):
+    """The git target a deployment's ENVIRONMENT describes.
+
+    Since RFC-0020 §3.3 ``build_provider`` takes the resolved TENANT git config,
+    not ``Settings`` — which is the point of the phase. These selection tests are
+    about the provider layer rather than about where the config came from, so
+    they hand it the environment-derived target directly.
+    """
+    return target_from_settings(settings)
+
+
 # ── provider selection (config, not code) ────────────────────────────────────
 
 
 def test_github_is_the_default_so_existing_deploys_are_unchanged():
     """A deploy that only ever set CFACTORY_GITHUB_TOKEN keeps the Phase 6 path."""
-    provider = build_provider(Settings(github_token=_TEST_TOKEN), _PROJECT)
+    provider = build_provider(_target(Settings(github_token=_TEST_TOKEN)), _PROJECT)
 
     assert isinstance(provider, HttpGitHubProvider)
     assert provider.provider_type is ProviderType.GITHUB
@@ -153,14 +165,14 @@ def test_github_is_the_default_so_existing_deploys_are_unchanged():
     [("gitlab", GitLabProvider), ("GitLab", GitLabProvider), ("github", HttpGitHubProvider)],
 )
 def test_the_provider_type_is_selectable_by_config(kind, expected):
-    provider = build_provider(Settings(git_provider=kind, git_provider_token=_TEST_TOKEN), _PROJECT)
+    provider = build_provider(_target(Settings(git_provider=kind, git_provider_token=_TEST_TOKEN)), _PROJECT)
 
     assert isinstance(provider, expected)
 
 
 def test_azure_devops_gets_its_three_part_path():
     provider = build_provider(
-        Settings(git_provider="azure_devops", git_provider_token=_TEST_TOKEN),
+        _target(Settings(git_provider="azure_devops", git_provider_token=_TEST_TOKEN)),
         "contoso/payments/widgets",
     )
 
@@ -171,13 +183,14 @@ def test_azure_devops_gets_its_three_part_path():
 def test_an_unaddressable_azure_path_is_a_config_error_not_a_bad_call():
     with pytest.raises(ValueError, match="organization/project/repo"):
         build_provider(
-            Settings(git_provider="azure_devops", git_provider_token=_TEST_TOKEN), _PROJECT
+            _target(Settings(git_provider="azure_devops", git_provider_token=_TEST_TOKEN)),
+            _PROJECT,
         )
 
 
 def test_an_unknown_provider_is_rejected():
     with pytest.raises(ValueError, match="unknown git provider"):
-        build_provider(Settings(git_provider="bitbucket", git_provider_token=_TEST_TOKEN), _PROJECT)
+        build_provider(_target(Settings(git_provider="bitbucket", git_provider_token=_TEST_TOKEN)), _PROJECT)
     assert "bitbucket" not in SUPPORTED_PROVIDERS
 
 
@@ -187,7 +200,7 @@ def test_every_selectable_provider_satisfies_the_board_protocol():
     for kind in SUPPORTED_PROVIDERS:
         project = "org/project/repo" if kind == "azure_devops" else _PROJECT
         settings = Settings(git_provider=kind, git_provider_token=_TEST_TOKEN)
-        assert isinstance(build_provider(settings, project), IssueProvider), kind
+        assert isinstance(build_provider(_target(settings), project), IssueProvider), kind
 
 
 # ── the explicit opt-in survives the rewiring (RFC-0019 §3.5) ────────────────

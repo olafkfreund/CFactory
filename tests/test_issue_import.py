@@ -208,12 +208,18 @@ def test_import_is_inert_when_no_provider_is_configured(cards, host, monkeypatch
 
 
 def test_import_without_a_configured_project_says_so(cards, host, monkeypatch):
+    """The reason now points at the tenant's Settings panel, not at an env var.
+
+    RFC-0020 §3.3 retired ``CFACTORY_GITHUB_REPO`` as the place a project is
+    named, so telling a user to set it would send them somewhere they cannot
+    reach from the portal.
+    """
     monkeypatch.setattr(issue_import, "get_settings", lambda: Settings(github_token=_TEST_TOKEN))
 
     result = _import(cards, host)
 
     assert result["ok"] is False
-    assert "CFACTORY_GITHUB_REPO" in result["reason"]
+    assert "no project is configured for this tenant" in result["reason"]
 
 
 # ── Safety: an imported card is NEVER ready ─────────────────────────────────

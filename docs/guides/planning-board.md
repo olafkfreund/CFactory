@@ -39,7 +39,7 @@ newcomer's first run, start with the
 - [MCP scopes: who is allowed to touch the board](#mcp-scopes-who-is-allowed-to-touch-the-board)
 - [The MCP board tools](#the-mcp-board-tools)
 - [Intake: how a card becomes a build](#intake-how-a-card-becomes-a-build)
-- [CFACTORY_INTAKE_PROJECT_ID in full](#cfactory_intake_project_id-in-full)
+- [Git integration: the settings panel](#git-integration-the-settings-panel)
 - [Status write-back: the board is a live view](#status-write-back-the-board-is-a-live-view)
 - [Discovery: how an agent finds all this before it has a token](#discovery-how-an-agent-finds-all-this-before-it-has-a-token)
 - [Parity: the rule that keeps the two surfaces honest](#parity-the-rule-that-keeps-the-two-surfaces-honest)
@@ -169,6 +169,11 @@ appends an entry to the tamper-evident HMAC audit chain** — the same chain
 | `PATCH` | `/api/cards/{card_key}` | write | Partial update — also how you move and reprioritise. **404** if unknown. Runs the intake hook. |
 | `POST` | `/api/cards/import` | write | Import the connected repository's **existing** issues as cards (RFC-0020 section 3.6). Idempotent, incremental (`?full=true` re-reads everything), and imported cards are **never `ready`**. **200** with `ok: false` when the provider is unreachable. See [github-card-sync.md](github-card-sync.md#importing-a-repos-existing-issues-rfc-0020-section-36). |
 | `DELETE` | `/api/cards/{card_key}` | write | Takes the card off the board. **404** if unknown. Returns `{"card_key": ..., "deleted": true}`. A **soft** delete since RFC-0020 section 3.6: every read hides it, the issue on the host is untouched, and the next import does not resurrect it. |
+
+The tenant git configuration (RFC-0020 section 3.3) lives on the same surface —
+`GET`/`PUT /api/tenants/{tenant}/git-config` and
+`POST /api/tenants/{tenant}/git-config:verify` — and is covered in
+[Git integration: the settings panel](#git-integration-the-settings-panel).
 
 Filters are AND-ed and each is exact-match, not a search. An unknown filter value
 (`?status=doing`) is a **loud 422** because the enum is validated; an unknown
@@ -300,8 +305,8 @@ Tier decides which door it goes through (RFC-0011 §3):
 
 | Tier | Destination | Endpoint | Why |
 |---|---|---|---|
-| `low` | AIFactory | `POST /api/tasks/from-issue` | Skip-planning fast path — straight to a build. Requires `CFACTORY_INTAKE_PROJECT_ID`. |
-| `medium` | AIFactory | `POST /api/tasks/from-issue` | Same fast path. Requires `CFACTORY_INTAKE_PROJECT_ID`. |
+| `low` | AIFactory | `POST /api/tasks/from-issue` | Skip-planning fast path — straight to a build. Requires the tenant's **AIFactory project id**. |
+| `medium` | AIFactory | `POST /api/tasks/from-issue` | Same fast path. Requires the tenant's **AIFactory project id**. |
 | `hard` | PFactory | `POST /api/plan/sessions/ingest-text` | Full decomposition before any code is written. **Needs no project id.** |
 | unset | nowhere | — | Not an intake event. The card sits in `ready`, untouched. |
 
@@ -335,7 +340,7 @@ The response body tells you which case you are in:
 ```json
 {"dispatched": true,  "target_service": "aifactory", "correlation_key": "task-123", "ok": true}
 {"dispatched": false, "ok": true,  "reason": "already dispatched", "correlation_key": "task-123"}
-{"dispatched": false, "ok": false, "status_code": 0, "reason": "no intake project configured — ..."}
+{"dispatched": false, "ok": false, "status_code": 0, "reason": "no AIFactory project configured — ..."}
 ```
 
 If the upstream accepts the card but returns no correlation key of any
@@ -347,77 +352,171 @@ Source: `apps/backend/cfactory/card_intake.py`.
 
 ---
 
-## `CFACTORY_INTAKE_PROJECT_ID` in full
+## Git integration: the settings panel
 
-> **As an operator deploying the fleet**, I want to say once which AIFactory
-> project the board's cards get built into, **so that** a planner can promote a
-> `low` or `medium` card without knowing anything about AIFactory's project
-> model — and so that cards cannot land in a repo nobody meant to touch.
+> **As a human planner**, I want to say in the portal which repository my board
+> syncs with, **so that** connecting a project is something I can do and check,
+> rather than a redeploy I have to ask an operator for.
 
-This is the variable that is impossible to guess from its name, so here is the
-whole situation.
+> **As an operator deploying the fleet**, I want that choice stored per tenant
+> and audited, **so that** two tenants on one cockpit cannot file into each
+> other's repositories and I can reconstruct who pointed the board where.
+
+> **As a GitLab user**, I want the same board, **so that** "the fleet supports
+> GitLab" is true of the planning surface and not only of the runners.
+
+RFC-0020 section 3.3 turns git configuration into a **tenant-level resource**.
+Before it, two process-global environment variables decided which host and which
+project every tenant talked to, and one of them —
+`CFACTORY_INTAKE_PROJECT_ID` — was an opaque UUID with no explanation reachable
+from the portal. Now a tenant has exactly one git configuration, it lives in
+**Settings > Git integration**, and it is what every part of the board reads:
+opening an issue for a `ready` card, importing a repository's existing issues,
+and dispatching a card into AIFactory.
+
+Credentials are **not** part of it. The token is still the deployment's, from
+the environment; RFC-0020 phases 3 and 4 own credential custody. This follows the
+copilot settings precedent exactly — the provider and the model persist, the API
+key never does — and it is why `credential_missing` is one of the statuses.
+
+### Every setting, in full
+
+| Setting | Type | Default | What it decides |
+|---|---|---|---|
+| **Provider** | `github` \| `gitlab` \| `azure_devops` | `github` | Which host implementation the board talks through. These three are the ones actually implemented; Bitbucket and Gitea exist in the provider protocol and are not offered, because a dropdown entry that only ever errors is a lie. |
+| **Host** (`base_url`) | http(s) origin | the provider's public default (`https://api.github.com`, `https://gitlab.com`, `https://dev.azure.com`) | Where the API calls go. This is the field that makes a **self-hosted GitLab, GitHub Enterprise or Azure DevOps Server** work. |
+| **Project** | provider path | unset | Where a `ready` card **opens** its issue: `owner/repo` on GitHub, `group/subgroup/project` on GitLab, `organization/project/repo` on Azure DevOps. |
+| **Import from** (`intake_project`) | provider path | falls back to **Project** | Where the import **reads** existing issues from, when that differs from the project above. Leave it empty unless you genuinely have two repositories. |
+| **AIFactory project id** | project id (a UUID in practice) | unset | Which AIFactory project a dispatched card is **built** in. Not a repository path — see below. |
+| **Default labels** | list of strings | empty | Labels put on issues the board opens. A `factory:<tier>` label is **refused**: that label is the fleet's own intake trigger (RFC-0011), so it would build the same card a second time. |
+| **Status** | derived, read-only | `unconfigured` | `unconfigured` (no project named) -> `credential_missing` (a project, but the deployment has no usable token) -> `configured` (reachable in principle, never proved) -> `verified` (proved by **Verify**). Never stored as a field: it is a function of the configuration, the credential and the last verification, and a stored copy would go stale. |
+
+### The AIFactory project id, in full
+
+This is the setting that was impossible to guess from its old name
+(`CFACTORY_INTAKE_PROJECT_ID`), so here is the whole situation.
 
 **The problem it solves.** AIFactory's `/api/tasks/from-issue` requires a
 `project_id` — that is how AIFactory knows *which repository* to build in. A
 planning card carries no project: it is a title, some acceptance criteria and a
-tier. That gap has to be closed by deployment configuration, because it is an
-operator's decision (which repo does this cockpit's backlog build into?), not a
-planner's and not an agent's.
+tier. That gap has to be closed by configuration, because it is a deliberate
+decision (which repo does this board's work build into?), not something a card
+or an agent can supply.
 
-**Scope.** It affects `low` and `medium` cards only. `hard` cards route to
-PFactory, which takes free text and needs no project id, so a fleet that only
-ever plans `hard` work never needs this set.
+**It is not a repository path.** It is AIFactory's own project id. The board
+never resolves it, never validates it, and never guesses it from the git project
+above them — the two live in different namespaces, and defaulting one to the
+other would send a repo path where a UUID is required.
 
-| | |
-|---|---|
-| **Type** | string — an AIFactory project id (a UUID in practice) |
-| **Default** | unset |
-| **Required?** | Yes, if any `low` or `medium` card will ever be promoted to `ready` |
-| **Set via** | `CFACTORY_INTAKE_PROJECT_ID` env var. Two deployment paths, and it matters which one you are on: **Helm** consumers have no dedicated key, so inject it through `config.extraEnv` in `charts/cfactory/values.yaml`. **This fleet does not use the chart** — it deploys raw manifests from `factory-gitops`, so the value lives in the `env:` list of `apps/cfactory/manifests/manifests.yaml` there and ArgoCD syncs it. Editing the chart values on this fleet changes nothing. |
-| **Read at** | dispatch time, from `Settings.intake_project_id` |
+**Scope.** It affects `low` and `medium` cards, plus every explicit `code` and
+`test` stage action. `hard` cards route to PFactory, which takes free text and
+needs no project id, so a board that only ever plans `hard` work never needs it.
 
 **What happens when it is unset.** The dispatch is not attempted. The card is
-moved to **`blocked`** and the response carries the reason verbatim:
+moved to **`blocked`** and the response carries the reason:
 
 ```
-no intake project configured — set CFACTORY_INTAKE_PROJECT_ID to dispatch a
-low/medium card to AIFactory
+no AIFactory project configured — set one in Settings > Git integration to
+dispatch a low/medium card to AIFactory
 ```
 
-This fails **LOUD**, and deliberately so: the card visibly changes column, the
-API response says exactly which variable to set, and an `ok=false` entry lands
-in the audit chain. It is never accepted-and-dropped. What it is *not* is a
-startup error — CFactory boots fine without it, because a deployment that only
+An explicit stage action refuses instead, with a **409** and the machine-readable
+code `no_intake_project`. Both fail **LOUD**: the card visibly changes column or
+the call is refused, and an `ok=false` entry lands in the audit chain. It is
+never accepted-and-dropped, and it is never a startup error — a board that only
 plans `hard` cards is a legitimate configuration.
 
-**What happens when it is wrong.** A syntactically fine but non-existent or
-mistyped project id is *not* caught by CFactory — it is sent upstream and
-AIFactory rejects it. The dispatch comes back `ok=false`, so the card still ends
-up `blocked` with the upstream status code in the audit entry. Loud, but one hop
-further away: check the audit trail's `status_code`, not the card, to tell
-"unset" (status 0, reason text) from "wrong" (an upstream 4xx).
+**What happens when it is wrong.** A syntactically fine but non-existent project
+id is *not* caught here — it is sent upstream and AIFactory rejects it. The
+dispatch comes back `ok=false`, so the card still ends up `blocked`, with the
+upstream status code in the audit entry. Loud, but one hop further away: check
+the audit trail's `status_code`, not the card, to tell "unset" (status 0, reason
+text) from "wrong" (an upstream 4xx).
 
 The genuinely dangerous case is a **valid id pointing at the wrong project** —
-CFactory cannot detect that, and the card will build successfully into a
+nothing here can detect that, and the card will build successfully into a
 repository you did not mean to touch. Which is exactly why the recommendation
 below is what it is.
 
-**Recommended value.**
-
-```bash
-CFACTORY_INTAKE_PROJECT_ID=5d78d4b9-35f9-4445-92c1-78f3ff60a494   # aifactory-demo
-```
-
-This is the value the hosted deployment runs, and the choice is deliberate:
+**Recommended value.** `5d78d4b9-35f9-4445-92c1-78f3ff60a494` (`aifactory-demo`)
+— the value the hosted deployment runs, and the choice is deliberate:
 `aifactory-demo` is the **sacrificial demo repository**. An autonomous build
 triggered from a planning card opens PRs and writes code, so the default
-destination should be a repo where an unwanted, wrong or experimental build
-costs nothing. Point it at a real service's project only once you trust the
-board's promotion discipline, and never at a repo whose main branch matters
-before then.
+destination should be a repo where an unwanted, wrong or experimental build costs
+nothing. Point it at a real service's project only once you trust the board's
+promotion discipline, and never at a repo whose main branch matters before then.
 
-For a local run, either leave it unset (and plan `hard` cards, which route to
+For a local run, either leave it empty (and plan `hard` cards, which route to
 PFactory) or set it to a throwaway project id in your local AIFactory.
+
+### What happens when the rest is unset or wrong
+
+| Situation | What happens | Loud or quiet |
+|---|---|---|
+| No **project** | A `ready` card opens no issue and the sync hook stays quiet — a deployment that named no project has opted into mirroring *adopted* issues, not into filing new ones. Asking explicitly (`POST /api/cards/{key}/sync-github`) says plainly that no project is configured. An import returns `ok: false` with the same reason. | Quiet on the hook, loud when asked |
+| **Project** in a format the provider cannot address | Refused on save with a **400** naming the expected shape. It never reaches the point where every card write fails with an error nobody connects back to this form. | Loud, at save time |
+| **Project** valid but non-existent | Saves fine (nothing can know without asking). **Verify** turns it into a recorded failure; without verifying, the first card write records `github_sync_error` on the card and the board keeps serving. | Loud once you press Verify |
+| No **credential** on the deployment | Status is `credential_missing`. Sync is off entirely: no network call on a card write, no issue opened. | Quiet by design, visible in the panel |
+| **Host** not an http(s) origin | Refused on save with a **400**. It becomes an HTTP client's base URL, so it is validated where it enters rather than trusted. | Loud, at save time |
+| `factory:<tier>` in **default labels** | Refused on save with a **400** explaining that it is the intake trigger. Silently dropping it would look saved and would not be. | Loud, at save time |
+| Wrong **provider** for the host | The provider's own API returns a 404 or a parse failure; the reason lands on the card (`github_sync_error`) or in the verify result. Nothing 500s. | Loud, one hop away |
+
+### Verify
+
+**Verify** makes exactly one authenticated read of the repository
+(`get_repository_info` on the provider protocol). That single call answers all
+three questions at once: does the host resolve, is the credential accepted, and
+can it see the project. The result is recorded, so the status becomes `verified`
+or keeps the failure reason.
+
+Saving **clears** a previous verification, because it proved a configuration the
+current one no longer is. The panel disables **Verify** while there are unsaved
+edits for the same reason.
+
+An unreachable host is `ok: false` with the reason, never an error page.
+
+### The surface
+
+| Method | Path | Scope | MCP twin |
+|---|---|---|---|
+| `GET` | `/api/tenants/{tenant}/git-config` | read | `cfactory_get_git_config` |
+| `PUT` | `/api/tenants/{tenant}/git-config` | write | `cfactory_set_git_config` |
+| `POST` | `/api/tenants/{tenant}/git-config:verify` | write | `cfactory_verify_git_config` |
+
+`PUT` is a **full replacement**: an omitted optional field is cleared. Every
+mutation appends to the same tamper-evident HMAC audit chain the card mutations
+use, keyed on `tenant:<id>`.
+
+**The tenant in the path is checked, not trusted.** It is a URL segment a caller
+chooses; the tenant a caller may actually touch comes from the resolved request
+identity (`X-Tenant-Id`, injected by oauth2-proxy from the Keycloak claim, never
+from the browser). Naming another tenant is a **403**. In single-tenant mode
+every request resolves to `default`, so naming anything else is a 403 there too.
+The MCP tools take no tenant argument at all — an agent operates on its own
+partition or on nothing.
+
+Until phase 3 lands, a **multi-tenant deployment shares the operator's
+environment credential**: each tenant chooses its own project, and all of them
+reach it with the same token. That is safe for a single-tenant deployment and
+explicitly not a tenant isolation boundary for credentials. Phase 3 (#364) moves
+credentials into the tenant; phase 4 adds OAuth.
+
+### Migrating from the environment variables
+
+`CFACTORY_INTAKE_PROJECT_ID`, `CFACTORY_GITHUB_REPO`, `CFACTORY_GIT_PROVIDER`
+and `CFACTORY_GIT_PROVIDER_URL` are **retired as configuration** and survive one
+release as a **seed**. On first boot, a tenant with no stored configuration
+materialises one from whichever of them are set; from then on the stored
+configuration is authoritative and editable, and a restart never overwrites an
+edit. A tenant that has never been seeded and has no stored row still resolves
+against the environment, so nothing breaks in the meantime.
+
+**Existing single-tenant deployments need no operator action.** Their values
+appear in the panel on the next boot, and the panel shows `source: env` until
+the first save.
+
+The variables are removed in the release after this one. Set the values in the
+panel now; do not add them to a new deployment.
 
 ---
 
@@ -563,7 +662,10 @@ contract an agent actually discovers.
 | Import from a repo with more issues than `CFACTORY_IMPORT_MAX` | `truncated: true` in the result and in the board's import summary | Loud |
 | Expect an issue filed a moment ago to be on the board | It appears on the next import/poll, not instantly — import is **not live** (no webhook receiver) | Documented, and `last_synced_at` shows the staleness |
 | Promote to `ready` with **no tier** | Nothing. Card sits in `ready`. | **Silent — and intended.** It is a real triage state. |
-| Promote a `low`/`medium` card with `CFACTORY_INTAKE_PROJECT_ID` unset | Card moves to `blocked`, reason names the variable, `ok=false` audit entry | Loud |
+| Promote a `low`/`medium` card with **no AIFactory project id** | Card moves to `blocked`, reason points at Settings > Git integration, `ok=false` audit entry | Loud |
+| Read or write `/api/tenants/<someone else>/git-config` | 403 — the tenant in the path is checked against the tenant the request resolved to | Loud |
+| Save a `factory:<tier>` default label | 400 — it is the fleet's intake trigger and would build the card twice | Loud, at save time |
+| Restart after editing the git config in the panel | Nothing. The seed runs once; a stored configuration is never overwritten by the environment | Silent — and the point |
 | Promote with a wrong-but-valid-looking project id | Upstream rejects; card moves to `blocked` with the upstream status in the audit entry | Loud (one hop away) |
 | Promote with a valid id for the **wrong project** | Builds successfully into the wrong repo | **Silent.** Nothing can detect this — see the recommendation above. |
 | Promote an already-dispatched card again | `{"dispatched": false, "ok": true, "reason": "already dispatched"}` | Loud in the response, no side effect |

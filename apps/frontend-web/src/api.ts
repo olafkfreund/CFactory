@@ -499,13 +499,71 @@ export const CopilotSettingsSchema = z.object({
 });
 export type CopilotSettings = z.infer<typeof CopilotSettingsSchema>;
 
-export async function fetchSettings(): Promise<CopilotSettings> {
+// `tenant` is the tenant the BACKEND resolved this request to (RFC-0020 §3.3).
+// The cockpit cannot know it on its own: it is injected by oauth2-proxy from the
+// Keycloak claim and is deliberately not the browser's to choose, so the backend
+// says what it resolved to and the Settings panel uses it to address its own git
+// configuration.
+export async function fetchSettings(): Promise<CopilotSettings & { tenant: string }> {
   const data = await getJson(
     "/api/settings",
-    z.object({ copilot: CopilotSettingsSchema }),
+    z.object({ copilot: CopilotSettingsSchema, tenant: z.string().default("default") }),
     "settings",
   );
-  return data.copilot;
+  return { ...data.copilot, tenant: data.tenant };
+}
+
+// ── Tenant git configuration (RFC-0020 §3.3) ────────────────────────────────
+
+export const GitConfigSchema = z.object({
+  tenant_id: z.string(),
+  provider: z.string(), // "github" | "gitlab" | "azure_devops"
+  base_url: z.string(),
+  project: z.string().nullable(),
+  intake_project: z.string().nullable(),
+  aifactory_project_id: z.string().nullable(),
+  default_labels: z.array(z.string()),
+  // unconfigured | credential_missing | configured | verified — derived, never stored.
+  status: z.string(),
+  verified_at: z.string().nullable().optional(),
+  verify_error: z.string().nullable().optional(),
+  source: z.string(), // "stored" once saved, "env" while still seeded from the deployment
+});
+export type GitConfig = z.infer<typeof GitConfigSchema>;
+
+export const GitVerifySchema = z.object({
+  ok: z.boolean(),
+  reason: z.string().optional(),
+  repository: z.string().nullable().optional(),
+  config: GitConfigSchema.optional(),
+});
+export type GitVerify = z.infer<typeof GitVerifySchema>;
+
+function gitConfigPath(tenant: string): string {
+  return `/api/tenants/${encodeURIComponent(tenant)}/git-config`;
+}
+
+export async function fetchGitConfig(tenant: string): Promise<GitConfig> {
+  return getJson(gitConfigPath(tenant), GitConfigSchema, "git-config");
+}
+
+// A full replacement, matching the PUT: an omitted field is cleared.
+export async function updateGitConfig(
+  tenant: string,
+  body: {
+    provider: string;
+    base_url?: string | null;
+    project?: string | null;
+    intake_project?: string | null;
+    aifactory_project_id?: string | null;
+    default_labels?: string[];
+  },
+): Promise<GitConfig> {
+  return sendJson("PUT", gitConfigPath(tenant), body, GitConfigSchema);
+}
+
+export async function verifyGitConfig(tenant: string): Promise<GitVerify> {
+  return sendJson("POST", `${gitConfigPath(tenant)}:verify`, {}, GitVerifySchema);
 }
 
 export async function updateCopilotSettings(

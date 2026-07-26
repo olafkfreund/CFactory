@@ -30,34 +30,49 @@ by both the REST route and the MCP tool.
 
 ## Enabling it
 
+Two halves, and since RFC-0020 section 3.3 they live in different places.
+
+**The credential is the deployment's**, from the environment:
+
 ```bash
-CFACTORY_GITHUB_TOKEN=<a token that can open issues>   # required; unset = OFF
-CFACTORY_GITHUB_REPO=owner/repo                        # optional; where new issues are opened
-CFACTORY_GITHUB_API_URL=https://api.github.com         # optional; GitHub Enterprise
+CFACTORY_GIT_PROVIDER_TOKEN=<a token that can open issues>   # required; unset = sync OFF
 ```
 
 The bare `GITHUB_TOKEN` / `GH_TOKEN` are deliberately **not** read. This
 credential files issues in a real repository, and an ambient `gh` login on a
 developer's machine must not be able to switch that on by accident.
+`CFACTORY_GITHUB_TOKEN` is the older name and still works.
 
-With a token but no repo, cards can only *adopt* existing issues — nothing is
+**Which host and which project is the tenant's**, edited in the cockpit at
+**Settings > Git integration** (or over `PUT /api/tenants/{tenant}/git-config`,
+or the `cfactory_set_git_config` MCP tool):
+
+| Setting | Example | Meaning |
+|---|---|---|
+| Provider | `github` | `github` (default), `gitlab` or `azure_devops` |
+| Host | `https://api.github.com` | Override for GitHub Enterprise or a self-hosted GitLab |
+| Project | `owner/repo` | Where a `ready` card opens its issue |
+
+With a token but no project, cards can only *adopt* existing issues — nothing is
 ever created.
 
-## Other git hosts: GitLab and Azure DevOps (RFC-0020 phase 1)
+`CFACTORY_GITHUB_REPO`, `CFACTORY_GIT_PROVIDER`, `CFACTORY_GIT_PROVIDER_URL` and
+`CFACTORY_INTAKE_PROJECT_ID` still **seed** a tenant that has no stored
+configuration, once, on first boot — so an existing deployment keeps working with
+no operator action and finds its values already filled in. They are removed one
+release from now. The full write-up, with every option and its failure
+behaviour, is in
+[the planning-board guide](planning-board.md#git-integration-the-settings-panel).
 
-GitHub is the default, and a deploy that never sets `CFACTORY_GIT_PROVIDER`
-behaves exactly as this guide describes. Point the board at another host with:
+## Other git hosts: GitLab and Azure DevOps (RFC-0020 phases 1 and 2)
 
-```bash
-CFACTORY_GIT_PROVIDER=gitlab                           # github (default) | gitlab | azure_devops
-CFACTORY_GIT_PROVIDER_TOKEN=<a token that can open issues>
-CFACTORY_GIT_PROVIDER_URL=https://gitlab.example.com   # optional; self-hosted instance
-CFACTORY_GITHUB_REPO=group/subgroup/project            # the host's project path
-```
+GitHub is the default, and a board whose provider is never changed behaves
+exactly as this guide describes. Point it at another host in **Settings > Git
+integration**: pick the provider, give the host if it is self-hosted, and write
+the project in that host's own shape — `owner/repo` on GitHub,
+`group/subgroup/project` on GitLab, `organization/project/repo` on Azure DevOps.
+An unaddressable path is refused when you save it, not on the next card write.
 
-`CFACTORY_GITHUB_REPO` keeps its name (renaming a setting breaks running deploys
-for nothing) but is read as *the provider's project path*: `owner/repo` on
-GitHub, `group/project` on GitLab, `organization/project/repo` on Azure DevOps.
 Everything above this section — the ownership table, the conflict rule,
 idempotency, adoption, the fail-safe posture — is unchanged, because the board
 talks to the fleet's `GitProvider` protocol rather than to any host's API. Read
@@ -74,7 +89,7 @@ re-vendor.
 
 | Trigger | What happens |
 |---|---|
-| A card write that leaves it `ready` (either surface) | Opens an issue in `CFACTORY_GITHUB_REPO`, or adopts the one named by `issue_ref`, then mirrors it down. |
+| A card write that leaves it `ready` (either surface) | Opens an issue in the tenant's configured **project**, or adopts the one named by `issue_ref`, then mirrors it down. |
 | A card write on a card that already has an `issue_ref` | Mirrors the issue down. |
 | `POST /api/cards/{card_key}/sync-github` | On-demand sync. |
 | MCP `cfactory_sync_card_github` | The same operation, same code (RFC-0019 §3.3). |
@@ -87,10 +102,13 @@ opened, and no duplicate is possible.
 exactly as a non-NULL `correlation_key` means "already in the factory". Syncing
 twice adopts and mirrors; it never opens a second issue.
 
-**Issues are opened without labels.** The fleet's issue-driven intake (RFC-0011)
-triggers on a `factory:<tier>` label, and a `ready` card has already been
-dispatched into the factory by the board's own intake path — labelling the issue
-would build the same card twice.
+**Issues are opened with the tenant's default labels, and never with a
+`factory:<tier>` one.** The fleet's issue-driven intake (RFC-0011) triggers on
+that label, and a `ready` card has already been dispatched into the factory by
+the board's own intake path — labelling the issue would build the same card
+twice. The git-config panel refuses such a label when you save it, so it cannot
+reach an issue whatever anyone types. Any other default label (`board`,
+`triage`) is applied.
 
 ## When GitHub is down
 

@@ -35,6 +35,16 @@ from sqlalchemy.types import JSON
 
 from .config import DEFAULT_TENANT, Settings, get_settings
 from .db import Base, make_engine
+from .git_config import (
+    GitConfig,
+    GitConfigRow,
+    GitConfigUpdate,
+    GitTarget,
+    config_view,
+    target_from_row,
+    target_from_settings,
+    validated_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +354,16 @@ class CardStore:
         view._tenant = tenant
         return view
 
+    @property
+    def tenant(self) -> str:
+        """The tenant this store reads and writes as.
+
+        An unscoped store (single-tenant mode) is the ``default`` tenant, which
+        is exactly the value its writes already stamp — so the git config a card
+        write resolves is the one it would have been stamped with.
+        """
+        return self._tenant or DEFAULT_TENANT
+
     def _select(self, *, include_deleted: bool = False) -> Select[tuple[CardRow]]:
         """Base SELECT honouring the tenant scope (no filter when unscoped).
 
@@ -502,6 +522,149 @@ class CardStore:
                 return False
             row.deleted_at = _now()
             return True
+
+    # ── Tenant git configuration (RFC-0020 §3.3) ─────────────────────────────
+    #
+    # Hung off the card store rather than given a store of its own, for the same
+    # reason ``ImportStateRow`` is: it is *about* this tenant's cards, shares
+    # their lifetime, and — decisively — every consumer of the git config
+    # (github_sync, issue_import, card_intake) is already handed a tenant-scoped
+    # CardStore. A second store would mean a second tenant-scoping mechanism to
+    # keep in step with this one, which is precisely how a cross-tenant read gets
+    # written by accident.
+
+    def git_config_row(self) -> GitConfigRow | None:
+        """This tenant's stored git configuration row, or None if it has none."""
+        stmt = select(GitConfigRow).where(GitConfigRow.tenant_id == self.tenant)
+        with self._session() as session:
+            return session.scalars(stmt).first()
+
+    def git_target(self, settings: Settings | None = None) -> GitTarget:
+        """This tenant's git target: the stored row if there is one, else the env.
+
+        The ONE resolution every consumer uses — ``github_sync`` (which project
+        an issue is opened in), ``issue_import`` (which project issues are read
+        from) and ``card_intake`` (which AIFactory project a card is built in).
+        None of them looks at ``Settings`` for a provider, a repo or an intake
+        project any more; if they did, the stored configuration would be a second
+        opinion rather than the answer.
+
+        It hangs off the store because the store is what knows the tenant: every
+        consumer is already handed a tenant-scoped one, so tenant-correct
+        configuration needs no tenant id threaded through five call signatures.
+        """
+        settings = settings or get_settings()
+        row = self.git_config_row()
+        if row is None:
+            return target_from_settings(settings, self.tenant)
+        return target_from_row(row, settings)
+
+    def seed_git_config_from_env(self, settings: Settings | None = None) -> GitConfig | None:
+        """Materialise this tenant's config from the legacy env vars. Once.
+
+        RFC-0020 §3.3: ``CFACTORY_INTAKE_PROJECT_ID`` (and, on the same rule, the
+        ``CFACTORY_GITHUB_*`` / ``CFACTORY_GIT_PROVIDER_*`` project settings) are
+        retired as globals but survive one release as a seed, so an existing
+        single-tenant deployment keeps working with **no operator action** and
+        its values become editable in the portal.
+
+        Two rules make this safe to call on every boot:
+
+        * a tenant that already has a row is left ALONE — the stored config is
+          authoritative, and re-seeding would silently undo an edit made in the
+          cockpit every time the process restarted (the failure this is most
+          likely to cause, and the one the tests pin);
+        * nothing to seed (no project, no AIFactory project id) writes no row, so
+          a deploy that never configured any of this stays ``unconfigured``
+          rather than acquiring an empty row that reads as a deliberate choice.
+
+        Returns the seeded config, or ``None`` when it did nothing.
+        """
+        settings = settings or get_settings()
+        if self.git_config_row() is not None:
+            return None
+        env = target_from_settings(settings, self.tenant)
+        if not (env.project or env.aifactory_project_id):
+            return None
+        logger.info(
+            "seeding tenant %r git config from the environment (RFC-0020 §3.3): "
+            "provider=%s project=%s aifactory_project_id=%s",
+            self.tenant,
+            env.provider,
+            env.project,
+            "set" if env.aifactory_project_id else "unset",
+        )
+        self.set_git_config(
+            GitConfigUpdate(
+                provider=env.provider,
+                base_url=env.base_url,
+                project=env.project,
+                aifactory_project_id=env.aifactory_project_id,
+            ),
+            settings,
+        )
+        return config_view(self.git_target(settings))
+
+    def set_git_config(self, update: GitConfigUpdate, settings: Settings | None = None) -> None:
+        """Replace this tenant's git configuration. Raises ``GitConfigError``.
+
+        A full replacement (the PUT semantics), and it clears any recorded
+        verification: that verification proved a configuration this one is no
+        longer. Returns nothing — the caller re-resolves, so "what is the config
+        now" has one implementation (``git_target``) rather than a
+        second, subtly different one on the write path.
+        """
+        self._upsert_git_config(validated_fields(update), settings)
+
+    def record_git_verification(
+        self, *, error: str | None, settings: Settings | None = None
+    ) -> None:
+        """Record the outcome of a verify against this tenant's configuration.
+
+        Materialises the row when the tenant is still resolving from the
+        environment: asking to verify is asking about a *specific* configuration,
+        and the answer has to be recorded against something. What is materialised
+        is exactly what the seed would have written, so this cannot invent a
+        configuration the deployment did not already describe.
+        """
+        if self.git_config_row() is None:
+            env = target_from_settings(settings or get_settings(), self.tenant)
+            self.set_git_config(
+                GitConfigUpdate(
+                    provider=env.provider,
+                    base_url=env.base_url,
+                    project=env.project,
+                    aifactory_project_id=env.aifactory_project_id,
+                ),
+                settings,
+            )
+        self._upsert_git_config(
+            {"verified_at": None if error else _now(), "verify_error": error}, settings
+        )
+
+    def _upsert_git_config(self, fields: dict[str, Any], _settings: Settings | None = None) -> None:
+        """Insert-or-update this tenant's config row.
+
+        Two concurrent first-ever writes both find no row and both insert; the
+        unique index rejects the loser, which then takes the update path — the
+        same constraint-not-check rule the card import follows.
+        """
+        stmt = select(GitConfigRow).where(GitConfigRow.tenant_id == self.tenant)
+        for attempt in range(2):
+            try:
+                with self._session.begin() as session:
+                    row = session.scalars(stmt).first()
+                    if row is None:
+                        session.add(GitConfigRow(tenant_id=self.tenant, **fields))
+                    else:
+                        for name, value in fields.items():
+                            setattr(row, name, value)
+                        row.updated_at = _now()
+                    session.flush()
+                    return
+            except IntegrityError:
+                if attempt:  # pragma: no cover — the row exists by the retry
+                    raise
 
     # ── Import watermark (RFC-0020 §3.6) ─────────────────────────────────────
 

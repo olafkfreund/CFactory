@@ -204,7 +204,9 @@ def _next_watermark(issues: list[IssueData], previous: datetime | None) -> datet
     return newest - _OVERLAP
 
 
-def _import_one(store: CardStore, ref: IssueRef, issue: IssueData) -> str:
+def _import_one(
+    store: CardStore, ref: IssueRef, issue: IssueData, repository_id: int | None = None
+) -> str:
     """Upsert one issue into a card. Returns what happened, for the tally.
 
     ``skipped`` covers the one case where an issue must NOT produce a card: the
@@ -225,6 +227,11 @@ def _import_one(store: CardStore, ref: IssueRef, issue: IssueData) -> str:
                     tier=fields["tier"],
                     assignee=fields["assignee"],
                     milestone=fields["milestone"],
+                    # The repository it came FROM (RFC-0020 §3.3 phase 8), so an
+                    # imported card syncs, dispatches and builds against that
+                    # repository rather than against whatever the tenant's default
+                    # happens to be later.
+                    repository_id=repository_id,
                 )
             )
             # The two mirrored columns are absent from CardCreate on purpose — a
@@ -250,41 +257,54 @@ def _import_one(store: CardStore, ref: IssueRef, issue: IssueData) -> str:
     return "updated"
 
 
-def import_issues(
+def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword-only
+    # and independent (which repository, which project, which transport, full or
+    # incremental). Collapsing them into an options object would hide the call
+    # sites rather than simplify them, the same reasoning routes_cards.import_cards
+    # records for its own signature.
     store: CardStore,
     *,
     settings: Settings | None = None,
     transport: httpx.BaseTransport | None = None,
     project: str | None = None,
+    repository_id: int | None = None,
     full: bool = False,
 ) -> dict[str, Any]:
-    """Import a project's issues as cards. Never raises.
+    """Import ONE REPOSITORY's issues as cards. Never raises.
+
+    Which repository (RFC-0020 §3.3 phase 8, and §3.6's import made per-repository
+    rather than per-tenant): ``repository_id`` if given, else the repository whose
+    project path matches ``project``, else the tenant's default. The provider, the
+    host and the credential come from THAT repository's connection, which is what
+    lets one tenant import from four repositories across two providers by calling
+    this four times.
 
     Incremental by default: after the first pass a ``last_synced_at`` watermark
     exists and only issues updated since (minus a 60s clock-skew overlap) are
     asked for. ``full=True`` ignores the watermark and re-reads everything, which
-    is safe at any time because the import is an upsert.
+    is safe at any time because the import is an upsert. The watermark is per
+    (tenant, project) already, so two repositories never share one.
 
     Same fail-safe contract as ``github_sync.sync_card``: a provider outage
     returns ``ok=False`` with the reason, rather than 500ing the board.
     """
     settings = settings or get_settings()
-    git = store.git_target(settings)
+    git = store.git_target_for(settings, repository_id=repository_id, project=project)
     if not sync_enabled(git):
         return _result(project or "", ok=True, reason="git provider sync not configured")
 
-    # The tenant's intake project is where a backfill READS from, falling back to
-    # the sync project (RFC-0020 §3.3). An explicit argument still wins — the
-    # import endpoint takes a project so a one-off pull from another repo does
-    # not require editing the tenant's configuration first.
+    # The repository's intake project is where a backfill READS from, falling back
+    # to its own path (RFC-0020 §3.3). An explicit argument still wins — the import
+    # endpoint takes a project so a one-off pull from a repo the tenant has not
+    # configured at all is possible, on the resolved connection.
     target = (project or git.import_project or "").strip()
     if PROJECT_RE.match(target) is None:
         return _result(
             target,
             ok=False,
             reason=(
-                "cannot import: no project is configured for this tenant — set one in "
-                "Settings > Git integration, or pass one explicitly"
+                "cannot import: no project is configured for this tenant — add a repository "
+                "in Settings > Git integration, or pass one explicitly"
             ),
         )
 
@@ -309,7 +329,7 @@ def import_issues(
     for issue in issues:
         ref = IssueRef(target, issue.number)
         try:
-            tally[_import_one(store, ref, issue)] += 1
+            tally[_import_one(store, ref, issue, git.repository_id)] += 1
         except Exception as exc:  # noqa: BLE001 — one malformed issue must not
             # abandon the other 199. Counted as skipped and logged.
             logger.warning("could not import %s: %s", ref, exc)
@@ -346,15 +366,28 @@ async def poll_forever(store: CardStore, settings: Settings) -> None:
     here — a deploy that configured a token opted into syncing cards, not into a
     background job hitting someone's API every five minutes.
 
-    ponytail: polls the default tenant's configured project only. A per-tenant
-    git config (RFC-0020 §3.3) is the phase that owns "which repos does tenant X
-    import from"; when it lands, loop over its rows here.
+    Since RFC-0020 phase 8 it polls EVERY repository this store's tenant has, one
+    at a time, each on its own connection — so a tenant with repos on GitHub and on
+    a self-hosted GitLab reconciles both. A tenant with none still polls once,
+    which resolves against the deployment's environment variables exactly as before.
+
+    ponytail: this store's tenant only, and sequentially. Multi-tenant polling
+    wants a tenant enumeration this store does not have, and a slow host delays the
+    next repository rather than the next cycle; parallelise only if a deployment
+    ever has enough repositories for that to bite.
     """
     while True:
         await asyncio.sleep(max(1.0, settings.import_poll_seconds))
         try:
-            result = await run_in_threadpool(import_issues, store, settings=settings)
-            logger.info("issue import poll: %s", result)
+            repositories = await run_in_threadpool(store.repositories)
+            # [None] when the tenant has none: one pass that resolves against the
+            # deployment's environment variables, exactly as before this phase.
+            targets: list[int | None] = [repo.id for repo in repositories] or [None]
+            for repository_id in targets:
+                result = await run_in_threadpool(
+                    import_issues, store, settings=settings, repository_id=repository_id
+                )
+                logger.info("issue import poll: %s", result)
         except asyncio.CancelledError:
             raise
         except Exception:

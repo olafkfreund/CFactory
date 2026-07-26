@@ -1,4 +1,4 @@
-"""Encrypted per-tenant git credentials (RFC-0020 §3.4, phase 3).
+"""Encrypted per-connection git credentials (RFC-0020 §3.4, phases 3 and 8).
 
 Phase 2 made "which host and which project" a tenant resource and deliberately
 stopped short of the credential, so a multi-tenant deployment still reached every
@@ -24,10 +24,19 @@ Two properties fall out of that shape, and both are the reason for it:
   are still open) changes where the *wrapping* key comes from and leaves the
   stored record format untouched.
 
-**The tenant is bound INTO the ciphertext.** Both AES-GCM layers take the tenant
-id as associated data, so a record lifted from tenant B's row into tenant A's
-does not decrypt — the isolation is cryptographic, not only a WHERE clause. The
-WHERE clause is still there; this is the guard for when it is wrong.
+**The tenant AND the connection are bound INTO the ciphertext.** Both AES-GCM
+layers take the tenant id and the connection id as associated data, so a record
+lifted from tenant B's row into tenant A's does not decrypt — and neither does
+one lifted from tenant A's GitLab connection onto tenant A's GitHub connection.
+The isolation is cryptographic, not only a WHERE clause. The WHERE clause is
+still there; this is the guard for when it is wrong.
+
+Phase 8 is what added the connection to that binding, because phase 8 is what
+made a tenant able to have more than one. A record sealed before it — bound to
+the tenant only — is marked :data:`LEGACY_AAD_VERSION` and re-sealed onto the
+connection-bound binding the first time it is read (and at boot, see
+:meth:`cfactory.cards.CardStore.adopt_legacy_git_config`). Nothing is decrypted
+to disk to do it: the plaintext exists in memory for the length of one re-seal.
 
 **Nothing here fails open.** No KEK configured means storing a credential is
 refused with an error that says so; it never writes plaintext, and it never
@@ -73,6 +82,16 @@ _DEFAULT_KEY_ID = "v1"
 # How long a key id may be. It is stored per record and echoed in the panel, so
 # it is bounded like every other stored string here.
 _KEY_ID_MAX = 32
+
+# The associated-data shape a record was sealed under. 2 binds (tenant,
+# connection) and is what every seal produces; 1 is the pre-phase-8 tenant-only
+# binding, which only a record written before RFC-0020 phase 8 carries.
+#
+# ponytail: a one-release bridge. Once every deployment has booted phase 8 with
+# its key present, every row reports 2 and the legacy branch (and this constant)
+# can be deleted — the panel shows nothing that depends on it.
+LEGACY_AAD_VERSION = 1
+AAD_VERSION = 2
 
 
 def _now() -> datetime:
@@ -190,31 +209,60 @@ def require_keyring(settings: Settings) -> KeyRing:
 class Sealed:
     """One sealed credential: the wrapped data key, the ciphertext, and which KEK.
 
-    Exactly the three stored columns, so the crypto is testable without a
+    Exactly the four stored columns, so the crypto is testable without a
     database and the store layer never assembles a nonce by hand.
     """
 
     key_version: str
     wrapped_key: bytes
     ciphertext: bytes
+    # Which associated-data shape sealed this record: 2 binds (tenant,
+    # connection), 1 is the pre-phase-8 tenant-only binding. Defaulted to the
+    # current one so nothing can create a legacy record by forgetting a field.
+    aad_version: int = AAD_VERSION
 
     def __repr__(self) -> str:
         """Sizes, never bytes — a sealed value still deserves not to be printed."""
-        return f"Sealed(key_version={self.key_version!r}, bytes={len(self.ciphertext)})"
+        return (
+            f"Sealed(key_version={self.key_version!r}, aad_version={self.aad_version}, "
+            f"bytes={len(self.ciphertext)})"
+        )
 
 
-def _kek_aad(tenant: str, key_version: str) -> bytes:
-    """Associated data binding a wrapped DEK to its tenant AND its KEK version."""
-    return f"cfactory/git-credential/kek/{tenant}/{key_version}".encode()
+def _scope(tenant: str, connection: int | None) -> str:
+    """The identity a record is cryptographically bound to.
+
+    ``connection is None`` is the LEGACY (pre-phase-8) binding — tenant only —
+    and is reachable exactly one way: a stored record whose ``aad_version`` says
+    it was sealed that way. Every seal this module performs binds a connection,
+    which is what stops a sealed record being replayed from one of a tenant's
+    connections onto another.
+
+    Length-prefixed on the current path (``4:acme/7``) so the components cannot
+    be confused with one another: a tenant id is header-derived text that may
+    contain a slash, and without the prefix tenant ``acme/7`` with no connection
+    would produce the same associated data as tenant ``acme`` on connection 7.
+    The legacy strings are reproduced byte-for-byte instead, because changing
+    them would make every existing record undecryptable — which is the outage
+    this bridge exists to avoid.
+    """
+    if connection is None:
+        return tenant
+    return f"{len(tenant)}:{tenant}/{connection}"
 
 
-def _dek_aad(tenant: str) -> bytes:
-    """Associated data binding a sealed credential to its tenant.
+def _kek_aad(tenant: str, key_version: str, connection: int | None) -> bytes:
+    """Associated data binding a wrapped DEK to its scope AND its KEK version."""
+    return f"cfactory/git-credential/kek/{_scope(tenant, connection)}/{key_version}".encode()
+
+
+def _dek_aad(tenant: str, connection: int | None) -> bytes:
+    """Associated data binding a sealed credential to its tenant and connection.
 
     Deliberately does NOT include the key version: that is what lets
     :func:`rewrap` rotate the KEK without ever decrypting the credential.
     """
-    return f"cfactory/git-credential/dek/{tenant}".encode()
+    return f"cfactory/git-credential/dek/{_scope(tenant, connection)}".encode()
 
 
 def _encrypt(key: bytes, plaintext: bytes, aad: bytes) -> bytes:
@@ -237,18 +285,36 @@ def _decrypt(key: bytes, blob: bytes, aad: bytes, *, what: str) -> bytes:
         ) from None
 
 
-def seal(secret: str, *, tenant: str, keyring: KeyRing) -> Sealed:
-    """Seal *secret* for *tenant* under the key ring's ACTIVE key."""
+def seal(secret: str, *, tenant: str, connection: int, keyring: KeyRing) -> Sealed:
+    """Seal *secret* for *tenant*'s *connection* under the key ring's ACTIVE key.
+
+    ``connection`` is not optional and is not defaulted: a credential belongs to
+    exactly one connection (RFC-0020 §3.4 + phase 8), and binding it in here is
+    what makes a stolen record unusable on any other connection — including
+    another of the same tenant's.
+    """
     key_version, kek = keyring.active
     dek = AESGCM.generate_key(bit_length=_KEY_BYTES * 8)
     return Sealed(
         key_version=key_version,
-        wrapped_key=_encrypt(kek, dek, _kek_aad(tenant, key_version)),
-        ciphertext=_encrypt(dek, secret.encode(), _dek_aad(tenant)),
+        wrapped_key=_encrypt(kek, dek, _kek_aad(tenant, key_version, connection)),
+        ciphertext=_encrypt(dek, secret.encode(), _dek_aad(tenant, connection)),
+        aad_version=AAD_VERSION,
     )
 
 
-def _unwrap_dek(sealed: Sealed, *, tenant: str, keyring: KeyRing) -> bytes:
+def _binding(sealed: Sealed, connection: int) -> int | None:
+    """The connection this record is bound to, or ``None`` for a legacy record.
+
+    The ONE place the legacy binding is chosen, and it is chosen from the stored
+    ``aad_version`` rather than from anything a caller passes — so a caller cannot
+    ask for the weaker binding, and a record written by this release can never be
+    read under it.
+    """
+    return None if sealed.aad_version == LEGACY_AAD_VERSION else connection
+
+
+def _unwrap_dek(sealed: Sealed, *, tenant: str, connection: int, keyring: KeyRing) -> bytes:
     kek = keyring.find(sealed.key_version)
     if kek is None:
         raise CredentialError(
@@ -256,80 +322,140 @@ def _unwrap_dek(sealed: Sealed, *, tenant: str, keyring: KeyRing) -> bytes:
             f"stored credential for tenant {tenant!r}. Add it back to {KEY_ENV} (older "
             "keys stay listed after the active one) or store the credential again."
         )
-    return _decrypt(kek, sealed.wrapped_key, _kek_aad(tenant, sealed.key_version), what="data key")
+    return _decrypt(
+        kek,
+        sealed.wrapped_key,
+        _kek_aad(tenant, sealed.key_version, _binding(sealed, connection)),
+        what="data key",
+    )
 
 
-def unseal(sealed: Sealed, *, tenant: str, keyring: KeyRing) -> str:
-    """The credential *tenant* stored, or raise. Never returns a partial value."""
-    dek = _unwrap_dek(sealed, tenant=tenant, keyring=keyring)
-    return _decrypt(dek, sealed.ciphertext, _dek_aad(tenant), what="credential").decode()
+def unseal(sealed: Sealed, *, tenant: str, connection: int, keyring: KeyRing) -> str:
+    """The credential stored for *tenant*'s *connection*, or raise.
+
+    Never returns a partial value, and never returns anything for a record sealed
+    against a different tenant or a different connection — AES-GCM authenticates
+    the associated data, so the wrong binding fails the tag.
+    """
+    dek = _unwrap_dek(sealed, tenant=tenant, connection=connection, keyring=keyring)
+    return _decrypt(
+        dek, sealed.ciphertext, _dek_aad(tenant, _binding(sealed, connection)), what="credential"
+    ).decode()
 
 
-def rewrap(sealed: Sealed, *, tenant: str, keyring: KeyRing) -> Sealed | None:
+def rewrap(sealed: Sealed, *, tenant: str, connection: int, keyring: KeyRing) -> Sealed | None:
     """*sealed* re-wrapped onto the active KEK, or ``None`` if it is already there.
 
     The credential is NOT decrypted: only the data key moves keys, so a rotation
     never materialises a single plaintext token anywhere. That is the whole
     reason each record has its own data key rather than being encrypted with the
     KEK directly.
+
+    A LEGACY record (``aad_version`` 1) is left alone here even when its key has
+    moved, because re-wrapping cannot change the binding of the ciphertext: that
+    one needs :func:`reseal`, which does decrypt — once, in memory.
     """
     active_id, active_kek = keyring.active
     if sealed.key_version == active_id:
         return None
-    dek = _unwrap_dek(sealed, tenant=tenant, keyring=keyring)
+    dek = _unwrap_dek(sealed, tenant=tenant, connection=connection, keyring=keyring)
     return Sealed(
         key_version=active_id,
-        wrapped_key=_encrypt(active_kek, dek, _kek_aad(tenant, active_id)),
+        wrapped_key=_encrypt(
+            active_kek, dek, _kek_aad(tenant, active_id, _binding(sealed, connection))
+        ),
         ciphertext=sealed.ciphertext,
+        aad_version=sealed.aad_version,
     )
+
+
+def reseal(sealed: Sealed, *, tenant: str, connection: int, keyring: KeyRing) -> Sealed | None:
+    """A legacy record re-sealed onto the connection-bound binding, or ``None``.
+
+    The phase-8 upgrade step for a credential written before connections existed.
+    The plaintext is unsealed and re-sealed IN MEMORY and is never returned, never
+    logged and never written anywhere but back into the sealed columns — the
+    caller gets a :class:`Sealed`, exactly as it does from :func:`seal`.
+
+    ``None`` when the record already carries the current binding, so calling this
+    on every read (or every boot) is a no-op after the first time. Raises
+    :class:`CredentialError` when the record cannot be unsealed at all, which
+    leaves the stored row untouched and readable again once the right key is back.
+    """
+    if sealed.aad_version == AAD_VERSION:
+        return None
+    secret = unseal(sealed, tenant=tenant, connection=connection, keyring=keyring)
+    return seal(secret, tenant=tenant, connection=connection, keyring=keyring)
 
 
 # ── storage ──────────────────────────────────────────────────────────────────
 
 
 class GitCredentialRow(Base):
-    """One tenant's sealed git credential. Exactly one row per tenant.
+    """One CONNECTION's sealed git credential. Exactly one row per connection.
 
-    Its own table rather than a column on ``tenant_git_config``: the two have
-    different lifetimes (replacing a credential must not disturb a verified
-    configuration, and clearing one must not clear the other) and, more to the
-    point, a credential column on a config table is the thing a future
-    ``SELECT *`` on the config accidentally returns.
+    Its own table rather than a column on the connection: the two have different
+    lifetimes (replacing a credential must not disturb a verified connection, and
+    clearing one must not clear the other) and, more to the point, a credential
+    column on the connection table is the thing a future ``SELECT *`` on the
+    connection accidentally returns.
+
+    ``tenant_id`` stays even though the connection already carries one: it is half
+    the cryptographic binding, so reading it from this row rather than from a join
+    means an unsealing attempt cannot be talked into the wrong tenant by a
+    mis-scoped query.
     """
 
     __tablename__ = "tenant_git_credential"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tenant_id: Mapped[str] = mapped_column(
-        String(64), default=DEFAULT_TENANT, server_default=DEFAULT_TENANT
+        String(64), default=DEFAULT_TENANT, server_default=DEFAULT_TENANT, index=True
     )
+    # The connection this credential authenticates. NULL only on a record written
+    # before RFC-0020 phase 8 and not yet adopted — see
+    # :meth:`cfactory.cards.CardStore.adopt_legacy_git_config`.
+    connection_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Which KEK wraps this record's data key. The forward-compatibility hinge:
     # swapping the KEK source (env today, a KMS once Factory#314/#315 land) is a
     # re-wrap of this row, never a change to the stored format.
     key_version: Mapped[str] = mapped_column(String(_KEY_ID_MAX))
+    # Which associated-data shape sealed it (see AAD_VERSION). Server-defaulted to
+    # the LEGACY value, because the only rows that can predate the column are
+    # legacy ones; every row this code writes sets it explicitly.
+    aad_version: Mapped[int] = mapped_column(
+        Integer, default=AAD_VERSION, server_default=str(LEGACY_AAD_VERSION)
+    )
     wrapped_key: Mapped[bytes] = mapped_column(LargeBinary)
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
-    __table_args__ = (Index("ix_tenant_git_credential_tenant", "tenant_id", unique=True),)
+    # One credential per connection, enforced by the database rather than by an
+    # application check that loses a race between two concurrent first writes.
+    # NULLs are distinct in both SQLite and PostgreSQL, so an unadopted legacy row
+    # does not collide with anything.
+    __table_args__ = (Index("ix_tenant_git_credential_connection", "connection_id", unique=True),)
 
     def sealed(self) -> Sealed:
-        return Sealed(self.key_version, self.wrapped_key, self.ciphertext)
+        return Sealed(self.key_version, self.wrapped_key, self.ciphertext, self.aad_version)
 
 
 class CredentialInfo(BaseModel):
     """Everything a READ is allowed to know about a credential.
 
     That there is one, when it was last written, and which key wraps it — which
-    is what an operator needs to answer "is this tenant connected?" and "has the
-    rotation reached every record yet?". There is deliberately no field for the
-    credential, not even a masked prefix: a stored last-four is still a stored
-    fragment of a secret, and nothing on this board needs one.
+    is what an operator needs to answer "is this connection authenticated?" and
+    "has the rotation reached every record yet?". There is deliberately no field
+    for the credential, not even a masked prefix: a stored last-four is still a
+    stored fragment of a secret, and nothing on this board needs one.
     """
 
     configured: bool
-    source: str  # "tenant" | "env" | "none"
+    # "tenant" for a stored one (the name predates connections and is kept so a
+    # cockpit built against phase 3 keeps parsing it), "env" for the deployment's,
+    # "none" for neither.
+    source: str
     updated_at: datetime | None = None
     key_version: str | None = None
 

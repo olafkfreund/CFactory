@@ -2,12 +2,25 @@
 
 Which git host the board talks to, and which project it syncs with, is a
 **tenant-level resource** here rather than a process-global environment
-variable. A tenant has exactly one git configuration, it is editable from the
-cockpit, and it is the single thing every consumer reads:
-:mod:`cfactory.github_sync` (open/adopt an issue), :mod:`cfactory.issue_import`
-(pull a repo's backlog in) and :mod:`cfactory.card_intake` (dispatch a card into
-AIFactory/TFactory) all resolve through :meth:`cfactory.cards.CardStore.git_target`
-and nowhere else.
+variable. It is editable from the cockpit, and it is the single thing every
+consumer reads: :mod:`cfactory.github_sync` (open/adopt an issue),
+:mod:`cfactory.issue_import` (pull a repo's backlog in) and
+:mod:`cfactory.card_intake` (dispatch a card into AIFactory/TFactory) all resolve
+through :meth:`cfactory.cards.CardStore.git_target_for` and nowhere else.
+
+**Phase 8 made it many, not one.** A tenant used to have exactly ONE
+configuration row — one provider against one repository — which is wrong for any
+organisation with repos on more than one host. :mod:`cfactory.git_connections`
+holds the model that replaced it: many CONNECTIONS per tenant, many REPOSITORIES
+per connection, one repository marked as the tenant default. What stays here is
+the vocabulary both levels share (the supported providers, the default hosts, the
+project/label/base-url validation, the derived status) plus the FLAT view the
+pre-phase-8 endpoints and MCP tools still speak, which
+:class:`cfactory.cards.CardStore` now serves from the tenant's default repository.
+
+:class:`GitConfigRow` is the legacy table. Nothing writes it any more; it is read
+exactly once, by :meth:`cfactory.cards.CardStore.adopt_legacy_git_config` at boot,
+which turns each row into a connection plus a default repository.
 
 **Why this exists at all.** Before it, the two questions a user most wants to
 answer — "which repo does my board sync with?" and "which project do my builds
@@ -131,7 +144,14 @@ class GitConfigError(ValueError):
 
 
 class GitConfigRow(Base):
-    """One tenant's git configuration. Exactly one row per tenant."""
+    """The LEGACY one-row-per-tenant git configuration (phases 2 to 7).
+
+    Kept, unwritten, for exactly one purpose: RFC-0020 phase 8 reads it at boot and
+    adopts each row into a connection plus a default repository (see
+    :meth:`cfactory.cards.CardStore.adopt_legacy_git_config`). Deleting the table
+    would make the upgrade unrepeatable and a downgrade impossible, so it stays
+    until a later release drops both together.
+    """
 
     __tablename__ = "tenant_git_config"
 
@@ -343,6 +363,11 @@ class GitTarget:
     verified_at: datetime | None = None
     verify_error: str | None = None
     credential_rejected: bool | None = None
+    # Which connection and which repository this target came from (RFC-0020 §3.3
+    # phase 8). NULL on a target resolved from the deployment environment, which
+    # is not a stored resource and has nothing to record a verification against.
+    connection_id: int | None = None
+    repository_id: int | None = None
 
     @property
     def status(self) -> str:

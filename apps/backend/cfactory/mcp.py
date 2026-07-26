@@ -74,6 +74,13 @@ from .copilot.tools import summarize_timeline
 from .credentials import CredentialError
 from .enterprise import identity_dep
 from .git_config import SUPPORTED_PROVIDERS, GitConfigError, GitConfigUpdate
+from .git_connections import (
+    GitConnectionCreate,
+    GitConnectionUpdate,
+    GitRepositoryCreate,
+    GitRepositoryUpdate,
+    GitResourceNotFoundError,
+)
 from .store import get_store
 
 logger = logging.getLogger(__name__)
@@ -151,6 +158,17 @@ MCP_TOOLS: list[dict[str, Any]] = [
 
 _CARD_KEY_PROP = {"type": "string", "description": "Stable card id, e.g. 'FCT-42'."}
 
+# The two ids the phase-8 git surface addresses, declared once so every tool
+# describes them the same way (RFC-0020 §3.3).
+_CONNECTION_ID_PROP = {
+    "type": "integer",
+    "description": "Connection id, from cfactory_list_git_connections.",
+}
+_REPOSITORY_ID_PROP = {
+    "type": "integer",
+    "description": "Repository id, from cfactory_list_git_connections or _list_git_repositories.",
+}
+
 # The fields an agent may edit on an existing card. Declared once and spliced
 # into both the create and the update schema so the two can never drift.
 _CARD_FIELDS: dict[str, Any] = {
@@ -176,6 +194,16 @@ _CARD_FIELDS: dict[str, Any] = {
             "Adopt an EXISTING GitHub issue, as 'owner/repo#123' (RFC-0019 §3.5). Set "
             "this instead of letting the card open its own issue. Once set, GitHub's "
             "title, labels and open/closed state win over the card's on every sync."
+        ),
+    },
+    "repository_id": {
+        "type": ["integer", "null"],
+        "description": (
+            "Which of this tenant's configured repositories this card is for (from "
+            "cfactory_list_git_repositories). Omit — or send null — for the tenant's "
+            "default repository, which is what a board with one repository always means. "
+            "Setting it decides which host the card's issue is opened on, which "
+            "credential is used, and which AIFactory project its build lands in."
         ),
     },
 }
@@ -386,7 +414,15 @@ BOARD_TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": (
                         "Project path to import from ('owner/repo'); defaults to the "
-                        "configured repository."
+                        "tenant's default repository."
+                    ),
+                },
+                "repository_id": {
+                    "type": "integer",
+                    "description": (
+                        "Import from THIS configured repository (from "
+                        "cfactory_list_git_repositories) — which also decides the connection, "
+                        "and therefore the host and credential, used to read it."
                     ),
                 },
                 "full": {
@@ -525,9 +561,266 @@ BOARD_TOOLS: list[dict[str, Any]] = [
             "Forget this tenant's git credential — the revocation path for one that has "
             "leaked or been rotated at the provider. Idempotent: removing one that is not "
             "there is not an error. The board keeps serving afterwards; its git status "
-            "simply becomes credential_missing."
+            "simply becomes credential_missing. Operates on the connection the tenant's "
+            "default repository lives on; use cfactory_delete_git_connection_credential for "
+            "a specific one."
         ),
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    # ── Connections and repositories (RFC-0020 §3.3, phase 8) ────────────────
+    # The two-level model that replaces the single configuration above. No tenant
+    # argument on any of them, for the same reason: a tool operates on the
+    # CALLER's tenant, so there is no way to name somebody else's.
+    {
+        "name": "cfactory_list_git_connections",
+        "description": (
+            "List this tenant's git CONNECTIONS, each with its repositories. A connection is "
+            "a place the board can authenticate to (provider github / gitlab / azure_devops, "
+            "a host, and a credential); a repository is something to work on through one (its "
+            "project path, the project issues are imported from, and the AIFactory project "
+            "its builds land in). A tenant may have many of both — repos on GitHub and on a "
+            "self-hosted GitLab at the same time. 'default_repository_id' is the repository a "
+            "card that names none resolves to. Each connection's 'status' is derived: "
+            "unconfigured (no repositories), credential_missing (no usable credential, or one "
+            "the host refused), configured (never proved), verified (proved by "
+            "cfactory_verify_git_connection). No credential is ever returned."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cfactory_create_git_connection",
+        "description": (
+            "Add a git connection for this tenant: a provider and, for a self-hosted GitHub "
+            "Enterprise / GitLab / Azure DevOps Server, its host. Refused when this tenant "
+            "already has a connection to the same provider and host — one host is configured "
+            "once, so that 'which credential reaches it' has one answer. Store the credential "
+            "separately with cfactory_set_git_connection_credential; it is never accepted here."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": list(SUPPORTED_PROVIDERS),
+                    "description": "Which git host. Defaults to github.",
+                },
+                "base_url": {
+                    "type": "string",
+                    "description": (
+                        "Host root, for a self-hosted instance. Omit for the provider's "
+                        "public default."
+                    ),
+                },
+                "label": {
+                    "type": "string",
+                    "description": (
+                        "Human name shown in the cockpit ('Work GitHub'). Defaults to the "
+                        "provider name."
+                    ),
+                },
+            },
+        },
+    },
+    {
+        "name": "cfactory_update_git_connection",
+        "description": (
+            "Change a connection's provider, host or label. A PATCH: only the fields you send "
+            "are applied. Moving it to another provider or host CLEARS its verification, "
+            "because that proved a connection this one no longer is; renaming it does not. The "
+            "credential is untouched — it belongs to the connection, not to its host."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["connection_id"],
+            "properties": {
+                "connection_id": _CONNECTION_ID_PROP,
+                "provider": {"type": "string", "enum": list(SUPPORTED_PROVIDERS)},
+                "base_url": {"type": "string"},
+                "label": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "cfactory_delete_git_connection",
+        "description": (
+            "Forget a connection, ITS REPOSITORIES and its credential — everything that hangs "
+            "off it, since a repository cannot be reached without its host. Cards are NOT "
+            "deleted: a card whose repository is gone falls back to the tenant's default "
+            "repository, and if the default was on this connection the oldest remaining "
+            "repository is promoted."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["connection_id"],
+            "properties": {"connection_id": _CONNECTION_ID_PROP},
+        },
+    },
+    {
+        "name": "cfactory_verify_git_connection",
+        "description": (
+            "Check that one connection's host answers and its credential is accepted: one "
+            "cheap authenticated read of one of its repositories (the tenant default when "
+            "that is on this connection, otherwise its oldest). Records the outcome, so the "
+            "connection's status becomes 'verified' or keeps the failure reason. An "
+            "unreachable host is ok=false with the reason, never an error; a connection with "
+            "no repositories yet is ok=false with status 'unconfigured', because there is "
+            "nothing on it to read."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["connection_id"],
+            "properties": {"connection_id": _CONNECTION_ID_PROP},
+        },
+    },
+    {
+        "name": "cfactory_set_git_connection_credential",
+        "description": (
+            "Store (or replace) the credential ONE connection authenticates with. WRITE-ONLY: "
+            "it is encrypted at rest, sealed against this tenant AND this connection (so the "
+            "stored record cannot be replayed onto another connection), and no tool, endpoint "
+            "or panel ever returns it — cfactory_list_git_connections reports only WHETHER one "
+            "is configured. Refused when the deployment has no credential encryption key, "
+            "rather than stored unencrypted. Every later use of it is written to the audit "
+            "chain."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["connection_id", "credential"],
+            "properties": {
+                "connection_id": _CONNECTION_ID_PROP,
+                "credential": {
+                    "type": "string",
+                    "description": (
+                        "Whichever credential the provider issues for API access. Sent once, "
+                        "never read back."
+                    ),
+                },
+            },
+        },
+    },
+    {
+        "name": "cfactory_delete_git_connection_credential",
+        "description": (
+            "Forget ONE connection's credential — the revocation path for one that has leaked "
+            "or been rotated at the provider. Idempotent. The connection keeps its "
+            "repositories and simply reads as credential_missing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["connection_id"],
+            "properties": {"connection_id": _CONNECTION_ID_PROP},
+        },
+    },
+    {
+        "name": "cfactory_list_git_repositories",
+        "description": (
+            "List this tenant's repositories as a flat list — everything a card can be "
+            "dispatched to — optionally just one connection's. 'is_default' marks the one a "
+            "card that names no repository resolves to."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "connection_id": {
+                    "type": "integer",
+                    "description": "Only this connection's repositories. Omit for all of them.",
+                }
+            },
+        },
+    },
+    {
+        "name": "cfactory_create_git_repository",
+        "description": (
+            "Add a repository to one of this tenant's connections: the project the board syncs "
+            "cards with, optionally a different project to import issues from, and the "
+            "AIFactory project id dispatched cards are built in. The FIRST repository a tenant "
+            "has becomes its default whatever make_default says, because a tenant with "
+            "repositories and no default would refuse every card that named none. Rejects a "
+            "project path the connection's provider cannot address and any 'factory:<tier>' "
+            "default label (that label is the fleet's intake trigger — it would build the same "
+            "card twice)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["connection_id", "project"],
+            "properties": {
+                "connection_id": _CONNECTION_ID_PROP,
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "'owner/repo' on GitHub, a group path on GitLab, "
+                        "'organization/project/repo' on Azure DevOps."
+                    ),
+                },
+                "intake_project": {
+                    "type": "string",
+                    "description": (
+                        "Optional: import issues from THIS project instead of 'project'."
+                    ),
+                },
+                "aifactory_project_id": {
+                    "type": "string",
+                    "description": (
+                        "The AIFactory project id a card dispatched to this repository is "
+                        "BUILT in (an opaque project uuid, not a repository path)."
+                    ),
+                },
+                "default_labels": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Labels put on issues the board opens. No 'factory:*'.",
+                },
+                "make_default": {
+                    "type": "boolean",
+                    "description": "Make this the repository a card that names none resolves to.",
+                },
+            },
+        },
+    },
+    {
+        "name": "cfactory_update_git_repository",
+        "description": (
+            "Change a repository's project, intake project, AIFactory project id or default "
+            "labels. A PATCH: only the fields you send are applied, and sending null for "
+            "intake_project or aifactory_project_id clears it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["repository_id"],
+            "properties": {
+                "repository_id": _REPOSITORY_ID_PROP,
+                "project": {"type": "string"},
+                "intake_project": {"type": ["string", "null"]},
+                "aifactory_project_id": {"type": ["string", "null"]},
+                "default_labels": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+    },
+    {
+        "name": "cfactory_delete_git_repository",
+        "description": (
+            "Forget a repository. Cards that pointed at it are NOT deleted — they fall back to "
+            "the tenant's default repository, exactly like a card that never named one. If this "
+            "was the default, the oldest remaining repository is promoted."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["repository_id"],
+            "properties": {"repository_id": _REPOSITORY_ID_PROP},
+        },
+    },
+    {
+        "name": "cfactory_set_default_git_repository",
+        "description": (
+            "Make one repository this tenant's default: the one a card that names no repository "
+            "resolves to, for syncing its issue, for importing, and for which AIFactory project "
+            "its build lands in. A tenant has exactly one default, enforced by the database."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["repository_id"],
+            "properties": {"repository_id": _REPOSITORY_ID_PROP},
+        },
     },
 ]
 
@@ -568,6 +861,21 @@ TOOL_SCOPES: dict[str, str] = {
     # because nothing can.
     "cfactory_set_git_credential": WRITE,
     "cfactory_delete_git_credential": WRITE,
+    # Connections and repositories (RFC-0020 §3.3, phase 8). Verify is a WRITE for
+    # the same reason the single-config one is: it calls somebody's git host and
+    # records the result.
+    "cfactory_list_git_connections": READ,
+    "cfactory_create_git_connection": WRITE,
+    "cfactory_update_git_connection": WRITE,
+    "cfactory_delete_git_connection": WRITE,
+    "cfactory_verify_git_connection": WRITE,
+    "cfactory_set_git_connection_credential": WRITE,
+    "cfactory_delete_git_connection_credential": WRITE,
+    "cfactory_list_git_repositories": READ,
+    "cfactory_create_git_repository": WRITE,
+    "cfactory_update_git_repository": WRITE,
+    "cfactory_delete_git_repository": WRITE,
+    "cfactory_set_default_git_repository": WRITE,
 }
 
 
@@ -745,10 +1053,12 @@ def _tool_sync_card_github(args: dict[str, Any], ctx: ToolContext) -> Any:
 
 
 def _tool_import_cards(args: dict[str, Any], ctx: ToolContext) -> Any:
+    raw = args.get("repository_id")
     return card_ops.import_cards(
         ctx.cards,
         ctx.audit,
         project=args.get("project"),
+        repository_id=_repository_id(args) if raw is not None else None,
         full=bool(args.get("full", False)),
         transport=ctx.transport,
     )
@@ -778,6 +1088,98 @@ def _tool_set_git_credential(args: dict[str, Any], ctx: ToolContext) -> Any:
 
 def _tool_delete_git_credential(_args: dict[str, Any], ctx: ToolContext) -> Any:
     return git_config_ops.clear_git_credential(ctx.cards, ctx.audit)
+
+
+# ── Connections and repositories (RFC-0020 §3.3, phase 8) ────────────────────
+# Every one of these calls the SAME git_config_ops function its REST twin does,
+# which is what makes parity a property rather than a coincidence.
+
+
+def _connection_id(args: dict[str, Any]) -> int:
+    """The connection id an argument names, or a 400-shaped refusal.
+
+    MCP arguments are JSON from an agent, so the id is validated here rather than
+    trusted — a string 'abc' must be a clean error, not a 500 from the store.
+    """
+    try:
+        return int(args["connection_id"])
+    except (KeyError, TypeError, ValueError):
+        raise GitConfigError(
+            "connection_id must be the integer id of one of your connections"
+        ) from None
+
+
+def _repository_id(args: dict[str, Any]) -> int:
+    try:
+        return int(args["repository_id"])
+    except (KeyError, TypeError, ValueError):
+        raise GitConfigError(
+            "repository_id must be the integer id of one of your repositories"
+        ) from None
+
+
+def _tool_list_git_connections(_args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.list_git_connections(ctx.cards)
+
+
+def _tool_create_git_connection(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.create_git_connection(ctx.cards, ctx.audit, GitConnectionCreate(**args))
+
+
+def _tool_update_git_connection(args: dict[str, Any], ctx: ToolContext) -> Any:
+    fields = {k: v for k, v in args.items() if k != "connection_id"}
+    return git_config_ops.update_git_connection(
+        ctx.cards, ctx.audit, _connection_id(args), GitConnectionUpdate(**fields)
+    )
+
+
+def _tool_delete_git_connection(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.delete_git_connection(ctx.cards, ctx.audit, _connection_id(args))
+
+
+def _tool_verify_git_connection(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.verify_git_connection(
+        ctx.cards, ctx.audit, _connection_id(args), transport=ctx.transport
+    )
+
+
+def _tool_set_git_connection_credential(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.set_connection_credential(
+        ctx.cards, ctx.audit, _connection_id(args), str(args.get("credential") or "")
+    )
+
+
+def _tool_delete_git_connection_credential(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.clear_connection_credential(ctx.cards, ctx.audit, _connection_id(args))
+
+
+def _tool_list_git_repositories(args: dict[str, Any], ctx: ToolContext) -> Any:
+    raw = args.get("connection_id")
+    return git_config_ops.list_git_repositories(
+        ctx.cards, _connection_id(args) if raw is not None else None
+    )
+
+
+def _tool_create_git_repository(args: dict[str, Any], ctx: ToolContext) -> Any:
+    fields = {k: v for k, v in args.items() if k != "connection_id"}
+    return git_config_ops.create_git_repository(
+        ctx.cards, ctx.audit, _connection_id(args), GitRepositoryCreate(**fields)
+    )
+
+
+def _tool_update_git_repository(args: dict[str, Any], ctx: ToolContext) -> Any:
+    fields = {k: v for k, v in args.items() if k != "repository_id"}
+    return git_config_ops.update_git_repository(
+        ctx.cards, ctx.audit, _repository_id(args), GitRepositoryUpdate(**fields)
+    )
+
+
+def _tool_delete_git_repository(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.delete_git_repository(ctx.cards, ctx.audit, _repository_id(args))
+
+
+def _tool_set_default_git_repository(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return git_config_ops.set_default_git_repository(ctx.cards, ctx.audit, _repository_id(args))
 
 
 def _tool_stage_card(stage: str) -> Callable[[dict[str, Any], ToolContext], Any]:
@@ -825,6 +1227,18 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_verify_git_config": _tool_verify_git_config,
     "cfactory_set_git_credential": _tool_set_git_credential,
     "cfactory_delete_git_credential": _tool_delete_git_credential,
+    "cfactory_list_git_connections": _tool_list_git_connections,
+    "cfactory_create_git_connection": _tool_create_git_connection,
+    "cfactory_update_git_connection": _tool_update_git_connection,
+    "cfactory_delete_git_connection": _tool_delete_git_connection,
+    "cfactory_verify_git_connection": _tool_verify_git_connection,
+    "cfactory_set_git_connection_credential": _tool_set_git_connection_credential,
+    "cfactory_delete_git_connection_credential": _tool_delete_git_connection_credential,
+    "cfactory_list_git_repositories": _tool_list_git_repositories,
+    "cfactory_create_git_repository": _tool_create_git_repository,
+    "cfactory_update_git_repository": _tool_update_git_repository,
+    "cfactory_delete_git_repository": _tool_delete_git_repository,
+    "cfactory_set_default_git_repository": _tool_set_default_git_repository,
 }
 
 
@@ -843,6 +1257,9 @@ _TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...
     (StageRefusedError, lambda exc: {"error": exc.message, "reason": exc.code}),
     # A rejected git configuration: 400 over REST, the same sentence here.
     (GitConfigError, lambda exc: {"error": str(exc)}),
+    # A connection or repository this tenant does not have: 404 over REST. "Not
+    # found" for another tenant's id too — a 403 would confirm that it exists.
+    (GitResourceNotFoundError, lambda exc: {"error": str(exc)}),
     # A credential that could not be stored: 503 over REST, the same sentence
     # here. Its message names the misconfiguration and never the credential.
     (CredentialError, lambda exc: {"error": str(exc)}),

@@ -40,6 +40,7 @@ newcomer's first run, start with the
 - [The MCP board tools](#the-mcp-board-tools)
 - [Intake: how a card becomes a build](#intake-how-a-card-becomes-a-build)
 - [Git integration: the settings panel](#git-integration-the-settings-panel)
+- [Many repositories, many providers: connections](#many-repositories-many-providers-connections)
 - [Status write-back: the board is a live view](#status-write-back-the-board-is-a-live-view)
 - [Discovery: how an agent finds all this before it has a token](#discovery-how-an-agent-finds-all-this-before-it-has-a-token)
 - [Parity: the rule that keeps the two surfaces honest](#parity-the-rule-that-keeps-the-two-surfaces-honest)
@@ -99,6 +100,7 @@ Source: `apps/backend/cfactory/cards.py`.
 | `assignee` | string, max 128, nullable | `null` | Free text — no user directory, no validation. A typo is invisible and just makes the assignee filter miss. | A human handle (`olaf`) or a factory runtime (`aifactory`) so the filter can separate "a person is on this" from "the factory has it". |
 | `milestone` | string, max 128, nullable | `null` | Free text, same as assignee: a typo silently splits a release into two groups. | A short stable release name reused verbatim across cards (`v0.3`), not a date. |
 | `correlation_key` | string, max 128, nullable | `null` | Normally **set for you** by the intake dispatch. Setting it by hand on a card that was never dispatched makes the card permanently un-dispatchable (it reads as "already in the factory") — silently. Clearing it on a live card makes a second dispatch possible, which is a duplicate build. | Never set or clear it by hand. Treat it as server-owned. |
+| `repository_id` | integer, nullable | `null` | Which of the tenant's configured repositories this card is for (RFC-0020 section 3.3 phase 8). `null` means **the tenant's default repository** — which is what every card created before this phase means, and what a card whose repository has since been deleted falls back to. It decides which host the card's issue is opened on, which credential is used, and which AIFactory project its build lands in. A card whose `issue_ref` names a configured repository resolves to that one even when this is `null`. See [Many repositories, many providers](#many-repositories-many-providers-connections). | Leave it unset on a single-repository board. Set it in the same edit that picks the repo on a board with several, rather than relying on the default. |
 | `created_at` / `updated_at` | timestamp | now | Server-owned; `updated_at` refreshes on every applied change. | Read-only. |
 
 Two more rules that are easy to trip over:
@@ -369,10 +371,18 @@ RFC-0020 section 3.3 turns git configuration into a **tenant-level resource**.
 Before it, two process-global environment variables decided which host and which
 project every tenant talked to, and one of them —
 `CFACTORY_INTAKE_PROJECT_ID` — was an opaque UUID with no explanation reachable
-from the portal. Now a tenant has exactly one git configuration, it lives in
-**Settings > Git integration**, and it is what every part of the board reads:
-opening an issue for a `ready` card, importing a repository's existing issues,
-and dispatching a card into AIFactory.
+from the portal. Now git configuration lives in **Settings > Git integration**, and it is what
+every part of the board reads: opening an issue for a `ready` card, importing a
+repository's existing issues, and dispatching a card into AIFactory.
+
+A tenant used to have exactly ONE such configuration — one provider against one
+repository. RFC-0020 phase 8 replaced that with **connections and repositories**:
+many hosts per tenant, many repositories per host, and one repository that a card
+naming none falls back to. Read
+[Many repositories, many providers](#many-repositories-many-providers-connections)
+for that model; this section describes the single-configuration view, which is
+still served and still works, and now reads and writes the tenant's **default
+repository**.
 
 The credential is part of it since RFC-0020 section 3.4, as its own write-only
 resource: encrypted at rest, never returned by anything, and per tenant. See
@@ -582,6 +592,17 @@ nor remove a credential.
 mutation appends to the same tamper-evident HMAC audit chain the card mutations
 use, keyed on `tenant:<id>`.
 
+**Since RFC-0020 phase 8 these five are a view onto the tenant's default
+repository**, not a separate store. `GET` reads it; `PUT` writes it and the
+connection it lives on, editing that connection in place rather than adding one
+(so choosing a different host never strands the credential); `:verify` verifies
+that connection; the credential endpoints target it. One exception is worth
+knowing: clearing **Project** on this form clears the tenant's *default* and
+leaves every repository intact — it does not delete anything a human configured.
+An AIFactory project id belongs to a repository, so a configuration with no
+project has nowhere to keep one; name a project, or use the per-repository
+endpoints.
+
 **The tenant in the path is checked, not trusted.** It is a URL segment a caller
 chooses; the tenant a caller may actually touch comes from the resolved request
 identity (`X-Tenant-Id`, injected by oauth2-proxy from the Keycloak claim, never
@@ -613,6 +634,200 @@ the first save.
 
 The variables are removed in the release after this one. Set the values in the
 panel now; do not add them to a new deployment.
+
+---
+
+## Many repositories, many providers: connections
+
+> **As a human planner**, I want my board to hold work across several
+> repositories — some on GitHub, some on our own GitLab — **so that** planning a
+> feature that touches two services does not mean two boards or a reconfigured
+> one.
+
+> **As an operator**, I want each host configured once, with its own credential,
+> **so that** rotating the GitLab token cannot break GitHub and a leaked token has
+> one blast radius I can name.
+
+> **As an agent driving the board over MCP**, I want to list the repositories a
+> tenant has and dispatch a card to a named one, **so that** I do not have to
+> guess which repo "the" configuration currently points at.
+
+Before this, a tenant had one configuration row: one provider, one host, one
+project, one credential. The three provider buttons in Settings were therefore a
+**choice**, not three connections — picking GitLab reconfigured the board away
+from GitHub. Two levels replace it.
+
+### What a connection is, and what a repository is
+
+A **connection** is a place the board can authenticate to:
+
+- a **provider** (`github`, `gitlab`, `azure_devops`),
+- a **host** (`base_url`) — the field that makes a self-hosted GitHub Enterprise,
+  GitLab or Azure DevOps Server work,
+- a **credential**, encrypted at rest and never returned by anything,
+- a **label**, so a human can tell two of them apart,
+- and whatever the last **verify** proved.
+
+A **repository** is something to work on *through* a connection:
+
+- a **project** path (`owner/repo`, `group/subgroup/project`,
+  `organization/project/repo`),
+- optionally **import from** (`intake_project`) — where the import reads issues
+  when that differs from the project above,
+- an **AIFactory project id** — which AIFactory project a card for this repository
+  is *built* in,
+- **default labels** put on issues the board opens for it.
+
+The split is not cosmetic. A credential authenticates to a **host**, so two
+repositories on the same host are reached with the same token: keeping it on the
+connection means rotating it once and leaking it from one row. Verification works
+the same way — what a verify proves is "this host answers and accepts this
+credential", which it demonstrates by reading one of the connection's
+repositories.
+
+A tenant may have as many connections as it likes, and **no two of them may name
+the same (provider, host)**. Configuring github.com twice is a mistake, not a
+feature: it would leave "which credential reaches github.com?" without a single
+answer.
+
+### What happens to a card that names no repository
+
+Every tenant with any repository has **exactly one default**, and the database
+enforces that — not an application check that two concurrent writes could slip
+past.
+
+A card carries an optional `repository_id`. A card that does not name one — which
+is every card created before this phase, and every card a human does not pick a
+repository for — resolves in this order:
+
+1. its own `repository_id`, if it has one;
+2. the repository whose project path matches the card's `issue_ref` — so a card
+   imported from a GitLab repo syncs back to *that* GitLab repo even when the
+   tenant's default is on GitHub;
+3. **the tenant's default repository.**
+
+That default decides where its issue is opened, which host and credential are
+used, and which AIFactory project its build lands in. So a board with one
+repository behaves exactly as it did before this phase: one default, and nothing
+to choose.
+
+If a tenant has **no** repositories at all, resolution falls back to the
+deployment's environment variables, which is the same one-release bridge phase 2
+introduced.
+
+### Every option, and its default
+
+| Setting | Level | Type | Default | What it decides |
+|---|---|---|---|---|
+| **Provider** | connection | `github` \| `gitlab` \| `azure_devops` | `github` | Which host implementation this connection talks through. |
+| **Host** (`base_url`) | connection | http(s) origin | the provider's public default (`https://api.github.com`, `https://gitlab.com`, `https://dev.azure.com`) | Where this connection's API calls go. |
+| **Label** | connection | string, max 128 | the provider name (`github`) | The human name in the cockpit. Cosmetic — nothing addresses a connection by it. |
+| **Credential** | connection | write-only string | unset (falls back to the deployment's environment token) | What this connection authenticates with. Encrypted, sealed against **this tenant and this connection**, never returned. |
+| **Status** | connection | derived, read-only | `unconfigured` | `unconfigured` (no repositories yet) -> `credential_missing` (no usable credential, or one the host refused) -> `configured` (reachable in principle, never proved) -> `verified` (proved by `:verify`). |
+| **Project** | repository | provider path | required | Where a card for this repository opens its issue. |
+| **Import from** (`intake_project`) | repository | provider path | falls back to **Project** | Where an import reads issues for this repository. |
+| **AIFactory project id** | repository | project id (a UUID in practice) | unset | Which AIFactory project a card for this repository is built in. Not a repository path — see [The AIFactory project id](#the-aifactory-project-id-in-full). |
+| **Default labels** | repository | list of strings | empty | Labels put on issues the board opens for this repository. A `factory:<tier>` label is refused (RFC-0011 intake trigger). |
+| **Default** (`is_default`) | repository | boolean, one per tenant | the FIRST repository a tenant creates | Whether a card that names no repository resolves here. |
+| `repository_id` | card | integer or null | null = the tenant default | Which repository this card is for. |
+
+### What happens when it is unset or wrong
+
+| Situation | What happens | Loud or quiet |
+|---|---|---|
+| A card names no repository | It uses the tenant's default. This is the normal case, not a degraded one. | Quiet by design |
+| A card names a repository that has since been deleted | It falls back to the tenant default, exactly like a card that never named one. Planning data is never deleted because a repository was. | Quiet |
+| The tenant has repositories but no default | Only reachable by clearing the project on the legacy single-configuration form. A card naming none reads `unconfigured` and opens no issue; every repository stays intact and addressable by id. | Visible in the panel |
+| The default repository is deleted | The tenant's **oldest remaining** repository is promoted, so a tenant with repositories always has a default. | Quiet, reported in the response |
+| A connection is deleted | Its repositories **and its credential** go with it — a repository cannot be reached without its host. Cards are not deleted; they fall back to the default. | Loud in the response |
+| Two repositories on different connections share a project path | The card's `issue_ref` cannot tell them apart, so the **default** wins the tie; name `repository_id` on the card (or `repository_id` on the import) to be explicit. | Quiet — pass the id |
+| The same (provider, host) added twice | **400** naming the existing connection. Edit that one, or add a repository to it. | Loud, at save time |
+| The same project added twice to one connection | **400**. Adding a repository twice to one host is a mistake, not two repositories. | Loud, at save time |
+| A project path the connection's provider cannot address | **400** naming the expected shape, at save time rather than on every later card write. | Loud, at save time |
+| A connection with no repositories is verified | `ok: false` with `status: unconfigured` — there is nothing on the host to read. | Loud, in the response |
+| A connection's provider or host is changed | Its verification is cleared (it proved a different connection); the credential is **kept**, because it is bound to the connection's identity and not to its host. Renaming the label clears nothing. | Quiet, visible as the status dropping to `configured` |
+
+### The credential, per connection
+
+Everything RFC-0020 section 3.4 guarantees still holds, now one level down. The
+credential is encrypted with a per-record data key wrapped by the deployment's
+`CFACTORY_CREDENTIAL_KEY`, it is refused rather than stored when no key is
+configured, and no endpoint, tool or panel returns it — a read is told only
+*whether* there is one, when it was stored and which key wraps it.
+
+What phase 8 added is the binding: the associated data on both crypto layers now
+covers **the tenant and the connection**. A sealed record lifted onto another
+connection does not decrypt, including another of the same tenant's — so database
+access alone does not let a GitLab token be replayed as the GitHub one.
+
+### Upgrading an existing tenant
+
+Nothing to do. On the first boot after this release every existing single
+configuration is **adopted**: one connection (provider, host, verify state) plus,
+if it named a project, one repository marked as that tenant's default, carrying
+the project, import project, AIFactory project id and default labels. The adoption
+is idempotent, runs for every tenant in the database rather than waiting for
+someone to log in, and never overwrites an edit made afterwards.
+
+The stored credential is **re-sealed onto its new connection in memory** — it is
+never written out, logged, or returned in the process. If the deployment happens
+to boot without its encryption key, the record keeps its previous binding and is
+re-sealed on the first read once the key is back; it is never deleted, because a
+missing key must not destroy a credential.
+
+### The surface
+
+| Method | Path | Scope | MCP twin |
+|---|---|---|---|
+| `GET` | `/api/tenants/{tenant}/git-connections` | read | `cfactory_list_git_connections` |
+| `POST` | `/api/tenants/{tenant}/git-connections` | write | `cfactory_create_git_connection` |
+| `PATCH` | `/api/tenants/{tenant}/git-connections/{connection_id}` | write | `cfactory_update_git_connection` |
+| `DELETE` | `/api/tenants/{tenant}/git-connections/{connection_id}` | write | `cfactory_delete_git_connection` |
+| `POST` | `/api/tenants/{tenant}/git-connections/{connection_id}:verify` | write | `cfactory_verify_git_connection` |
+| `PUT` | `/api/tenants/{tenant}/git-connections/{connection_id}/credential` | write | `cfactory_set_git_connection_credential` |
+| `DELETE` | `/api/tenants/{tenant}/git-connections/{connection_id}/credential` | write | `cfactory_delete_git_connection_credential` |
+| `GET` | `/api/tenants/{tenant}/git-repositories` | read | `cfactory_list_git_repositories` |
+| `POST` | `/api/tenants/{tenant}/git-connections/{connection_id}/repositories` | write | `cfactory_create_git_repository` |
+| `PATCH` | `/api/tenants/{tenant}/git-repositories/{repository_id}` | write | `cfactory_update_git_repository` |
+| `DELETE` | `/api/tenants/{tenant}/git-repositories/{repository_id}` | write | `cfactory_delete_git_repository` |
+| `POST` | `/api/tenants/{tenant}/git-repositories/{repository_id}:default` | write | `cfactory_set_default_git_repository` |
+
+`GET /git-connections` returns each connection with its repositories inline plus
+`default_repository_id`, so one call renders the whole panel.
+`GET /git-repositories?connection_id=` is the flat list — "everything a card can
+be dispatched to".
+
+`POST /api/cards/import` and `cfactory_import_cards` take `repository_id` (or a
+`project` path), which is what makes **import per-repository**: the host and
+credential come from that repository's connection, and imported cards are stamped
+with it. A tenant with four repositories across two providers imports from all
+four by calling it four times.
+
+Tenant isolation is unchanged and applies to ids as well as names: a connection or
+repository belonging to another tenant is **404 Not Found**, never 403 — a 403
+would confirm that the id exists. The MCP tools take no tenant argument at all.
+
+### Recommended
+
+For a single-repository board, do nothing: one connection, one repository, and it
+is the default. That is what the adoption leaves you with and what the legacy
+Settings form keeps editing.
+
+For anything larger:
+
+1. **One connection per host**, labelled for humans (`Work GitHub`,
+   `Self-hosted GitLab`), each with its own credential, and `:verify` each once.
+2. **One repository per repo you actually plan work in.** Do not add a repo
+   "for later" — an unused repository is another thing to keep a project id right
+   in.
+3. **Make the repository you plan in most the default**, since that is where every
+   card that does not choose ends up.
+4. **Set `repository_id` on a card as soon as you know it**, rather than relying on
+   the default. It is what makes the card's issue, its import and its build all
+   land on the same host.
+5. **Give each repository its own AIFactory project id.** Sharing one across
+   repositories puts two codebases' builds in one project, which is the state the
+   fleet's own dashboards cannot untangle later.
 
 ---
 
@@ -760,6 +975,13 @@ contract an agent actually discovers.
 | Promote to `ready` with **no tier** | Nothing. Card sits in `ready`. | **Silent — and intended.** It is a real triage state. |
 | Promote a `low`/`medium` card with **no AIFactory project id** | Card moves to `blocked`, reason points at Settings > Git integration, `ok=false` audit entry | Loud |
 | Read or write `/api/tenants/<someone else>/git-config` | 403 — the tenant in the path is checked against the tenant the request resolved to | Loud |
+| Name another tenant's connection or repository id | 404 Not Found, never 403 — a 403 would confirm the id exists | Loud |
+| Add the same provider + host twice | 400 naming the connection you already have | Loud, at save time |
+| Create a card with no `repository_id` | It uses the tenant's default repository | **Silent — and intended.** It is the normal case. |
+| Delete the repository a card pointed at | The card survives and falls back to the tenant default | Silent — planning data is never destroyed by a config change |
+| Delete a connection | Its repositories AND its credential go with it | Loud in the response |
+| Verify a connection with no repositories | `ok: false`, `status: unconfigured` — nothing on the host to read | Loud |
+| Move a credential's row onto another connection in the database | It stops decrypting — the connection is bound into the ciphertext | Loud, as `credential_missing` |
 | Save a `factory:<tier>` default label | 400 — it is the fleet's intake trigger and would build the card twice | Loud, at save time |
 | Restart after editing the git config in the panel | Nothing. The seed runs once; a stored configuration is never overwritten by the environment | Silent — and the point |
 | Promote with a wrong-but-valid-looking project id | Upstream rejects; card moves to `blocked` with the upstream status in the audit entry | Loud (one hop away) |

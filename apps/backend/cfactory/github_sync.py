@@ -268,7 +268,12 @@ def sync_card(
     returned — the board neither 500s nor pretends the sync happened.
     """
     settings = settings or get_settings()
-    target = store.git_target(settings)
+    # THIS CARD's repository (RFC-0020 §3.3 phase 8): the one it names, else the one
+    # its issue lives in, else the tenant default. A card imported from a GitLab
+    # repo therefore syncs back to GitLab even when the tenant's default repository
+    # is on GitHub — the provider, the host and the credential all come from that
+    # repository's connection.
+    target = store.git_target_for_card(card, settings)
     if not sync_enabled(target):
         return {"synced": False, "ok": True, "reason": "github sync not configured"}
 
@@ -340,7 +345,7 @@ def maybe_sync(
     MCP tool) still says plainly that no project is configured.
     """
     settings = settings or get_settings()
-    target = store.git_target(settings)
+    target = store.git_target_for_card(card, settings)
     if not sync_enabled(target):
         return None
     if not card.issue_ref and not (card.status == "ready" and target.project):

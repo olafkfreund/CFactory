@@ -138,16 +138,23 @@ def default_stage(card: Card) -> Stage:
     return Stage.PLAN if card.tier in _PLANNING_TIERS else Stage.CODE
 
 
-def aifactory_project_id(store: CardStore, settings: Settings) -> str | None:
-    """The AIFactory project a dispatched card is BUILT in, for this tenant.
+def aifactory_project_id(
+    store: CardStore, settings: Settings, card: Card | None = None
+) -> str | None:
+    """The AIFactory project a dispatched card is BUILT in.
 
-    RFC-0020 §3.3: it comes from the tenant's git configuration, which is
-    editable in the cockpit — falling back, for one release, to the
-    ``CFACTORY_INTAKE_PROJECT_ID`` env var that used to be its only source (see
-    :mod:`cfactory.git_config`). This is the ONE place the value is read, so
-    "which project does my build land in?" has exactly one answer.
+    RFC-0020 §3.3: it comes from THIS CARD's repository — the one it names, or the
+    one its issue lives in, or the tenant's default — which is editable in the
+    cockpit, falling back for one release to the ``CFACTORY_INTAKE_PROJECT_ID`` env
+    var that used to be its only source (see :mod:`cfactory.git_config`). This is
+    the ONE place the value is read, so "which project does my build land in?" has
+    exactly one answer, and since phase 8 that answer can differ per card: two
+    cards on one board may build into two different AIFactory projects because
+    they are for two different repositories.
     """
-    return store.git_target(settings).aifactory_project_id
+    if card is None:
+        return store.git_target(settings).aifactory_project_id
+    return store.git_target_for_card(card, settings).aifactory_project_id
 
 
 def prepare_stage(card: Card, stage: Stage, *, project_id: str | None) -> PreparedAction | None:
@@ -474,7 +481,7 @@ def dispatch_card(
             "correlation_key": card.correlation_key,
         }
 
-    action = prepare_dispatch(card, project_id=aifactory_project_id(store, settings))
+    action = prepare_dispatch(card, project_id=aifactory_project_id(store, settings, card))
     if action is None:
         store.update(card.card_key, {"status": "blocked"})
         return {
@@ -531,7 +538,7 @@ def dispatch_stage(
             "stage": stage.value,
             "correlation_key": card.correlation_key,
         }
-    project_id = aifactory_project_id(store, settings)
+    project_id = aifactory_project_id(store, settings, card)
     refusal = refuse_reason(card, stage, project_id=project_id)
     if refusal is not None:
         return _refused(refusal, stage)

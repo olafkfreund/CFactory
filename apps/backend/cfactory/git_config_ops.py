@@ -15,6 +15,7 @@ needs a provider, and a provider needs the config.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any
 
@@ -27,7 +28,17 @@ from .git_config import (
     CREDENTIAL_MISSING,
     UNCONFIGURED,
     GitConfigUpdate,
+    GitTarget,
     config_view,
+)
+from .git_connections import (
+    GitConnectionCreate,
+    GitConnectionRow,
+    GitConnectionUpdate,
+    GitRepositoryCreate,
+    GitRepositoryUpdate,
+    connection_view,
+    repository_view,
 )
 from .git_providers import build_provider, run_sync
 
@@ -107,7 +118,11 @@ def verify_git_config(
     *,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """Prove this tenant's configuration reaches its project. Never raises.
+    """Prove this tenant's DEFAULT repository is reachable. Never raises.
+
+    The single-configuration shim over :func:`verify_git_connection`: it verifies
+    the connection the tenant's default repository lives on, and reports the
+    result in the flat phase-2 shape the Settings panel already renders.
 
     **Exactly one** provider call — ``get_repository_info`` — which is the
     cheapest read that answers all three questions at once: does the base URL
@@ -120,22 +135,58 @@ def verify_git_config(
     """
     settings = get_settings()
     target = store.git_target(settings, actor=ctx.actor, audit=ctx.audit)
-    if target.project is None:
+    outcome = _verify_target(store, ctx, target, transport=transport)
+    if outcome.status is not None:
         return _result(
-            store, ok=False, status=UNCONFIGURED, reason="no project configured", settings=settings
+            store, ok=False, status=outcome.status, reason=outcome.reason, settings=settings
         )
+    return {
+        "ok": outcome.ok,
+        **({"reason": outcome.reason} if outcome.reason else {}),
+        **({"repository": outcome.repository} if outcome.ok else {}),
+        "config": get_git_config(store, settings),
+    }
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    """What one verify proved, before it is rendered in either shape.
+
+    ``status`` is set ONLY when the verify never reached the network, which is the
+    case the two surfaces report differently: nothing was recorded, because
+    nothing was proved.
+    """
+
+    ok: bool
+    reason: str | None = None
+    repository: str | None = None
+    status: str | None = None
+
+
+def _verify_target(
+    store: CardStore,
+    ctx: AuditContext,
+    target: GitTarget,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> _Outcome:
+    """One authenticated read against *target*, recorded on its connection.
+
+    The ONE implementation of verifying, shared by the per-connection endpoint and
+    by the single-configuration shim, so the two cannot come to different
+    conclusions about the same host.
+    """
+    if target.project is None:
+        return _Outcome(False, reason="no project configured", status=UNCONFIGURED)
     if not target.credential.configured:
-        return _result(
-            store,
-            ok=False,
-            status=CREDENTIAL_MISSING,
+        return _Outcome(
+            False,
             reason=(
-                "no credential is configured for this tenant, so the project cannot be "
+                "no credential is configured for this connection, so the project cannot be "
                 "reached — store one in Settings > Git integration"
             ),
-            settings=settings,
+            status=CREDENTIAL_MISSING,
         )
-
     try:
         info = run_sync(
             build_provider(target, target.project, transport=transport).get_repository_info()
@@ -144,25 +195,36 @@ def verify_git_config(
         # github_sync.sync_card: behind the protocol sits third-party provider
         # code we do not control, and an unlisted exception type must not take
         # the panel down. Nothing is swallowed — the reason is stored on the
-        # config, returned, and audited.
+        # connection, returned, and audited.
         reason = f"{type(exc).__name__}: {exc}"[:512]
-        logger.warning("git config verify failed for tenant %s: %s", store.tenant, reason)
-        store.record_git_verification(
-            error=reason, rejected=_is_credential_rejection(exc), settings=settings
-        )
+        logger.warning("git verify failed for tenant %s: %s", store.tenant, reason)
+        _record_verification(store, target, error=reason, rejected=_is_credential_rejection(exc))
         _record(ctx, store, kind="verify_git_config", ok=False)
-        return {"ok": False, "reason": reason, "config": get_git_config(store, settings)}
-
-    store.record_git_verification(error=None, settings=settings)
+        return _Outcome(False, reason=reason)
+    _record_verification(store, target, error=None, rejected=None)
     _record(ctx, store, kind="verify_git_config", ok=True)
-    return {
-        "ok": True,
+    return _Outcome(
+        True,
         # Only the repository's own name is echoed back — enough for a human to
         # confirm they reached what they meant to, without pouring a provider's
         # whole metadata payload through the panel.
-        "repository": info.get("full_name") or info.get("path_with_namespace") or info.get("name"),
-        "config": get_git_config(store, settings),
-    }
+        repository=info.get("full_name") or info.get("path_with_namespace") or info.get("name"),
+    )
+
+
+def _record_verification(
+    store: CardStore, target: GitTarget, *, error: str | None, rejected: bool | None
+) -> None:
+    """Record the outcome against the connection that was verified.
+
+    A target with no connection is one resolved from the deployment's environment
+    variables; the shim's ``record_git_verification`` materialises a connection for
+    it, which is the phase-2 behaviour kept verbatim.
+    """
+    if target.connection_id is None:
+        store.record_git_verification(error=error, rejected=rejected)
+        return
+    store.record_connection_verification(target.connection_id, error=error, rejected=rejected)
 
 
 def _is_credential_rejection(exc: Exception) -> bool:
@@ -207,7 +269,7 @@ def clear_git_credential(store: CardStore, ctx: AuditContext) -> dict[str, Any]:
 
 
 def _result(
-    store: CardStore, *, ok: bool, status: str, reason: str, settings: Settings | None = None
+    store: CardStore, *, ok: bool, status: str, reason: str | None, settings: Settings | None = None
 ) -> dict[str, Any]:
     """A verify that never reached the network: nothing was proved, so nothing is
     recorded — the derived status already says exactly this."""
@@ -217,3 +279,224 @@ def _result(
         "status": status,
         "config": get_git_config(store, settings),
     }
+
+
+# ── connections and repositories (RFC-0020 §3.3, phase 8) ────────────────────
+#
+# The same law as everything above: ONE implementation per mutation, called by
+# both the REST route and the MCP tool, with the audit stamp and the validation
+# here rather than duplicated on each surface.
+
+
+def _connection_payload(
+    store: CardStore, row: GitConnectionRow, settings: Settings
+) -> dict[str, Any]:
+    """One connection, its repositories and its MASKED credential indicator.
+
+    The credential is resolved for its ``info`` only — nothing here fetches a
+    plaintext, so rendering the panel decrypts nothing.
+    """
+    return connection_view(
+        row,
+        store.repositories(row.id),
+        store.connection_credential(row.id, settings).info,
+    ).model_dump(mode="json")
+
+
+def list_git_connections(store: CardStore, settings: Settings | None = None) -> dict[str, Any]:
+    """Every git connection this tenant has, each with its repositories.
+
+    Never a 404 and never an error: a tenant that has configured nothing gets an
+    empty list, which is the honest answer and the one the panel can render.
+    """
+    settings = settings or get_settings()
+    return {
+        "connections": [_connection_payload(store, row, settings) for row in store.connections()],
+        "default_repository_id": _default_repository_id(store),
+    }
+
+
+def _default_repository_id(store: CardStore) -> int | None:
+    resolved = store.default_repository()
+    return resolved.repository.id if resolved is not None else None
+
+
+def create_git_connection(
+    store: CardStore, ctx: AuditContext, body: GitConnectionCreate
+) -> dict[str, Any]:
+    """Add a connection to a git host, and audit it.
+
+    No credential is accepted here — that is its own write-only endpoint, and a
+    create body is exactly the kind of payload that ends up in a log.
+    """
+    row = store.create_connection(body)
+    _record(ctx, store, kind="create_git_connection", ok=True, resource="git-connection")
+    return _connection_payload(store, row, get_settings())
+
+
+def update_git_connection(
+    store: CardStore, ctx: AuditContext, connection_id: int, body: GitConnectionUpdate
+) -> dict[str, Any]:
+    """Patch a connection, and audit it. Moving it clears its verification."""
+    row = store.update_connection(connection_id, body)
+    _record(ctx, store, kind="update_git_connection", ok=True, resource="git-connection")
+    return _connection_payload(store, row, get_settings())
+
+
+def delete_git_connection(
+    store: CardStore, ctx: AuditContext, connection_id: int
+) -> dict[str, Any]:
+    """Forget a connection, its repositories and its credential, and audit it."""
+    store.delete_connection(connection_id)
+    _record(ctx, store, kind="delete_git_connection", ok=True, resource="git-connection")
+    return {
+        "ok": True,
+        "deleted": True,
+        "connection_id": connection_id,
+        "default_repository_id": _default_repository_id(store),
+    }
+
+
+def verify_git_connection(
+    store: CardStore,
+    ctx: AuditContext,
+    connection_id: int,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    """Prove one connection reaches one of its repositories. Never raises.
+
+    Verifying is per-CONNECTION because what it proves is per-connection: the host
+    answers, and this credential is accepted. It proves it by reading ONE
+    repository — the tenant's default when that lives on this connection,
+    otherwise the connection's oldest — because a host cannot be read without
+    naming something on it.
+
+    A connection with no repositories cannot be verified and says so
+    (``unconfigured``): there is nothing on it to read.
+    """
+    settings = get_settings()
+    connection = store.connection(connection_id)
+    repositories = store.repositories(connection_id)
+    if not repositories:
+        return {
+            "ok": False,
+            "status": UNCONFIGURED,
+            "reason": (
+                "this connection has no repositories yet, so there is nothing to verify "
+                "against — add one first"
+            ),
+            "connection": _connection_payload(store, connection, settings),
+        }
+    chosen = next((repo for repo in repositories if repo.is_default), repositories[0])
+    target = store.git_target_for(
+        settings, repository_id=chosen.id, actor=ctx.actor, audit=ctx.audit
+    )
+    outcome = _verify_target(store, ctx, target, transport=transport)
+    payload: dict[str, Any] = {
+        "ok": outcome.ok,
+        "reason": outcome.reason,
+        "repository": outcome.repository,
+        "verified_project": chosen.project,
+        "connection": _connection_payload(store, store.connection(connection_id), settings),
+    }
+    if outcome.status is not None:
+        payload["status"] = outcome.status
+    return payload
+
+
+def set_connection_credential(
+    store: CardStore, ctx: AuditContext, connection_id: int, secret: str
+) -> dict[str, Any]:
+    """Store (or replace) ONE CONNECTION's credential, encrypted, and audit it.
+
+    WRITE-ONLY, exactly as the per-tenant one was: what comes back is the masked
+    indicator, and no surface anywhere returns the credential. Sealed against
+    (tenant, connection), so the stored record is useless on any other connection.
+    """
+    info = store.set_connection_credential(connection_id, secret)
+    _record(ctx, store, kind="set_git_credential", ok=True, resource="git-credential")
+    return {
+        "ok": True,
+        "connection_id": connection_id,
+        "credential": info.model_dump(mode="json"),
+    }
+
+
+def clear_connection_credential(
+    store: CardStore, ctx: AuditContext, connection_id: int
+) -> dict[str, Any]:
+    """Forget ONE CONNECTION's credential, and audit it. Idempotent."""
+    removed = store.clear_connection_credential(connection_id)
+    _record(ctx, store, kind="delete_git_credential", ok=True, resource="git-credential")
+    return {
+        "ok": True,
+        "removed": removed,
+        "connection_id": connection_id,
+        "credential": store.connection_credential(connection_id).info.model_dump(mode="json"),
+    }
+
+
+def list_git_repositories(store: CardStore, connection_id: int | None = None) -> dict[str, Any]:
+    """This tenant's repositories, or just one connection's.
+
+    The flat list, for a caller that wants "everything I can dispatch a card to"
+    without walking the connections.
+    """
+    return {
+        "repositories": [
+            repository_view(row).model_dump(mode="json")
+            for row in store.repositories(connection_id)
+        ],
+        "default_repository_id": _default_repository_id(store),
+    }
+
+
+def create_git_repository(
+    store: CardStore, ctx: AuditContext, connection_id: int, body: GitRepositoryCreate
+) -> dict[str, Any]:
+    """Add a repository to one of this tenant's connections, and audit it."""
+    row = store.create_repository(connection_id, body)
+    _record(ctx, store, kind="create_git_repository", ok=True, resource="git-repository")
+    return repository_view(row).model_dump(mode="json")
+
+
+def update_git_repository(
+    store: CardStore, ctx: AuditContext, repository_id: int, body: GitRepositoryUpdate
+) -> dict[str, Any]:
+    """Patch a repository, and audit it."""
+    row = store.update_repository(repository_id, body)
+    _record(ctx, store, kind="update_git_repository", ok=True, resource="git-repository")
+    return repository_view(row).model_dump(mode="json")
+
+
+def delete_git_repository(
+    store: CardStore, ctx: AuditContext, repository_id: int
+) -> dict[str, Any]:
+    """Forget a repository, and audit it.
+
+    Cards that pointed at it are NOT deleted — they fall back to the tenant
+    default, exactly like a card that never named a repository. If this was the
+    default, the tenant's oldest remaining repository is promoted.
+    """
+    store.delete_repository(repository_id)
+    _record(ctx, store, kind="delete_git_repository", ok=True, resource="git-repository")
+    return {
+        "ok": True,
+        "deleted": True,
+        "repository_id": repository_id,
+        "default_repository_id": _default_repository_id(store),
+    }
+
+
+def set_default_git_repository(
+    store: CardStore, ctx: AuditContext, repository_id: int
+) -> dict[str, Any]:
+    """Make one repository the tenant's default, and audit it.
+
+    The default is what a card that names no repository resolves to — so this is
+    the one setting that changes where existing, unassigned cards go.
+    """
+    row = store.set_default_repository(repository_id)
+    _record(ctx, store, kind="set_default_git_repository", ok=True, resource="git-repository")
+    return repository_view(row).model_dump(mode="json")

@@ -141,13 +141,19 @@ def import_cards(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; se
     _scope: Annotated[str | None, Depends(require_scope("write"))],
     actor: Annotated[str, Depends(identity_dep)],
     project: str | None = None,
+    repository_id: int | None = None,
     full: bool = False,
 ) -> dict[str, object]:
-    """Import the repository's EXISTING issues into the backlog (RFC-0020 §3.6).
+    """Import ONE repository's EXISTING issues into the backlog (RFC-0020 §3.6).
 
-    Connecting a repo should bring the work with it. This lists the configured
-    project's issues through the provider protocol (so it works on GitLab and
-    Azure DevOps too) and upserts each one as a card.
+    Connecting a repo should bring the work with it. This lists one project's
+    issues through the provider protocol (so it works on GitLab and Azure DevOps
+    too) and upserts each one as a card.
+
+    Which repository: `repository_id`, else the repository whose project path
+    matches `project`, else the tenant's default — and the host and credential come
+    from THAT repository's connection, so a tenant with repos on two providers
+    imports from each by naming it (RFC-0020 §3.3 phase 8).
 
     Imported cards land in `backlog` — a closed issue in `done` — and **never**
     in `ready`: `ready` + a tier is the dispatch trigger, and a repo full of
@@ -165,7 +171,12 @@ def import_cards(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; se
     failing the board.
     """
     return card_ops.import_cards(
-        store, AuditContext(audit, actor), project=project, full=full, transport=transport
+        store,
+        AuditContext(audit, actor),
+        project=project,
+        repository_id=repository_id,
+        full=full,
+        transport=transport,
     )
 
 

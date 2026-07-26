@@ -49,6 +49,7 @@ import httpx
 from .actions import PreparedAction, execute_action
 from .cards import Card, CardStore
 from .config import Settings, get_settings
+from .git_config import qualify_repo
 from .models import Service, Stage, WorkItem
 from .status_taxonomy import is_done, is_failure_or_stuck
 
@@ -138,6 +139,24 @@ def default_stage(card: Card) -> Stage:
     return Stage.PLAN if card.tier in _PLANNING_TIERS else Stage.CODE
 
 
+def repo_ref(store: CardStore, settings: Settings, card: Card) -> str | None:
+    """The provider-qualified repo reference this card's work targets (§3.5).
+
+    Resolved through the SAME per-card target ``aifactory_project_id`` uses, so
+    the host a card is dispatched against is the host its own repository is on —
+    never a tenant-wide assumption, and never the receiving service's environment
+    default. That last part is the bug this phase exists to fix: PFactory,
+    AIFactory and TFactory each chose a git host from their own config, so a
+    GitLab tenant's run reconnoitred github.com and opened a GitHub PR.
+
+    ``None`` when the tenant has configured no project. The downstream services
+    then behave exactly as they did before this phase, which for a deployment
+    that never filled the panel in is the only honest answer available.
+    """
+    target = store.git_target_for_card(card, settings)
+    return qualify_repo(target.provider, target.project)
+
+
 def aifactory_project_id(
     store: CardStore, settings: Settings, card: Card | None = None
 ) -> str | None:
@@ -157,7 +176,9 @@ def aifactory_project_id(
     return store.git_target_for_card(card, settings).aifactory_project_id
 
 
-def prepare_stage(card: Card, stage: Stage, *, project_id: str | None) -> PreparedAction | None:
+def prepare_stage(
+    card: Card, stage: Stage, *, project_id: str | None, repo: str | None = None
+) -> PreparedAction | None:
     """Build the not-yet-executed intake write that sends ``card`` into ``stage``.
 
     Returns ``None`` only when the payload cannot be built because no intake
@@ -167,7 +188,17 @@ def prepare_stage(card: Card, stage: Stage, *, project_id: str | None) -> Prepar
     (:func:`aifactory_project_id`). The caller turns that into a refusal
     (explicit action) or a blocked card (implicit promotion) rather than a silent
     no-op.
+
+    ``repo`` is the provider-qualified reference from :func:`repo_ref`, and it is
+    the ONLY thing RFC-0020 §3.5 adds to what goes out of here. It is sent on the
+    existing ``repo`` field each door already has (TFactory's gained one in the
+    same phase) rather than as a separate ``provider`` field, because two fields
+    is two sources of truth and the one that got read would be whichever the
+    receiving service happened to look at first. Omitted entirely when the tenant
+    has configured no project, so an unconfigured deployment sends exactly the
+    payload it sent before.
     """
+    qualified = {"repo": repo} if repo else {}
     if stage is Stage.PLAN:
         return PreparedAction(
             kind="dispatch_card",
@@ -180,6 +211,7 @@ def prepare_stage(card: Card, stage: Stage, *, project_id: str | None) -> Prepar
                 "category": "software",
                 "channel": "cfactory",
                 "text": _brief(card),
+                **qualified,
             },
             rationale=(
                 f"Plan {card.card_key!r} in PFactory — tier {card.tier!r} decides the "
@@ -202,6 +234,7 @@ def prepare_stage(card: Card, stage: Stage, *, project_id: str | None) -> Prepar
                 # component ("FCT-42").
                 "spec_id": card.card_key,
                 "spec_text": _brief(card),
+                **qualified,
             },
             rationale=(
                 f"Verify {card.card_key!r} in TFactory — the acceptance criteria on the "
@@ -223,6 +256,7 @@ def prepare_stage(card: Card, stage: Stage, *, project_id: str | None) -> Prepar
                 "labels": [f"factory:{card.tier}"],
             },
             "auto_continue": True,
+            **qualified,
         },
         rationale=(
             f"Build {card.card_key!r} in AIFactory — tier {card.tier!r} supplies the "
@@ -231,9 +265,11 @@ def prepare_stage(card: Card, stage: Stage, *, project_id: str | None) -> Prepar
     )
 
 
-def prepare_dispatch(card: Card, *, project_id: str | None) -> PreparedAction | None:
+def prepare_dispatch(
+    card: Card, *, project_id: str | None, repo: str | None = None
+) -> PreparedAction | None:
     """The tier-routed intake write for an implicitly promoted ready card."""
-    return prepare_stage(card, default_stage(card), project_id=project_id)
+    return prepare_stage(card, default_stage(card), project_id=project_id, repo=repo)
 
 
 # ── Preconditions ─────────────────────────────────────────────────────────────
@@ -481,7 +517,11 @@ def dispatch_card(
             "correlation_key": card.correlation_key,
         }
 
-    action = prepare_dispatch(card, project_id=aifactory_project_id(store, settings, card))
+    action = prepare_dispatch(
+        card,
+        project_id=aifactory_project_id(store, settings, card),
+        repo=repo_ref(store, settings, card),
+    )
     if action is None:
         store.update(card.card_key, {"status": "blocked"})
         return {
@@ -542,7 +582,7 @@ def dispatch_stage(
     refusal = refuse_reason(card, stage, project_id=project_id)
     if refusal is not None:
         return _refused(refusal, stage)
-    action = prepare_stage(card, stage, project_id=project_id)
+    action = prepare_stage(card, stage, project_id=project_id, repo=repo_ref(store, settings, card))
     if action is None:  # refuse_reason already covers every buildable case
         return _refused(
             StageRefusal("no_intake_project", f"no payload can be built for {stage.value}"), stage

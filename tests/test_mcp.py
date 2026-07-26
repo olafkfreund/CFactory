@@ -129,6 +129,9 @@ def test_initialize_and_tools_list(mcp_client):
         # and a delete and deliberately no read.
         "cfactory_set_git_credential",
         "cfactory_delete_git_credential",
+        # The published capability matrix (RFC-0020 §3.5) — what a provider choice
+        # costs, answerable before the choice is made.
+        "cfactory_git_capabilities",
         # Git connections and repositories (RFC-0020 §3.3 phase 8) — many hosts,
         # many repos per host, and the tenant default a card falls back to.
         "cfactory_list_git_connections",

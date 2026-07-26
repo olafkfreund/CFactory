@@ -31,6 +31,7 @@ from . import git_config_ops
 from .api_deps import action_transport_dep, audit_dep, cards_store_dep
 from .audit import AuditStore
 from .auth import require_scope
+from .capabilities import capability_matrix
 from .card_ops import AuditContext
 from .cards import CardStore
 from .config import get_settings, resolve_tenant
@@ -70,6 +71,27 @@ def tenant_dep(
             detail=f"not your tenant: this request is scoped to {resolved!r}",
         )
     return resolved
+
+
+@router.get("/api/tenants/{tenant}/git-capabilities")
+def get_git_capabilities(
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("read"))],
+) -> dict[str, object]:
+    """What the fleet can do on each git host (RFC-0020 §3.5).
+
+    The published capability matrix: which capabilities are `full`, `partial` or
+    `none` per provider, and the sentence explaining each reduction. Notably
+    `assign_to_user` is partial on GitLab (Duo Workflow) and absent on Azure
+    DevOps, and `enable_auto_merge` is GitHub-shaped — so a GitLab tenant gets
+    board sync, intake and PARR but not Copilot delegation or auto-merge.
+
+    Static and tenant-independent: it describes the vendored provider layer, not
+    this tenant's configuration. It is under `/api/tenants/{tenant}` so it sits
+    with the settings it qualifies, and so an agent choosing a provider reads the
+    consequence from the same place it writes the choice.
+    """
+    return capability_matrix().model_dump()
 
 
 @router.get("/api/tenants/{tenant}/git-config")

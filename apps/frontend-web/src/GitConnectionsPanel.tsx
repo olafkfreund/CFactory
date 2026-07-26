@@ -7,6 +7,7 @@ import {
   deleteGitConnection,
   deleteGitInstall,
   deleteGitRepository,
+  fetchGitCapabilities,
   fetchGitConnections,
   setConnectionCredential,
   setDefaultGitRepository,
@@ -14,6 +15,7 @@ import {
   updateGitConnection,
   updateGitRepository,
   verifyGitConnection,
+  type GitCapabilities,
   type GitConnection,
   type GitConnections,
   type GitRepository,
@@ -560,6 +562,69 @@ function CredentialField({
   );
 }
 
+// ── the capability matrix, beside the provider selector ─────────────────────
+
+// A SHORT state word per level, matching the status pills elsewhere in the
+// panel. The sentence lives under the row, not in the pill.
+const LEVEL: Record<string, { tone: string; text: string }> = {
+  full: { tone: "ok", text: "works" },
+  partial: { tone: "warn", text: "partial" },
+  none: { tone: "warn", text: "not available" },
+};
+
+/**
+ * What picking THIS provider costs (RFC-0020 §3.5).
+ *
+ * The point of rendering it here rather than only in the docs: the reduction is
+ * real, it is not recoverable by configuration, and the moment to learn about it
+ * is while choosing the provider — not two days later when a clean build sits on
+ * a merge request nothing merges.
+ *
+ * Reduced-first ordering is deliberate. A tenant reads this to find out what it
+ * does NOT get; leading with four green rows buries the answer.
+ */
+export function CapabilityMatrix({
+  provider,
+  capabilities,
+}: {
+  provider: string;
+  capabilities: GitCapabilities | null;
+}) {
+  if (!capabilities) return null;
+  const rows = capabilities.capabilities.filter((cap) => cap.support[provider]);
+  if (rows.length === 0) return null;
+  const reduced = rows.filter((cap) => cap.support[provider] !== "full");
+  const works = rows.filter((cap) => cap.support[provider] === "full");
+
+  return (
+    <div className="set-caps">
+      <span className="set-label">On {PROVIDER_LABEL[provider] ?? provider}</span>
+      {reduced.map((cap) => {
+        const level = LEVEL[cap.support[provider]] ?? { tone: "warn", text: cap.support[provider] };
+        return (
+          <div className="set-cap" key={cap.key}>
+            <div className="set-cap-head">
+              <span className="set-cap-name">{cap.title}</span>
+              <span className={`status-pill ${level.tone}`}>
+                <span className="dot" /> {level.text}
+              </span>
+            </div>
+            <span className="set-hint">{cap.notes[provider] ?? cap.detail}</span>
+          </div>
+        );
+      })}
+      {works.length > 0 && (
+        <span className="set-hint">
+          Unchanged on this host: {works.map((cap) => cap.title.toLowerCase()).join(", ")}.
+        </span>
+      )}
+      {reduced.length === 0 && (
+        <span className="set-hint">Every capability the fleet has is available here.</span>
+      )}
+    </div>
+  );
+}
+
 // ── one connection card ─────────────────────────────────────────────────────
 
 export type Actions = {
@@ -588,6 +653,7 @@ export function ConnectionCard({
   note,
   installAvailable = false,
   actions,
+  capabilities,
 }: {
   connection: GitConnection;
   busy: boolean;
@@ -597,6 +663,7 @@ export function ConnectionCard({
   // the paste box, which is all that backend has.
   installAvailable?: boolean;
   actions: Actions;
+  capabilities?: GitCapabilities | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -701,6 +768,7 @@ export function ConnectionCard({
               Changing the provider or the host clears this connection&apos;s verification —
               it proved a connection this one no longer is. The credential is kept.
             </span>
+            <CapabilityMatrix provider={provider} capabilities={capabilities ?? null} />
           </div>
           <div className="set-field">
             <label className="set-label" htmlFor={`conn-host-${String(connection.id)}`}>
@@ -828,10 +896,12 @@ export function AddConnectionCard({
   busy,
   empty,
   onCreate,
+  capabilities,
 }: {
   busy: boolean;
   empty: boolean;
   onCreate: (body: { provider: string; base_url: string | null; label: string | null }) => void;
+  capabilities?: GitCapabilities | null;
 }) {
   const [provider, setProvider] = useState<string>("github");
   const [baseUrl, setBaseUrl] = useState("");
@@ -869,6 +939,7 @@ export function AddConnectionCard({
             </button>
           ))}
         </div>
+        <CapabilityMatrix provider={provider} capabilities={capabilities ?? null} />
       </div>
 
       <div className="set-field">
@@ -942,6 +1013,8 @@ export default function GitConnectionsPanel({
   reloadSignal: number;
 }) {
   const [data, setData] = useState<GitConnections | null>(null);
+  // Static per deployment, so it is fetched once and never with the poll.
+  const [capabilities, setCapabilities] = useState<GitCapabilities | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // One note per connection: what the last verify or credential write said. Keyed
@@ -970,6 +1043,25 @@ export default function GitConnectionsPanel({
       alive = false;
     };
   }, [tenant, reloadSignal]);
+
+  // The matrix describes the provider layer, not this tenant's configuration, so
+  // it is read once and never re-read on a reload signal. A failure is SILENT on
+  // purpose: it costs the panel a warning it would have liked to show, and taking
+  // the whole connections view down over it would be a far worse trade.
+  useEffect(() => {
+    if (!tenant) return;
+    let alive = true;
+    fetchGitCapabilities(tenant)
+      .then((next) => {
+        if (alive) setCapabilities(next);
+      })
+      .catch(() => {
+        /* the panel still works; it just cannot warn */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tenant]);
 
   // Every mutation is "do it, then re-read the tree": the backend derives
   // `status` and can promote a new default, and a client-side guess at either
@@ -1089,11 +1181,13 @@ export default function GitConnectionsPanel({
             note={notes[connection.id]}
             installAvailable={data?.install_available[connection.provider] ?? false}
             actions={actions}
+            capabilities={capabilities}
           />
         ))}
         <AddConnectionCard
           busy={busy}
           empty={connections.length === 0}
+          capabilities={capabilities}
           onCreate={(body) => {
             run(() => createGitConnection(tenant, body));
           }}

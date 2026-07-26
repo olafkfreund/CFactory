@@ -127,8 +127,16 @@ def sync_enabled(target: GitTarget) -> bool:
     is now per tenant, and asking the environment would say "off" for a tenant
     that has a perfectly good credential of its own. Answered WITHOUT decrypting
     anything — ``configured`` is presence, not plaintext.
+
+    **A DEGRADED INSTALL COUNTS AS ON (RFC-0020 §3.4 phase 4).** A connection
+    somebody installed a GitHub App on, whose last token mint failed, would
+    otherwise report "github sync not configured" and return ``ok=True`` — a card
+    write that silently does nothing and blames the user for a setup they did
+    perform. Letting it through means the mint raises where ``sync_card`` already
+    catches, so the reason lands on the card, in the log and in the caller's
+    ``ok=False``. Loud, which is the requirement.
     """
-    return target.credential.configured
+    return target.credential.configured or target.credential.installed
 
 
 def _issue_body(card: Card) -> str:

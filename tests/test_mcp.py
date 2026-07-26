@@ -138,6 +138,12 @@ def test_initialize_and_tools_list(mcp_client):
         "cfactory_verify_git_connection",
         "cfactory_set_git_connection_credential",
         "cfactory_delete_git_connection_credential",
+        # The install flow (RFC-0020 §3.4 phase 4) — begin one, and disconnect it.
+        # There is deliberately no tool for the callback: it is the provider
+        # handing a browser back, not a board action, and a tool taking a state
+        # would publish the one input the flow is defended by.
+        "cfactory_start_git_install",
+        "cfactory_delete_git_install",
         "cfactory_list_git_repositories",
         "cfactory_create_git_repository",
         "cfactory_update_git_repository",

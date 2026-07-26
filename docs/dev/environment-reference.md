@@ -69,6 +69,25 @@ Conventions in the tables below:
 | `CFACTORY_IMPORT_COMMENT_BACKFILL_MAX` | `25` | no | How many **never-read** cards one pass may backfill (Factory#375). Bounds the only unbounded path: a cold backfill has no `since` window to narrow, so it costs one call per card, and a freshly connected 200-issue repository would otherwise fire 200 requests in one tick — the same stampede `CFACTORY_IMPORT_POLL_GAP_SECONDS` prevents one level up. Cards are taken oldest first, so a board becomes comment-complete over consecutive passes; already-read cards still refresh every pass. `0` disables the backfill, which also disables the refresh (only complete copies are refreshed). |
 | `CFACTORY_CREDENTIAL_KEY` | _(unset)_ | to store any per-tenant credential | Key-encryption key for the per-tenant git credential store (RFC-0020 §3.4). Format `<key-id>:<base64 of 32 random bytes>`, comma-separated when rotating with the **active key first**. See the full write-up directly below this table. Server-side only. |
 | `CFACTORY_AUDIT_HMAC_SECRET` | dev secret (`dev-insecure-...`) | in hosted | HMAC secret anchoring the tamper-evident audit chain. MUST be overridden in any hosted/shared deploy (API keys or multi-tenant set) — the default is a clearly-labelled dev value and startup hard-warns if it is left in place in a non-local posture. Server-side only. |
+| `CFACTORY_INSTALL_CALLBACK_BASE_URL` | _(unset)_ | to use the install flow | Public base URL the git provider redirects back to after a human consents (RFC-0020 §3.4 phase 4). It must reach the backend **without passing oauth2-proxy** — a provider redirect arrives unauthenticated and would be bounced to a login page, losing the code — so the deployed value is the MCP host, `https://cfactory-mcp.freundcloud.org.uk`, which already bypasses the auth perimeter. No path, no trailing slash; the callback is always `/git/install/callback`. Unset = the install flow is OFF and the panel keeps the paste box. |
+| `CFACTORY_GITHUB_APP_ID` | _(unset)_ | for the GitHub install flow | The GitHub App's numeric App ID, from its settings page. Not a secret. |
+| `CFACTORY_GITHUB_APP_SLUG` | _(unset)_ | for the GitHub install flow | The App's URL slug, used to build `https://github.com/apps/<slug>/installations/new`. Read it off the App's public URL rather than deriving it from the name. Not a secret. |
+| `CFACTORY_GITHUB_APP_PRIVATE_KEY` | _(unset)_ | for the GitHub install flow | The App's RSA private key, PEM as downloaded from GitHub. **The one deployment-wide secret of the GitHub half** — it signs a short-lived App JWT which mints installation tokens scoped to the repositories the installer selected. Never written to the database and never returned by any API. Multi-line values are fine in an env var. Server-side only. |
+| `CFACTORY_GITHUB_APP_PRIVATE_KEY_FILE` | _(unset)_ | alternative to the above | Path to that PEM on disk — **preferred** where the platform mounts secrets as files. Read at use time and not cached, so rotating the mounted key needs no restart, and it **wins** over the inline value so a mounted secret cannot be shadowed by a stale env var. |
+| `CFACTORY_GITLAB_OAUTH_CLIENT_ID` | _(unset)_ | for the GitLab install flow | The GitLab OAuth application's Application ID. Not a secret. |
+| `CFACTORY_GITLAB_OAUTH_CLIENT_SECRET` | _(unset)_ | for the GitLab install flow | Its Secret — the deployment-wide secret of the GitLab half, used only on back-channel calls to `/oauth/token`. Never in a URL a browser follows, never stored, never returned. Server-side only. |
+| `CFACTORY_GITLAB_OAUTH_SCOPE` | `api` | no | Scope requested from GitLab. `api` is what reading and writing issues needs; narrowing it further breaks the board's writes. |
+
+> **Registering the apps is a human step** — GitHub shows the App ID and private
+> key to the registrant and to nobody else, and there is no API for it. That is
+> exactly why these are deployment configuration: a self-hosted operator registers
+> their own rather than depending on somebody else's credentials. The full runbook
+> — permissions to select, events to leave unticked, the callback URL to enter,
+> and what to do with the private key — is
+> [Registering the GitHub App and the GitLab OAuth application](../guides/git-app-install.md).
+>
+> **Azure DevOps has no install flow** (RFC-0020 §3.4, deliberately). It keeps the
+> pasted-credential path above, and no install button is offered for it.
 
 ## `CFACTORY_CREDENTIAL_KEY`, in full
 

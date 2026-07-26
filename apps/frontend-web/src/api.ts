@@ -555,6 +555,23 @@ export type CredentialInfo = z.infer<typeof CredentialInfoSchema>;
 // on the backend and deleting a repository can promote a new default, so guessing
 // at either here would make the panel a second, wrong source of truth.
 
+// One connection's install (RFC-0020 §3.4 phase 4). Nothing here is a secret:
+// the GitHub App private key is deployment configuration and never leaves the
+// backend, and the short-lived tokens it mints are never stored or sent.
+export const GitInstallSchema = z.object({
+  provider: z.string(),
+  installation_id: z.string().nullable().optional(),
+  // The org / user / group the app is installed on, so a human can confirm the
+  // install landed where they meant it to.
+  account: z.string().nullable().optional(),
+  // installed | credential_missing — the second one means the last token refresh
+  // failed, and `error` says what the provider said.
+  status: z.string(),
+  error: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+});
+export type GitInstall = z.infer<typeof GitInstallSchema>;
+
 export const GitRepositorySchema = z.object({
   id: z.number(),
   connection_id: z.number(),
@@ -583,6 +600,12 @@ export const GitConnectionSchema = z.object({
   // Defaulted rather than required so a cockpit that reaches an older backend
   // renders "no credential" instead of failing to parse the whole panel.
   credential: CredentialInfoSchema.default({ configured: false, source: "none" }),
+  // How this connection was authenticated, when it was authenticated by an
+  // INSTALL (RFC-0020 §3.4 phase 4). Nullable and optional: a connection holding
+  // a pasted credential has none, and an older backend sends no such field at
+  // all. `installation_id` is an identifier GitHub prints in its own URLs, not a
+  // secret — no token or key is ever in this payload.
+  install: GitInstallSchema.nullable().optional(),
   verified_at: z.string().nullable().optional(),
   verify_error: z.string().nullable().optional(),
   repositories: z.array(GitRepositorySchema).default([]),
@@ -592,6 +615,10 @@ export type GitConnection = z.infer<typeof GitConnectionSchema>;
 export const GitConnectionsSchema = z.object({
   connections: z.array(GitConnectionSchema).default([]),
   default_repository_id: z.number().nullable().optional(),
+  // Which providers the DEPLOYMENT has registered an app for — a capability of
+  // the install, not of the tenant. Defaulted to nothing so a cockpit reaching an
+  // older backend simply shows the paste box, which is what that backend has.
+  install_available: z.record(z.string(), z.boolean()).default({}),
 });
 export type GitConnections = z.infer<typeof GitConnectionsSchema>;
 
@@ -754,6 +781,38 @@ export async function deleteConnectionCredential(
     undefined,
     GitCredentialResultSchema,
   );
+}
+
+// ── The install flow (RFC-0020 §3.4 phase 4) ────────────────────────────────
+// Two calls, and neither carries a credential in either direction. Starting an
+// install returns a provider URL to SEND THE BROWSER TO — the consent screen
+// where a human picks which repositories the app may see, which is a choice the
+// cockpit deliberately does not make for them. Nothing is authenticated until the
+// provider redirects back to the backend's own callback.
+
+export const GitInstallStartSchema = z.object({
+  ok: z.boolean(),
+  connection_id: z.number(),
+  provider: z.string(),
+  // Carries a single-use state that expires. Follow it once; do not keep it.
+  authorize_url: z.string(),
+  expires_in_seconds: z.number().optional(),
+});
+export type GitInstallStart = z.infer<typeof GitInstallStartSchema>;
+
+function installPath(tenant: string, connectionId: number): string {
+  return tenantPath(tenant, `git-connections/${String(connectionId)}/install`);
+}
+
+export async function startGitInstall(
+  tenant: string,
+  connectionId: number,
+): Promise<GitInstallStart> {
+  return sendJson("POST", `${installPath(tenant, connectionId)}:start`, {}, GitInstallStartSchema);
+}
+
+export async function deleteGitInstall(tenant: string, connectionId: number): Promise<unknown> {
+  return sendJson("DELETE", installPath(tenant, connectionId), undefined, GitDeleteSchema);
 }
 
 export async function updateCopilotSettings(

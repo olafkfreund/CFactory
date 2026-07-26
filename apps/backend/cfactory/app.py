@@ -29,6 +29,7 @@ from . import (
     routes_events,
     routes_git_config,
     routes_health,
+    routes_install,
     routes_live_agents,
     routes_services,
     routes_well_known,
@@ -174,6 +175,14 @@ def create_app() -> FastAPI:
     app.include_router(routes_actions.router)
     app.include_router(routes_cards.router)
     app.include_router(routes_git_config.router)
+    # The git-provider install callback (RFC-0020 §3.4 phase 4). Outside the
+    # guarded /api//connect prefixes on purpose and by necessity: a provider
+    # redirect is a browser navigation with no API key and no session, so it
+    # cannot present one. It is served on the MCP host, which already bypasses
+    # oauth2-proxy — no exemption is added to the perimeter that fronts the
+    # cockpit. Its own defence is the single-use, hashed, tenant-bound state plus
+    # a provider round trip; see routes_install's module docstring.
+    app.include_router(routes_install.router)
     app.include_router(routes_copilot.router)
     app.include_router(routes_connect.router)
     app.include_router(routes_ws.router)

@@ -60,6 +60,7 @@ from .git_config import (
     validate_project,
     validate_provider,
 )
+from .git_install import GitInstall, GitInstallRow, install_view
 
 # A connection label is a human name shown in the panel ("Work GitHub",
 # "self-hosted GitLab"), never addressed by anything, so it is bounded and
@@ -213,6 +214,13 @@ class GitConnection(BaseModel):
     label: str
     status: str
     credential: CredentialInfo
+    # The install this connection was authenticated by, when it was (RFC-0020 §3.4
+    # phase 4). Present alongside ``credential`` rather than inside it because
+    # they answer different questions: ``credential`` says whether the board can
+    # reach the host, ``install`` says HOW — which installation, on whose account,
+    # and why the last mint failed if it did. Absent for a connection holding a
+    # pasted credential or running on the deployment's environment one.
+    install: GitInstall | None = None
     verified_at: datetime | None = None
     verify_error: str | None = None
     repositories: list[GitRepository] = Field(default_factory=list)
@@ -399,13 +407,21 @@ def repository_view(row: GitRepositoryRow) -> GitRepository:
 
 
 def connection_view(
-    row: GitConnectionRow, repositories: Sequence[GitRepositoryRow], credential: CredentialInfo
+    row: GitConnectionRow,
+    repositories: Sequence[GitRepositoryRow],
+    credential: CredentialInfo,
+    install: GitInstallRow | None = None,
 ) -> GitConnection:
     """The wire model for one connection.
 
     ``status`` reuses the phase-2 derivation with "has a project" read as "has a
     repository": a connection with no repository is ``unconfigured``, because
     there is nothing for it to reach.
+
+    A degraded install lands in ``credential_missing`` through the same door as a
+    missing credential: ``credential.configured`` is false for any install status
+    but ``installed``, so there is one status rule and not two that could
+    disagree.
     """
     provider = (row.provider or GITHUB).strip().lower()
     return GitConnection(
@@ -421,6 +437,7 @@ def connection_view(
             credential_rejected=row.credential_rejected,
         ),
         credential=credential,
+        install=install_view(install) if install is not None else None,
         verified_at=row.verified_at,
         verify_error=row.verify_error,
         repositories=[repository_view(repo) for repo in repositories],

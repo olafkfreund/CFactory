@@ -92,6 +92,8 @@ into the factory by itself. New here? Follow
 
 **GitHub sync:** [GitHub Card ↔ Issue Sync](guides/github-card-sync.md) — how a planning card is backed by a GitHub issue, and the conflict rule: GitHub is the record of truth, so on conflict **GitHub wins**.
 
+**Connecting a git host:** [Registering the GitHub App and the GitLab OAuth application](guides/git-app-install.md) — the operator runbook for the install flow: which permissions to grant, which events to leave off, where the callback is hosted and why, and what to do with the App private key. The one part of the flow no software can do for you.
+
 **Configuration:** the [Environment reference](dev/environment-reference.md) — every environment variable, flag and operational parameter CFactory reads, with defaults and which ones must be set for a hosted deployment.
 
 ---

@@ -45,6 +45,7 @@ from .git_connections import (
     GitRepositoryUpdate,
     GitResourceNotFoundError,
 )
+from .git_install import InstallError
 
 router = APIRouter(tags=["git-config"])
 
@@ -453,6 +454,68 @@ def delete_connection_credential(
     """
     try:
         return git_config_ops.clear_connection_credential(store, _ctx(audit, actor), connection_id)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+
+
+@router.post("/api/tenants/{tenant}/git-connections/{connection_id}/install:start")
+def start_git_install(
+    connection_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Begin a GitHub App / GitLab OAuth install for this connection (RFC-0020 §3.4).
+
+    Returns `authorize_url` — send a browser there. On GitHub it is the App's
+    install page, where the human chooses **which repositories** the App may see;
+    that choice is the reason an App is preferred over a pasted token, and it is
+    not one this API makes for them. The URL carries a single-use `state` that
+    expires in `expires_in_seconds`, and it is returned exactly once.
+
+    Nothing is authenticated by this call and no credential is created: the
+    connection stays as it was until the provider redirects back to the callback,
+    which is where the state, the tenant binding and the provider's own answer are
+    all checked.
+
+    400 when this deployment has registered no app for the connection's provider
+    (an operator supplies those as deployment configuration — see
+    `docs/guides/git-app-install.md`), or when the provider has no install flow at
+    all. **Azure DevOps is out of scope by design** and keeps the stored-credential
+    path. 404 when this tenant has no such connection.
+    """
+    try:
+        return git_config_ops.start_git_install(store, _ctx(audit, actor), connection_id)
+    except GitResourceNotFoundError as exc:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+    except InstallError as exc:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+
+
+@router.delete("/api/tenants/{tenant}/git-connections/{connection_id}/install")
+def delete_git_install(
+    connection_id: int,
+    _tenant: Annotated[str, Depends(tenant_dep)],
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    _scope: Annotated[str | None, Depends(require_scope("write"))],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, object]:
+    """Disconnect this connection's install — the revocation path for phase 4.
+
+    Forgets the `installation_id`, any sealed refresh token and any cached
+    short-lived token. Idempotent: disconnecting one that is not there answers
+    `removed: false` with a 200. The connection keeps its repositories and reads
+    as `credential_missing`.
+
+    This does **not** uninstall the app at the provider — only the account owner
+    can do that, on the provider's own settings page. 404 when this tenant has no
+    such connection.
+    """
+    try:
+        return git_config_ops.delete_git_install(store, _ctx(audit, actor), connection_id)
     except GitResourceNotFoundError as exc:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
 

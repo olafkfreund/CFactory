@@ -291,6 +291,56 @@ class Settings(BaseSettings):
     # Losing this value makes every stored credential permanently undecryptable.
     credential_key: str | None = Field(default=None, repr=False)
 
+    # ── The install flow (RFC-0020 §3.4, phase 4) ────────────────────────────
+    #
+    # THE APP CREDENTIALS ARE DEPLOYMENT CONFIGURATION, NOT TENANT DATA. A GitHub
+    # App is registered by a human at github.com/settings/apps and a GitLab OAuth
+    # application in that instance's admin UI; both hand back credentials only
+    # that person can obtain. Putting them here — one set for the whole
+    # deployment, supplied by environment/secret — is what lets a SELF-HOSTED
+    # operator register their own rather than depending on ours. See
+    # docs/guides/git-app-install.md for the registration runbook.
+    #
+    # None of these is ever written to the database, and none is ever returned by
+    # any API: what a tenant stores is an ``installation_id`` (GitHub — an
+    # identifier, not a secret) or a sealed refresh token (GitLab).
+
+    # Public base URL the PROVIDER redirects back to. It must reach this backend
+    # WITHOUT passing oauth2-proxy: a provider redirect arrives unauthenticated
+    # and would be bounced to a login page, losing the code. The deployed answer
+    # is the MCP host (https://cfactory-mcp.freundcloud.org.uk), which already
+    # bypasses the auth perimeter — no exemption is carved into the perimeter that
+    # fronts the cockpit. Unset means the install flow is OFF: the panel keeps the
+    # paste box and every install:start is refused rather than minting a state
+    # bound to a callback nobody can reach.
+    install_callback_base_url: str | None = None
+
+    # The GitHub App's numeric App ID (from its settings page). Not a secret.
+    github_app_id: str | None = None
+    # The App's URL slug, used to build the install link
+    # (https://github.com/apps/<slug>/installations/new). Not a secret.
+    github_app_slug: str | None = None
+    # The App's RSA private key, PEM as downloaded from GitHub. THE ONE
+    # DEPLOYMENT-WIDE SECRET of the GitHub half: it signs a short-lived App JWT,
+    # which mints an installation token scoped to the repositories the installer
+    # selected. Multi-line values are fine in an env var (mount a k8s Secret via
+    # config.extraEnv). Prefer github_app_private_key_file where the platform
+    # mounts secrets as files.
+    github_app_private_key: str | None = Field(default=None, repr=False)
+    # Path to that PEM on disk. Read at use time, never cached, and it WINS over
+    # the inline value so a mounted secret cannot be shadowed by a stale env var.
+    github_app_private_key_file: str | None = None
+
+    # GitLab OAuth application (Applications > New application on the instance).
+    # The client id is public; the secret is the deployment-wide secret of the
+    # GitLab half. Both are per-DEPLOYMENT, and a tenant's own refresh token —
+    # which IS per tenant — goes into the phase-3 encrypted store instead.
+    gitlab_oauth_client_id: str | None = None
+    gitlab_oauth_client_secret: str | None = Field(default=None, repr=False)
+    # Scope requested from GitLab. ``api`` is what reading and writing issues
+    # needs; narrowing it further breaks the board's writes.
+    gitlab_oauth_scope: str = "api"
+
     # HMAC secret anchoring the tamper-evident audit chain (#21). Each audit
     # entry's hash is HMAC-SHA256 over its canonical fields chained to the prior
     # entry's hash, so any after-the-fact mutation breaks the chain. The default

@@ -44,6 +44,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+# Canonical shared ratchet rules, vendored byte-exact from the Factory hub
+# and byte-exact drift-gated (Factory#403). scripts/ is sys.path[0] when this
+# runs as a script, so the sibling import resolves without packaging.
+from ratchet_helpers import MYPY_TEST_RELAX, is_test_file
+
 PACKAGE_DEFAULT = "apps/backend/cfactory"
 
 # mypy text output lines look like:  path/to/file.py:12: error: <msg>  [code]
@@ -130,27 +135,6 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
         return Counter(item["code"] for item in items)
 
 
-def _is_test_file(path: str) -> bool:
-    """Does *path* name a test file, by the same shape ruff per-file-ignores use?
-
-    Kept deliberately in step with the ruff config (`**/test_*.py`,
-    `**/*_test.py`, `**/tests/**`) so one tool cannot treat a file as a test
-    while the other holds it to the production bar. Ported from the hub
-    canonical (Factory#403).
-    """
-    norm = path.replace("\\", "/")
-    name = norm.rsplit("/", 1)[-1]
-    return (
-        "/tests/" in f"/{norm}"
-        or "/test/" in f"/{norm}"
-        or name.startswith("test_")
-        or name.endswith("_test.py")
-    )
-
-
-_MYPY_TEST_RELAX = ["--allow-untyped-defs", "--allow-incomplete-defs"]
-
-
 def mypy_command(target: str, original: str | None = None) -> list[str]:
     """The mypy invocation used for both the base and HEAD version of a file.
 
@@ -169,7 +153,7 @@ def mypy_command(target: str, original: str | None = None) -> list[str]:
         "--no-error-summary",
         "--no-color-output",
         "--hide-error-context",
-        *(_MYPY_TEST_RELAX if _is_test_file(original if original is not None else target) else []),
+        *(MYPY_TEST_RELAX if is_test_file(original if original is not None else target) else []),
         target,
     ]
 

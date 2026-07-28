@@ -70,9 +70,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GITOPS_PAT}" ]; then
-            echo "::notice::GITOPS_PAT unset; deploy drift cannot be checked."
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            exit 0
+            # FAIL, do not skip. deploy.yml treats a missing PAT as a soft
+            # notice because it must not break a build - but a watchdog that
+            # cannot see the deployed state and still reports success is a
+            # blind watchdog reporting green, which is the exact class of
+            # false-green this workflow exists to catch (#219). The only
+            # honest answer to "is main deployed?" without the credential is
+            # "I cannot tell", and that has to be loud.
+            echo "::error::GITOPS_PAT is unset, so deploy drift CANNOT be checked."
+            echo "This watchdog is blind. Set the secret or delete the workflow;"
+            echo "leaving it green while it checks nothing is worse than both."
+            exit 1
           fi
           # Credentials via env, never on the command line.
           tag=$(curl -sSf \
@@ -84,7 +92,6 @@ jobs:
           echo "Deployed tag: ${tag}"
 
       - name: Compare (blocking)
-        if: steps.deployed.outputs.tag != ''
         run: |
           python3 scripts/check_deploy_drift.py \
             --expected-sha "${{ steps.expected.outputs.sha }}" \

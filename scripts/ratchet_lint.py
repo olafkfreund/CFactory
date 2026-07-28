@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -92,9 +93,32 @@ def materialized(source: str, filename: str) -> Iterator[str]:
         Path(tmp).unlink(missing_ok=True)
 
 
+@contextmanager
+def ruff_materialized(source: str, filename: str) -> Iterator[str]:
+    """Materialise *source* for RUFF under its REAL basename in a fresh temp dir.
+
+    Deliberately NOT ``materialized()`` above. That one writes beside the target
+    because mypy needs the real package location or relative imports break
+    (issue #193) - but it uses a random prefix, which defeats ruff
+    per-file-ignores like ``**/test_*.py``. A net-new test file was therefore
+    held to the non-test bar and tripped S101 while clean under its real path.
+
+    The two tools want different things and cannot share one strategy: mypy
+    needs the LOCATION, ruff needs the BASENAME. ruff resolves no imports, so a
+    fresh directory costs it nothing. Factory#403.
+    """
+    tmpdir = tempfile.mkdtemp()
+    try:
+        tmp = Path(tmpdir) / Path(filename).name
+        tmp.write_text(source)
+        yield str(tmp)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def ruff_counts(source: str, filename: str) -> Counter[str]:
     """Per-rule ruff violation counts for *source* checked as *filename*."""
-    with materialized(source, filename) as tmp:
+    with ruff_materialized(source, filename) as tmp:
         res = _run(["ruff", "check", "--config", "ruff.toml", "--output-format", "json", tmp])
         if not res.stdout.strip():
             return Counter()

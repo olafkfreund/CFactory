@@ -130,7 +130,28 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
         return Counter(item["code"] for item in items)
 
 
-def mypy_command(target: str) -> list[str]:
+def _is_test_file(path: str) -> bool:
+    """Does *path* name a test file, by the same shape ruff per-file-ignores use?
+
+    Kept deliberately in step with the ruff config (`**/test_*.py`,
+    `**/*_test.py`, `**/tests/**`) so one tool cannot treat a file as a test
+    while the other holds it to the production bar. Ported from the hub
+    canonical (Factory#403).
+    """
+    norm = path.replace("\\", "/")
+    name = norm.rsplit("/", 1)[-1]
+    return (
+        "/tests/" in f"/{norm}"
+        or "/test/" in f"/{norm}"
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+    )
+
+
+_MYPY_TEST_RELAX = ["--allow-untyped-defs", "--allow-incomplete-defs"]
+
+
+def mypy_command(target: str, original: str | None = None) -> list[str]:
     """The mypy invocation used for both the base and HEAD version of a file.
 
     ``--follow-imports=silent`` keeps mypy from reporting errors in imported
@@ -148,6 +169,7 @@ def mypy_command(target: str) -> list[str]:
         "--no-error-summary",
         "--no-color-output",
         "--hide-error-context",
+        *(_MYPY_TEST_RELAX if _is_test_file(original if original is not None else target) else []),
         target,
     ]
 
@@ -161,7 +183,7 @@ def mypy_count(source: str, filename: str) -> int:
     `materialized`) so the comparison is symmetric and relative imports resolve.
     """
     with materialized(source, filename) as tmp:
-        res = _run(mypy_command(tmp), env={**os.environ, "MYPYPATH": "apps/backend"})
+        res = _run(mypy_command(tmp, filename), env={**os.environ, "MYPYPATH": "apps/backend"})
         return sum(1 for line in res.stdout.splitlines() if _MYPY_ERROR_RE.match(line))
 
 

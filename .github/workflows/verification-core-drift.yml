@@ -1,0 +1,89 @@
+name: verification-core drift gate
+
+# Blocking drift gate for the vendored canonical layer (Factory#158,
+# epic Factory#154, CFactory#233).
+#
+# CFactory hand-vendors one module from the Factory hub's canonical surface
+# (the hub's scripts/):
+#   scripts/ratchet_helpers.py   (shared lint-ratchet rules, Factory#403/#410)
+#
+# That copy MUST stay byte-identical to the hub canonical. This job checks out
+# the hub at a PINNED SHA and runs the hub's own drift gate
+# (scripts/check_verification_core_drift.py) against this checkout. A byte
+# mismatch fails the build.
+#
+# Until now CFactory vendored the file with NO gate of any kind, so it could
+# diverge silently and indefinitely — the same false-green shape as
+# Factory#397 and Factory#400. An unchecked vendored copy is worse than no
+# vendored copy, because it carries the appearance of a contract.
+#
+# To intentionally change a vendored module: land the change in the hub
+# canonical first (CODEOWNERS-reviewed), re-vendor it here byte-for-byte, and
+# bump HUB_PIN_SHA below. Never edit a vendored copy to satisfy a local style
+# bar — the copies are governed by this byte-exact gate, not the repo style
+# config.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/ratchet_helpers.py"
+      - ".github/workflows/verification-core-drift.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/ratchet_helpers.py"
+      - ".github/workflows/verification-core-drift.yml"
+
+concurrency:
+  group: vcore-drift-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned Factory hub commit carrying the canonical modules. Bump deliberately
+  # when re-vendoring (see header). MUST name a commit that actually contains
+  # the gated file: the pin used to sit behind ratchet_helpers.py's own
+  # creation fleet-wide, which would fail every service with "canonical
+  # missing" (Factory#403).
+  HUB_PIN_SHA: "a9f44033dbb041d8a1468226c6325ea1f175a264"
+
+jobs:
+  drift:
+    name: vendored copies match the hub canonical (byte-exact)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this service
+        uses: actions/checkout@v4
+        with:
+          path: service
+
+      - name: Check out the Factory hub canonical at the pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: ${{ env.HUB_PIN_SHA }}
+          path: factory-hub
+
+      - name: Check out the hub drift CHECKER at main
+        # Not at HUB_PIN_SHA: a gate fetched from its own pin cannot ship its
+        # own fix. The CANONICAL above stays pinned, so comparisons remain
+        # reproducible; only the gate's own logic floats (Factory#405).
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: main
+          path: factory-hub-main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run the hub drift gate against this service (blocking)
+        run: |
+          python factory-hub-main/scripts/check_verification_core_drift.py \
+            --canonical factory-hub/scripts \
+            --service cfactory \
+            --root service

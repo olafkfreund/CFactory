@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   proposeAction,
   executeAction,
+  detailOf,
   type PreparedAction,
   type ExecuteResult,
   type WorkItem,
@@ -238,18 +239,34 @@ export default function TaskActions({
         )}
       </AnimatePresence>
 
-      {stage === "done" && result && (
-        <div className={`act-result ${result.ok ? "act-result--ok" : "act-result--fail"}`}>
-          {result.ok ? "✓ Done." : `✗ Failed (HTTP ${result.status_code})`}
-          {!result.ok && result.error && <span> — {result.error}</span>}
-          {result.steps && result.steps.some((s) => !s.ok) && (
-            <span> — {result.steps.filter((s) => !s.ok).map((s) => s.endpoint).join(", ")}</span>
-          )}
-          <button className="act-btn act--cancel" onClick={reset}>
-            Close
-          </button>
-        </div>
-      )}
+      {stage === "done" && result && <ActionResult result={result} onClose={reset} />}
     </section>
+  );
+}
+
+// The finished-action banner. Exported so the sentence a refusal renders is
+// testable on its own — the banner sits behind internal `stage === "done"`
+// state that a static-markup render (this app has no jsdom) cannot reach.
+export function ActionResult({
+  result,
+  onClose,
+}: {
+  result: ExecuteResult;
+  onClose: () => void;
+}) {
+  // Why it failed: the backend's own `error` when it set one (transport or
+  // validation), otherwise the refusing service's `{detail}` from the body.
+  const why = result.ok ? null : (result.error ?? detailOf(result.body));
+  return (
+    <div className={`act-result ${result.ok ? "act-result--ok" : "act-result--fail"}`}>
+      {result.ok ? "✓ Done." : `✗ Failed (HTTP ${result.status_code})`}
+      {why && <span> — {why}</span>}
+      {result.steps && result.steps.some((s) => !s.ok) && (
+        <span> — {result.steps.filter((s) => !s.ok).map((s) => s.endpoint).join(", ")}</span>
+      )}
+      <button className="act-btn act--cancel" onClick={onClose}>
+        Close
+      </button>
+    </div>
   );
 }

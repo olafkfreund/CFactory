@@ -75,12 +75,23 @@ const ErrorDetailSchema = z.object({
   detail: z.union([z.string(), z.object({ reason: z.string(), message: z.string() })]).optional(),
 });
 
+// The human sentence inside an error body, or null when it carries none.
+//
+// All four services are FastAPI, so `{detail: "..."}` is the convention and one
+// reader covers every call site — including the ones where the refusal arrives
+// as data rather than as a non-2xx (#244): `/api/actions/execute` answers 200
+// with `{status_code: 409, ok: false, body: {detail}}`, so the banner has to dig
+// the sentence out of `body` itself.
+export function detailOf(body: unknown): string | null {
+  const parsed = ErrorDetailSchema.safeParse(body);
+  const detail = parsed.success ? parsed.data.detail : undefined;
+  if (typeof detail === "string") return detail;
+  return detail ? detail.message : null;
+}
+
 async function errorDetail(resp: Response): Promise<string> {
   try {
-    const { detail } = ErrorDetailSchema.parse(await resp.json());
-    if (typeof detail === "string") return detail;
-    if (detail) return detail.message;
-    return `HTTP ${resp.status}`;
+    return detailOf(await resp.json()) ?? `HTTP ${resp.status}`;
   } catch {
     return `HTTP ${resp.status}`;
   }

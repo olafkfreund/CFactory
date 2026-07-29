@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ComponentType, type SVGProps } from 
 import { AnimatePresence, motion } from "framer-motion";
 import { fetchLiveAgents, fetchTokens, fetchTokensByWorker, fetchWorkerProgress, refresh as apiRefresh, type LiveAgent, type LiveProgress, type ProgressSample, type ServiceState, type WorkerRow, type WorkItem } from "./api";
 import { IconDocument, IconRobot, IconFlask } from "./icons";
-import { stageState, overallState, STATE_LABEL, STATE_PILL, type TaskState } from "./taskState";
+import { stageState, overallState, isActiveState, STATE_LABEL, STATE_PILL, type TaskState } from "./taskState";
 import { displayTitle, keySlug } from "./correlationKey";
 import TaskDetail from "./TaskDetail";
 import AgentConsoleModal from "./AgentConsoleModal";
@@ -210,7 +210,7 @@ export default function RunningTasksView({
   const counts = useMemo(() => {
     const c = { active: 0, running: 0, review: 0, failed: 0, done: 0 };
     for (const r of rows) {
-      if (r.overall !== "done") c.active++;
+      if (isActiveState(r.overall)) c.active++;
       if (r.overall === "running") c.running++;
       else if (r.overall === "review") c.review++;
       else if (r.overall === "failed") c.failed++;
@@ -220,7 +220,7 @@ export default function RunningTasksView({
   }, [rows]);
 
   const shown = rows.filter((r) =>
-    filter === "active" ? r.overall !== "done" : r.overall === filter,
+    filter === "active" ? isActiveState(r.overall) : r.overall === filter,
   );
 
   const CHIPS: { id: Filter; label: string }[] = [

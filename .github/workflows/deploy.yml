@@ -10,7 +10,12 @@ name: Deploy (CD → ArgoCD)
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', '**/*.md']
+    # '*.md' is root-level markdown only (README, CHANGELOG) -- deliberately
+    # NOT '**/*.md', which would also ignore any markdown baked into the
+    # runtime image. CFactory ships no prompts today, but the sibling services
+    # do, and the rule is the same in all four repos so the next baked-in
+    # markdown file cannot land undeployed. See Factory#454.
+    paths-ignore: ['docs/**', '*.md']
   workflow_dispatch: {}
 
 concurrency:

@@ -53,12 +53,20 @@ jobs:
         id: expected
         run: |
           set -euo pipefail
-          # deploy.yml ignores docs/** and **/*.md, so main's HEAD is NOT
-          # necessarily the commit that should be live -- a docs-only merge
+          # deploy.yml ignores docs/** and root-level *.md, so main's HEAD is
+          # NOT necessarily the commit that should be live -- a docs-only merge
           # legitimately leaves the deployed tag behind. Compare against the
           # newest commit that would actually have triggered a deploy, or this
           # watchdog reports drift every time someone edits a README.
-          sha=$(git log -1 --format='%H' main -- . ':(exclude)docs' ':(exclude)*.md')
+          #
+          # The `glob` magic matters and must match deploy.yml (Factory#454):
+          # a bare ':(exclude)*.md' pathspec is fnmatch WITHOUT pathname
+          # semantics, so its '*' crosses '/' and it would exclude EVERY
+          # markdown file at any depth -- wider than deploy.yml now ignores.
+          # This watchdog would then go quiet exactly when a nested-markdown
+          # commit failed to deploy. ':(exclude,glob)' stops '*' at '/', so
+          # only root-level markdown is excluded here too.
+          sha=$(git log -1 --format='%H' main -- . ':(exclude)docs' ':(exclude,glob)*.md')
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
           echo "epoch=$(git log -1 --format='%ct' "${sha}")" >> "$GITHUB_OUTPUT"
           echo "Newest deployable commit: ${sha}"

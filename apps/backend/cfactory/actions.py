@@ -331,6 +331,29 @@ def _base_url_for(settings: Settings, target_service: str) -> str:
     }[target_service]
 
 
+def _refusal_in_body(body: Any) -> str | None:
+    """The failure a response BODY declares, or None if it declares none.
+
+    Factory#460: the status line is not the verdict. The factories answer with a
+    ``{"success": bool, "error": str}`` envelope and have historically returned
+    refusals inside an HTTP 200 -- GitHub declining a merge came back as
+    ``200 {"success": false, "error": "not mergeable"}``. A client that reads
+    only ``resp.is_success`` then tells the reviewer "Done.", writes ``ok=true``
+    into the audit trail, and runs the follow-up step anyway.
+
+    ``ok`` must mean "the operation succeeded", never "the HTTP call was
+    answered". Checked here, at the single seam every action step passes
+    through, so no caller can forget it and no future consumer repeats it.
+    """
+    if not isinstance(body, dict) or body.get("success") is not False:
+        return None
+    for key in ("error", "detail", "message"):
+        value = body.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "upstream reported success=false"
+
+
 def _do(
     client: httpx.Client, method: str, endpoint: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -339,13 +362,17 @@ def _do(
         body: Any = resp.json()
     except ValueError:
         body = resp.text
-    return {
+    refusal = _refusal_in_body(body)
+    step: dict[str, Any] = {
         "method": method,
         "endpoint": endpoint,
         "status_code": resp.status_code,
-        "ok": resp.is_success,
+        "ok": resp.is_success and refusal is None,
         "body": body,
     }
+    if refusal is not None:
+        step["error"] = refusal
+    return step
 
 
 def execute_action(
@@ -403,9 +430,17 @@ def execute_action(
         return {"status_code": 0, "ok": False, "error": str(exc), "steps": results}
 
     last = results[-1]
-    return {
+    out: dict[str, Any] = {
         "status_code": last["status_code"],
         "ok": all(r["ok"] for r in results),
         "body": last["body"],
         "steps": results,
     }
+    # Lift the first step's refusal to the top level: the cockpit renders
+    # ``result.error`` and otherwise falls back to the body's ``{detail}``, which
+    # a ``{"success": false, "error": ...}`` envelope does not carry. Without
+    # this the banner reads "Failed" with no reason at all.
+    failed = next((r for r in results if not r["ok"]), None)
+    if failed is not None and failed.get("error"):
+        out["error"] = failed["error"]
+    return out

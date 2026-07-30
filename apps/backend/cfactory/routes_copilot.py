@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from .api_deps import AskRequest, CopilotSettingsUpdate, copilot_dep
 from .auth import require_scope
-from .config import COPILOT_PROVIDERS, get_settings, set_copilot_settings
+from .config import COPILOT_PROVIDERS, get_settings, resolve_tenant, set_copilot_settings
 from .copilot import Copilot, provider_status, reset_copilot
 
 router = APIRouter(tags=["copilot"])
@@ -40,11 +40,20 @@ async def copilot_provider() -> dict[str, object]:
 
 
 @router.get("/api/settings")
-async def get_settings_view() -> dict[str, object]:
-    """Editable cockpit settings. Currently the copilot provider + model, plus
-    the available providers and (for Ollama Cloud) live connectivity + model
-    list. The API key is never returned — only a ``has_key`` flag."""
-    return await run_in_threadpool(_settings_payload)
+async def get_settings_view(
+    x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-Id")] = None,
+) -> dict[str, object]:
+    """Editable cockpit settings: the copilot provider + model, plus the
+    available providers and (for Ollama Cloud) live connectivity + model list.
+    The API key is never returned — only a ``has_key`` flag.
+
+    Also carries the caller's resolved `tenant`, which is how the cockpit knows
+    which `/api/tenants/{tenant}/git-config` is its own: the tenant is injected
+    by oauth2-proxy from the Keycloak claim and is deliberately not something the
+    browser gets to choose, so the backend has to say what it resolved to.
+    """
+    payload = await run_in_threadpool(_settings_payload)
+    return {**payload, "tenant": resolve_tenant(x_tenant_id, get_settings())}
 
 
 @router.put("/api/settings/copilot")

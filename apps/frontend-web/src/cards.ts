@@ -1,0 +1,500 @@
+// Shared planning-card logic (RFC-0019 Phase 1, #302) used by BOTH the Backlog
+// list and the planning Kanban board: the status vocabulary, the pure
+// ordering/filter helpers, the optimistic-mutation primitive and the `useCards`
+// data hook. The chrome the two views share lives in CardParts.tsx; everything
+// cross-view lives in one of those two so neither view copies the other.
+//
+// Planning statuses are NOT the PARR pipeline stage statuses rendered by
+// Board.tsx: that board is execution (plan → code → test); this one is the
+// planning axis (backlog → done). They are deliberately separate surfaces.
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  fetchCardSyncState,
+  fetchCards,
+  fetchGitConnections,
+  fetchSettings,
+  importCards,
+  patchCard,
+  runCardStage,
+  type Card,
+  type CardFilters,
+  type CardImport,
+  type CardPatch,
+  type CardSyncState,
+  type CardStage,
+  type CardStatus,
+  type CardTier,
+  type GitConnections,
+  type StageActionResult,
+} from "./api";
+
+/** The Kanban columns, in board order. `cls` picks the column accent in CSS. */
+export const CARD_STATUSES: { key: CardStatus; label: string; cls: string }[] = [
+  { key: "backlog", label: "Backlog", cls: "backlog" },
+  { key: "ready", label: "Ready", cls: "ready" },
+  { key: "in_progress", label: "In progress", cls: "progress" },
+  { key: "blocked", label: "Blocked", cls: "blocked" },
+  { key: "done", label: "Done", cls: "done" },
+];
+
+export const CARD_TIERS: CardTier[] = ["low", "medium", "hard"];
+
+/** The pipeline stages, in the order `run` walks them. */
+export const CARD_STAGES: CardStage[] = ["plan", "code", "test"];
+
+/** A stage action, or the whole sequence. */
+export type StageAction = CardStage | "run";
+
+/** The buttons on a card, in press order. `hint` is the title when enabled. */
+export const CARD_STAGE_ACTIONS: { key: StageAction; label: string; hint: string }[] = [
+  { key: "plan", label: "Plan", hint: "Decompose this card in PFactory" },
+  { key: "code", label: "Code", hint: "Build this card in AIFactory" },
+  { key: "test", label: "Test", hint: "Verify the build in TFactory" },
+  { key: "run", label: "Run all", hint: "Plan, then code, then test" },
+];
+
+/**
+ * Why this action cannot be taken right now, or null when it can.
+ *
+ * A deliberate MIRROR of the backend's precondition rules
+ * (`card_intake.refuse_reason`) — the same relationship `taskState.ts` has with
+ * `status_taxonomy.py`. The backend is the authority and still refuses with a 409
+ * whatever the UI does; this only exists so a button that would be refused is
+ * disabled with the reason on it rather than inviting a pointless round trip.
+ *
+ * Deliberately NOT mirrored: `no_intake_project`, which is deployment state the
+ * browser cannot see. That one surfaces as the backend's refusal message.
+ */
+export function stageBlocker(card: Card, action: StageAction): string | null {
+  if (!card.tier) return "set a tier first — it decides what gets sent";
+  const runs = card.stage_runs;
+  const live = CARD_STAGES.find((s) => runs[s]?.status === "dispatched");
+  if (action === "run") {
+    if (live) return `${live} is already running`;
+  } else {
+    if (runs[action]?.status === "dispatched") return `${action} is already running`;
+    if (runs[action]?.status === "done") return `${action} has already completed`;
+  }
+  if (action === "test" && !(card.correlation_key && runs.code?.status === "done")) {
+    return "nothing built to verify yet — run code to completion first";
+  }
+  return null;
+}
+
+/**
+ * The one-line notice a stage action leaves behind, or null when it just worked.
+ *
+ * Covers the two things a human needs told even though nothing failed: a stage
+ * that was SKIPPED (already complete), and a warning that the action overrode
+ * tier routing or skipped planning.
+ */
+export function stageNotice(cardKey: string, result: StageActionResult): string | null {
+  const { skipped, reason, warnings, dispatched, ok } = result.stage;
+  if (ok === false) return `${cardKey}: ${reason ?? "dispatch failed"}`;
+  if (dispatched === false) return `${cardKey}: ${reason ?? skipped ?? "nothing to do"}`;
+  return warnings?.length ? `${cardKey}: ${warnings.join(" ")}` : null;
+}
+
+/**
+ * The one-line summary an import leaves in the notice banner (RFC-0020 §3.6).
+ *
+ * Says three things the human cannot see from the board itself: how much came
+ * in, whether `CFACTORY_IMPORT_MAX` truncated the run (a board holding the first
+ * 1000 of 3000 issues looks complete and is not), and how stale it is — import
+ * is a poll, never live.
+ */
+export function importNotice(result: CardImport): string {
+  const truncated = result.truncated ? " (truncated — raise CFACTORY_IMPORT_MAX)" : "";
+  return (
+    `Imported ${String(result.imported)}, updated ${String(result.updated)}, ` +
+    `skipped ${String(result.skipped)} from ${result.project}${truncated}. ` +
+    `Synced ${result.polled_at ?? "just now"} — polled, not live.`
+  );
+}
+
+/**
+ * "4 min ago" for a timestamp, "never" for nothing (#374).
+ *
+ * A relative age, not an ISO string: the question a human is asking of the sync
+ * line is "is this current?", and `2026-07-26T09:14:02+00:00` makes them do
+ * arithmetic to answer it.
+ */
+export function relativeAge(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return "never";
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "never";
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${String(minutes)} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${String(hours)} h ago`;
+  return `${String(Math.round(hours / 24))} d ago`;
+}
+
+/**
+ * The one line that says whether the board can be trusted (#374).
+ *
+ * Three distinct states, because they need three distinct answers:
+ *
+ * - nothing configured — there is no repository to sync with, so "not connected";
+ * - the poll is off — the board will NOT catch up on its own, whatever the
+ *   timestamp says, and that is the thing worth saying first;
+ * - otherwise — how long ago the freshest / stalest repository was read.
+ *
+ * A board that is merely a few minutes behind is normal and says so quietly; one
+ * that has gone more than two cadences without a successful read is stale, which is
+ * the state that used to be invisible.
+ */
+export function syncSummary(state: CardSyncState | null, now: number = Date.now()): string {
+  if (!state) return "Sync state unavailable";
+  const repos = state.repositories.filter((repo) => repo.project);
+  if (repos.length === 0) return "No repository connected — nothing to sync";
+  const stale = repos.filter((repo) => repo.stale);
+  const newest = repos
+    .map((repo) => repo.last_polled_at)
+    .filter((stamp): stamp is string => Boolean(stamp))
+    .sort()
+    .at(-1);
+  const cadence = Math.round(state.poll.interval_seconds / 60);
+  const age = `Synced ${relativeAge(newest, now)}`;
+  if (!state.poll.enabled) {
+    return `${age} — automatic sync is OFF (CFACTORY_IMPORT_POLL), so use Sync now`;
+  }
+  if (stale.length === repos.length) {
+    return `${age} — STALE, and the board may be behind the repository`;
+  }
+  if (stale.length > 0) {
+    return `${age}, but ${String(stale.length)} of ${String(repos.length)} repositories are stale`;
+  }
+  return `${age} — polls every ${String(cadence)} min, not live`;
+}
+
+/**
+ * The web URL of the issue a card projects, or null when it cannot be built (#213).
+ *
+ * `issue_ref` is `owner/repo#123` and carries NO host, so the host has to come
+ * from the tenant's git configuration — this board is multi-provider, and
+ * hardcoding github.com would point every self-hosted GitLab card at the wrong
+ * place. `base_url` is an API root, so github's needs mapping back to its web
+ * root (api.github.com -> github.com, and a GitHub Enterprise `/api/v3` root ->
+ * its own host).
+ *
+ * Azure DevOps returns null on purpose: its project path is three-part and its
+ * issues are work items on a different URL shape, so anything built from a
+ * two-part ref would be a confidently wrong link. The ref still renders as text —
+ * no link beats a broken link.
+ */
+export function issueUrl(
+  issueRef: string | null | undefined,
+  provider: string,
+  baseUrl: string,
+): string | null {
+  const ref = /^([^\s#]+)#(\d+)$/.exec((issueRef ?? "").trim());
+  if (!ref) return null;
+  const [, project, number] = ref;
+  const root = baseUrl.trim().replace(/\/+$/, "");
+  if (provider === "github") {
+    const web =
+      root === "https://api.github.com" || root === ""
+        ? "https://github.com"
+        : root.replace(/\/api\/v3$/, "");
+    return `${web}/${project}/issues/${number}`;
+  }
+  if (provider === "gitlab") {
+    return `${root || "https://gitlab.com"}/${project}/-/issues/${number}`;
+  }
+  return null;
+}
+
+/** The provider and host one repository is reached through. */
+export type IssueHost = { provider: string; baseUrl: string };
+
+/**
+ * Turn the tenant's connections into a `card -> issue URL` builder.
+ *
+ * Resolved per CARD, not per tenant. A tenant has several connections and a card
+ * carries `repository_id`, so "the tenant's host" is not a thing that exists: a
+ * card whose repository lives on a self-hosted GitLab would be handed a
+ * github.com URL by any single tenant-wide host, and that link would be
+ * confidently wrong. The whole `repository_id -> host` map comes out of the ONE
+ * `git-connections` read, so this is still one fetch for the whole board rather
+ * than one per card.
+ *
+ * `repository_id` is null for the tenant DEFAULT repository, and a card naming a
+ * repository that has since been deleted falls back to the default too — which is
+ * exactly what the backend does when it resolves that card's target.
+ *
+ * A tenant with no connections (or no default) yields a builder that returns
+ * null: the ref renders as text, and no link beats a wrong link.
+ */
+export function issueUrlResolver(
+  connections: GitConnections | null,
+): (card: Card) => string | null {
+  if (!connections) return () => null;
+  const byRepository = new Map<number, IssueHost>();
+  for (const connection of connections.connections) {
+    for (const repository of connection.repositories) {
+      byRepository.set(repository.id, {
+        provider: connection.provider,
+        baseUrl: connection.base_url,
+      });
+    }
+  }
+  const fallback =
+    connections.default_repository_id != null
+      ? (byRepository.get(connections.default_repository_id) ?? null)
+      : null;
+  return (card) => {
+    const named = card.repository_id != null ? byRepository.get(card.repository_id) : undefined;
+    const host = named ?? fallback;
+    return host ? issueUrl(card.issue_ref, host.provider, host.baseUrl) : null;
+  };
+}
+
+/**
+ * Resolve this tenant's git connections once, and hand back the URL builder.
+ *
+ * Two GETs on mount rather than a field on the card: the cockpit cannot know its
+ * own tenant (the backend resolves it from the header oauth2-proxy injects, see
+ * `fetchSettings`), and the hosts live on that tenant's connections. A failure is
+ * swallowed deliberately — an unconfigured or unreachable git setup must cost the
+ * board its issue LINKS, never its cards.
+ */
+export function useIssueUrl(): (card: Card) => string | null {
+  const [connections, setConnections] = useState<GitConnections | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchSettings()
+      .then((s) => fetchGitConnections(s.tenant))
+      .then((data) => {
+        if (alive) setConnections(data);
+      })
+      .catch(() => {
+        /* no hosts known — cards still render, they just carry no link */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return useMemo(() => issueUrlResolver(connections), [connections]);
+}
+
+// How much of the body a collapsed card shows. Long enough to tell two cards
+// apart, short enough that 46 of them still read as a list.
+const PEEK_LIMIT = 160;
+
+/**
+ * The one-line gist of a markdown body, for a COLLAPSED card (#213).
+ *
+ * A 46-issue backlog that renders every RFC body in full is worse than the bare
+ * titles it replaced, so the list shows this and the full markdown lives behind
+ * the disclosure. Fenced code is dropped outright (a code block is never the
+ * gist) and the remaining markdown punctuation is stripped, because this is
+ * plain text in a one-line clamp, not a second rendering surface.
+ */
+export function peek(body: string): string {
+  const flat = body
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/^\s*#{1,6}\s+/gm, "")
+    .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, "$1")
+    .replace(/^\s*[-*]\s+(\[[ xX]\]\s+)?/gm, "")
+    .replace(/[*_`>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!flat) return "Issue body";
+  return flat.length > PEEK_LIMIT ? `${flat.slice(0, PEEK_LIMIT).trimEnd()}…` : flat;
+}
+
+/** Priority order: lower number first, then card_key so the sort is stable. */
+export function byPriority(a: Card, b: Card): number {
+  return a.priority - b.priority || a.card_key.localeCompare(b.card_key);
+}
+
+/** Case-insensitive match over the fields a human would search by. */
+export function matchesQuery(card: Card, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [card.card_key, card.title, card.assignee, card.milestone, card.correlation_key]
+    .filter((v): v is string => Boolean(v))
+    .some((v) => v.toLowerCase().includes(q));
+}
+
+/** Replace one card in the list by key (identity-preserving for the others). */
+export function replaceCard(cards: Card[], next: Card): Card[] {
+  return cards.map((c) => (c.card_key === next.card_key ? next : c));
+}
+
+/**
+ * Optimistically apply `patch` to one card, PATCH it, then settle on the
+ * server's copy — rolling the list back to `cards` if the request fails.
+ *
+ * Written as a plain function over (list, setter) rather than inside the hook so
+ * the rollback contract is unit-testable without a DOM: a failed PATCH must
+ * never leave the UI showing a move that did not happen. Rethrows so the caller
+ * can surface the backend's message.
+ */
+export async function optimisticPatch(
+  cards: Card[],
+  cardKey: string,
+  patch: CardPatch,
+  apply: (next: Card[]) => void,
+  send: (key: string, p: CardPatch) => Promise<Card> = patchCard,
+): Promise<Card> {
+  const current = cards.find((c) => c.card_key === cardKey);
+  if (!current) throw new Error(`unknown card ${cardKey}`);
+  apply(replaceCard(cards, { ...current, ...patch }));
+  try {
+    const saved = await send(cardKey, patch);
+    apply(replaceCard(cards, saved));
+    return saved;
+  } catch (e) {
+    apply(cards); // roll back — the optimistic edit never happened
+    throw e;
+  }
+}
+
+export type CardsState = {
+  cards: Card[];
+  loading: boolean;
+  error: string | null;
+  /** A non-failure thing the human should know: a skipped stage, a warning. */
+  notice: string | null;
+  /** Move / reprioritise / edit one card, optimistically with rollback. */
+  mutate: (cardKey: string, patch: CardPatch) => Promise<void>;
+  /** Push one card into a stage, or through the whole sequence (RFC-0020 §3.7). */
+  runStage: (cardKey: string, action: StageAction) => Promise<void>;
+  /** True while an import is in flight, so the trigger can disable itself. */
+  importing: boolean;
+  /** How current the board is, per repository (#374). Null until the first read. */
+  syncState: CardSyncState | null;
+  /** Pull the connected repo's EXISTING issues onto the board (RFC-0020 §3.6). */
+  importIssues: () => Promise<void>;
+  /** Re-run the list query (after a create/delete). */
+  reload: () => void;
+  setError: (message: string | null) => void;
+};
+
+/**
+ * Load the card list for `filters` and expose the optimistic mutation. Follows
+ * the ServicesView fetch convention (effect + alive guard + reloadSignal).
+ */
+export function useCards(filters: CardFilters, reloadSignal: number): CardsState {
+  const [cards, setCards] = useState<Card[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [syncState, setSyncState] = useState<CardSyncState | null>(null);
+  const [tick, setTick] = useState(0);
+  // Serialise the filter object so the effect re-runs on value (not identity).
+  const filterKey = JSON.stringify(filters);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetchCards(JSON.parse(filterKey) as CardFilters)
+      .then((list) => {
+        if (alive) {
+          setCards(list);
+          setError(null);
+        }
+      })
+      .catch((e: unknown) => {
+        if (alive) setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [filterKey, reloadSignal, tick]);
+
+  // Staleness rides the same trigger as the card list, so "Sync now" refreshes the
+  // line that told the human to press it. A failure here is deliberately NOT an
+  // error banner: not knowing how fresh the board is must not look like the board
+  // being broken — `syncSummary(null)` says so quietly instead.
+  useEffect(() => {
+    let alive = true;
+    fetchCardSyncState()
+      .then((state) => {
+        if (alive) setSyncState(state);
+      })
+      .catch(() => {
+        if (alive) setSyncState(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [reloadSignal, tick]);
+
+  const mutate = useCallback(
+    async (cardKey: string, patch: CardPatch) => {
+      try {
+        await optimisticPatch(cards, cardKey, patch, setCards);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [cards],
+  );
+
+  // Not optimistic, unlike `mutate`: a dispatch's outcome is not knowable in
+  // advance (it may be refused, skipped, or blocked upstream), so the card is
+  // replaced only with what the server actually reports.
+  const runStage = useCallback(async (cardKey: string, action: StageAction) => {
+    try {
+      const result = await runCardStage(cardKey, action);
+      if (result.card) {
+        const settled = result.card;
+        setCards((current) => replaceCard(current, settled));
+      }
+      setError(null);
+      setNotice(stageNotice(cardKey, result));
+    } catch (e) {
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  const reload = useCallback(() => {
+    setTick((t) => t + 1);
+  }, []);
+
+  // Like `runStage` and unlike `mutate`, this is not optimistic: how many issues
+  // a repository has is not knowable in advance, so the board is re-read from
+  // the server once the import reports what it did. A backend that answers
+  // `ok: false` (unreachable or unconfigured provider) is an error, not a
+  // notice — it is a 200 on the wire but a failure to the human.
+  const importIssues = useCallback(async () => {
+    setImporting(true);
+    try {
+      const result = await importCards();
+      if (!result.ok) throw new Error(result.reason ?? "import failed");
+      setError(null);
+      setNotice(importNotice(result));
+      setTick((t) => t + 1);
+    } catch (e) {
+      setNotice(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
+  return {
+    cards,
+    loading,
+    error,
+    notice,
+    mutate,
+    runStage,
+    importing,
+    importIssues,
+    syncState,
+    reload,
+    setError,
+  };
+}

@@ -76,6 +76,12 @@ agentic SDLC needs.
 
 [See the architecture →](/architecture/) &nbsp; · &nbsp; [See the roadmap →](/roadmap/) &nbsp; · &nbsp; [Meet the family →](/family/)
 
+**Plan the work:** the [Planning board guide](guides/planning-board.md) — the
+agent-native backlog RFC-0019 added in front of the pipeline: cards, board views,
+MCP board tools and scopes, and how promoting a card to `ready` dispatches it
+into the factory by itself. New here? Follow
+[Plan a card, watch it build](guides/plan-a-card-walkthrough.md) end to end.
+
 **See the cockpit:** the [Cockpit gallery](guides/cockpit-gallery.md) — a captioned tour of every view, captured against the live cluster, including the live execution graph across all three PARR stages.
 
 **Connect your editor:** see [Connecting editors & external clients](guides/token-gated-api.md) — how to point VS Code (and other clients) at CFactory in any deployment.
@@ -83,6 +89,10 @@ agentic SDLC needs.
 **Design system:** the [Factory Design System](guides/factory-design-system.md) — the shared brand & UI rules every Factory service follows so the suite looks like one product.
 
 **Multi-tenant mode:** [Multi-Tenant Mode](guides/multi-tenant.md) — the `CFACTORY_MULTI_TENANT` flag, how `X-Tenant-Id` is resolved, and the operator flip steps.
+
+**GitHub sync:** [GitHub Card ↔ Issue Sync](guides/github-card-sync.md) — how a planning card is backed by a GitHub issue, and the conflict rule: GitHub is the record of truth, so on conflict **GitHub wins**.
+
+**Connecting a git host:** [Registering the GitHub App and the GitLab OAuth application](guides/git-app-install.md) — the operator runbook for the install flow: which permissions to grant, which events to leave off, where the callback is hosted and why, and what to do with the App private key. The one part of the flow no software can do for you.
 
 **Configuration:** the [Environment reference](dev/environment-reference.md) — every environment variable, flag and operational parameter CFactory reads, with defaults and which ones must be set for a hosted deployment.
 

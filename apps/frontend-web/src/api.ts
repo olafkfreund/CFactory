@@ -17,10 +17,33 @@ import { z } from "zod";
 // then validate the body against `schema` (returning the inferred type). The
 // thrown message is identical to the previous hand-rolled calls
 // (`<label> error: HTTP <status>`), so callers behave exactly as before.
-async function getJson<T>(path: string, schema: z.ZodType<T>, label: string): Promise<T> {
+async function getJson<T>(
+  path: string,
+  // Input is `unknown` (a parsed JSON body), not `T` — so a schema with a
+  // `.default()`, whose input and output types differ, is accepted here.
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  label: string,
+): Promise<T> {
   const resp = await fetch(path);
   if (!resp.ok) throw new Error(`${label} error: HTTP ${resp.status}`);
   return schema.parse(await resp.json());
+}
+
+// A non-2xx from the backend, carrying the status alongside the message.
+//
+// Extends Error, so every existing `e instanceof Error ? e.message : ...` caller
+// is unaffected and still shows exactly the same sentence. The status is here for
+// the handful of codes that mean something specific to a caller rather than
+// "that failed" — a 503 on a credential write is the deployment having no
+// encryption key, which the user has to be told plainly (RFC-0020 §3.4).
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
 }
 
 // Shared write helper (PUT/POST + JSON body). On a non-2xx it surfaces the
@@ -28,27 +51,50 @@ async function getJson<T>(path: string, schema: z.ZodType<T>, label: string): Pr
 // then validates the body against `schema`. Identical behavior to the
 // hand-rolled updateCopilotSettings/updateService blocks it replaces.
 async function sendJson<T>(
-  method: "POST" | "PUT",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body: unknown,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
 ): Promise<T> {
   const resp = await fetch(path, {
     method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!resp.ok) {
-    let detail = `HTTP ${resp.status}`;
-    try {
-      detail =
-        z.object({ detail: z.string().optional() }).parse(await resp.json()).detail ?? detail;
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new Error(detail);
-  }
+  if (!resp.ok) throw new ApiError(await errorDetail(resp), resp.status);
   return schema.parse(await resp.json());
+}
+
+// Surface the backend's `{detail}` message when present, falling back to
+// `HTTP <status>` for a non-JSON error body.
+//
+// `detail` is normally a string. A refused stage action (RFC-0020 §3.7) instead
+// sends `{reason, message}` so a caller can branch on the machine-readable code;
+// accept either shape and show the human sentence, which is what a banner needs.
+const ErrorDetailSchema = z.object({
+  detail: z.union([z.string(), z.object({ reason: z.string(), message: z.string() })]).optional(),
+});
+
+// The human sentence inside an error body, or null when it carries none.
+//
+// All four services are FastAPI, so `{detail: "..."}` is the convention and one
+// reader covers every call site — including the ones where the refusal arrives
+// as data rather than as a non-2xx (#244): `/api/actions/execute` answers 200
+// with `{status_code: 409, ok: false, body: {detail}}`, so the banner has to dig
+// the sentence out of `body` itself.
+export function detailOf(body: unknown): string | null {
+  const parsed = ErrorDetailSchema.safeParse(body);
+  const detail = parsed.success ? parsed.data.detail : undefined;
+  if (typeof detail === "string") return detail;
+  return detail ? detail.message : null;
+}
+
+async function errorDetail(resp: Response): Promise<string> {
+  try {
+    return detailOf(await resp.json()) ?? `HTTP ${resp.status}`;
+  } catch {
+    return `HTTP ${resp.status}`;
+  }
 }
 
 // --- Health ---------------------------------------------------------------
@@ -481,13 +527,326 @@ export const CopilotSettingsSchema = z.object({
 });
 export type CopilotSettings = z.infer<typeof CopilotSettingsSchema>;
 
-export async function fetchSettings(): Promise<CopilotSettings> {
+// `tenant` is the tenant the BACKEND resolved this request to (RFC-0020 §3.3).
+// The cockpit cannot know it on its own: it is injected by oauth2-proxy from the
+// Keycloak claim and is deliberately not the browser's to choose, so the backend
+// says what it resolved to and the Settings panel uses it to address its own git
+// configuration.
+export async function fetchSettings(): Promise<CopilotSettings & { tenant: string }> {
   const data = await getJson(
     "/api/settings",
-    z.object({ copilot: CopilotSettingsSchema }),
+    z.object({ copilot: CopilotSettingsSchema, tenant: z.string().default("default") }),
     "settings",
   );
-  return data.copilot;
+  return { ...data.copilot, tenant: data.tenant };
+}
+
+// ── Tenant git configuration (RFC-0020 §3.3) ────────────────────────────────
+
+// The MASKED credential indicator (RFC-0020 §3.4). Whether this tenant has a
+// credential, when it was stored, and which key wraps it — and deliberately no
+// field for the credential itself, not even a masked prefix. The cockpit cannot
+// render what it is never sent, which is the point: a value that never reaches
+// the browser cannot leak from it.
+export const CredentialInfoSchema = z.object({
+  configured: z.boolean(),
+  source: z.string(), // "tenant" | "env" | "none"
+  updated_at: z.string().nullable().optional(),
+  key_version: z.string().nullable().optional(),
+});
+export type CredentialInfo = z.infer<typeof CredentialInfoSchema>;
+
+// A tenant has many CONNECTIONS (a provider, a host, a credential) and each
+// connection has many REPOSITORIES (a project path, where issues are imported
+// from, which AIFactory project its builds land in). Exactly one repository is
+// the tenant DEFAULT — what a card that names no repository resolves to.
+//
+// `GET .../git-connections` returns the whole tree in one call, so every mutation
+// below is followed by a re-read rather than a local patch: `status` is derived
+// on the backend and deleting a repository can promote a new default, so guessing
+// at either here would make the panel a second, wrong source of truth.
+
+// One connection's install (RFC-0020 §3.4 phase 4). Nothing here is a secret:
+// the GitHub App private key is deployment configuration and never leaves the
+// backend, and the short-lived tokens it mints are never stored or sent.
+export const GitInstallSchema = z.object({
+  provider: z.string(),
+  installation_id: z.string().nullable().optional(),
+  // The org / user / group the app is installed on, so a human can confirm the
+  // install landed where they meant it to.
+  account: z.string().nullable().optional(),
+  // installed | credential_missing — the second one means the last token refresh
+  // failed, and `error` says what the provider said.
+  status: z.string(),
+  error: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+});
+export type GitInstall = z.infer<typeof GitInstallSchema>;
+
+export const GitRepositorySchema = z.object({
+  id: z.number(),
+  connection_id: z.number(),
+  tenant_id: z.string(),
+  project: z.string(),
+  intake_project: z.string().nullable().optional(),
+  // An AIFactory PROJECT ID (a UUID), not a repository path — the two are
+  // separate fields precisely because confusing them is easy.
+  aifactory_project_id: z.string().nullable().optional(),
+  default_labels: z.array(z.string()).default([]),
+  is_default: z.boolean().default(false),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+});
+export type GitRepository = z.infer<typeof GitRepositorySchema>;
+
+export const GitConnectionSchema = z.object({
+  id: z.number(),
+  tenant_id: z.string(),
+  provider: z.string(), // "github" | "gitlab" | "azure_devops"
+  // Always the RESOLVED host (the tenant's own, or the provider default).
+  base_url: z.string(),
+  label: z.string(),
+  // unconfigured | credential_missing | configured | verified — derived, never stored.
+  status: z.string(),
+  // Defaulted rather than required so a cockpit that reaches an older backend
+  // renders "no credential" instead of failing to parse the whole panel.
+  credential: CredentialInfoSchema.default({ configured: false, source: "none" }),
+  // How this connection was authenticated, when it was authenticated by an
+  // INSTALL (RFC-0020 §3.4 phase 4). Nullable and optional: a connection holding
+  // a pasted credential has none, and an older backend sends no such field at
+  // all. `installation_id` is an identifier GitHub prints in its own URLs, not a
+  // secret — no token or key is ever in this payload.
+  install: GitInstallSchema.nullable().optional(),
+  verified_at: z.string().nullable().optional(),
+  verify_error: z.string().nullable().optional(),
+  repositories: z.array(GitRepositorySchema).default([]),
+});
+export type GitConnection = z.infer<typeof GitConnectionSchema>;
+
+export const GitConnectionsSchema = z.object({
+  connections: z.array(GitConnectionSchema).default([]),
+  default_repository_id: z.number().nullable().optional(),
+  // Which providers the DEPLOYMENT has registered an app for — a capability of
+  // the install, not of the tenant. Defaulted to nothing so a cockpit reaching an
+  // older backend simply shows the paste box, which is what that backend has.
+  install_available: z.record(z.string(), z.boolean()).default({}),
+});
+export type GitConnections = z.infer<typeof GitConnectionsSchema>;
+
+// A verify never fails the request: an unreachable host is `ok: false` with the
+// reason. `connection` is the connection as it stands after the attempt.
+export const GitVerifySchema = z.object({
+  ok: z.boolean(),
+  reason: z.string().nullable().optional(),
+  repository: z.string().nullable().optional(),
+  verified_project: z.string().nullable().optional(),
+  status: z.string().optional(),
+  connection: GitConnectionSchema.optional(),
+});
+export type GitVerify = z.infer<typeof GitVerifySchema>;
+
+// The shape every delete answers with. Deliberately loose about the rest: the
+// panel re-reads the tree afterwards, so only "it worked" is consumed here.
+export const GitDeleteSchema = z
+  .object({ ok: z.boolean(), deleted: z.boolean().optional() })
+  .passthrough();
+
+export type GitRepositoryBody = {
+  project: string;
+  intake_project?: string | null;
+  aifactory_project_id?: string | null;
+  default_labels?: string[];
+};
+
+function tenantPath(tenant: string, rest: string): string {
+  return `/api/tenants/${encodeURIComponent(tenant)}/${rest}`;
+}
+
+export async function fetchGitConnections(tenant: string): Promise<GitConnections> {
+  return getJson(tenantPath(tenant, "git-connections"), GitConnectionsSchema, "git-connections");
+}
+
+// The published capability matrix (RFC-0020 §3.5). What the fleet can actually
+// do on each host, so the reduction a non-GitHub tenant lives with is visible
+// beside the provider selector rather than discovered on a run that quietly
+// does not merge. `support` and `notes` are keyed by provider name.
+export const GitCapabilitySchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  detail: z.string(),
+  support: z.record(z.string()).default({}),
+  notes: z.record(z.string()).default({}),
+});
+export type GitCapability = z.infer<typeof GitCapabilitySchema>;
+
+export const GitCapabilitiesSchema = z.object({
+  providers: z.array(z.string()).default([]),
+  capabilities: z.array(GitCapabilitySchema).default([]),
+});
+export type GitCapabilities = z.infer<typeof GitCapabilitiesSchema>;
+
+export async function fetchGitCapabilities(tenant: string): Promise<GitCapabilities> {
+  return getJson(tenantPath(tenant, "git-capabilities"), GitCapabilitiesSchema, "git-capabilities");
+}
+
+export async function createGitConnection(
+  tenant: string,
+  body: { provider: string; base_url?: string | null; label?: string | null },
+): Promise<GitConnection> {
+  return sendJson("POST", tenantPath(tenant, "git-connections"), body, GitConnectionSchema);
+}
+
+// A patch: only the fields sent are applied. Moving a connection's provider or
+// host clears its verification, which proved a connection it no longer is.
+export async function updateGitConnection(
+  tenant: string,
+  id: number,
+  body: { provider?: string; base_url?: string | null; label?: string | null },
+): Promise<GitConnection> {
+  return sendJson(
+    "PATCH",
+    tenantPath(tenant, `git-connections/${String(id)}`),
+    body,
+    GitConnectionSchema,
+  );
+}
+
+// Takes the connection's repositories and its credential with it.
+export async function deleteGitConnection(tenant: string, id: number): Promise<unknown> {
+  return sendJson(
+    "DELETE",
+    tenantPath(tenant, `git-connections/${String(id)}`),
+    undefined,
+    GitDeleteSchema,
+  );
+}
+
+export async function verifyGitConnection(tenant: string, id: number): Promise<GitVerify> {
+  return sendJson(
+    "POST",
+    tenantPath(tenant, `git-connections/${String(id)}:verify`),
+    {},
+    GitVerifySchema,
+  );
+}
+
+export async function createGitRepository(
+  tenant: string,
+  connectionId: number,
+  body: GitRepositoryBody & { make_default?: boolean },
+): Promise<GitRepository> {
+  return sendJson(
+    "POST",
+    tenantPath(tenant, `git-connections/${String(connectionId)}/repositories`),
+    body,
+    GitRepositorySchema,
+  );
+}
+
+// A patch, and `null` on intake_project / aifactory_project_id CLEARS it.
+export async function updateGitRepository(
+  tenant: string,
+  id: number,
+  body: Partial<GitRepositoryBody>,
+): Promise<GitRepository> {
+  return sendJson(
+    "PATCH",
+    tenantPath(tenant, `git-repositories/${String(id)}`),
+    body,
+    GitRepositorySchema,
+  );
+}
+
+export async function deleteGitRepository(tenant: string, id: number): Promise<unknown> {
+  return sendJson(
+    "DELETE",
+    tenantPath(tenant, `git-repositories/${String(id)}`),
+    undefined,
+    GitDeleteSchema,
+  );
+}
+
+export async function setDefaultGitRepository(tenant: string, id: number): Promise<GitRepository> {
+  return sendJson(
+    "POST",
+    tenantPath(tenant, `git-repositories/${String(id)}:default`),
+    {},
+    GitRepositorySchema,
+  );
+}
+
+// ── Connection credential (RFC-0020 §3.4) ───────────────────────────────────
+// Write-only. There is no fetch here and no endpoint to write one against: the
+// credential goes up, and only the masked indicator comes back. A credential
+// belongs to a CONNECTION, not to a repository — it authenticates to a host, and
+// two repositories on one host are reached with the same token.
+
+export const GitCredentialResultSchema = z.object({
+  ok: z.boolean(),
+  removed: z.boolean().optional(),
+  credential: CredentialInfoSchema,
+});
+export type GitCredentialResult = z.infer<typeof GitCredentialResultSchema>;
+
+function credentialPath(tenant: string, connectionId: number): string {
+  return tenantPath(tenant, `git-connections/${String(connectionId)}/credential`);
+}
+
+export async function setConnectionCredential(
+  tenant: string,
+  connectionId: number,
+  credential: string,
+): Promise<GitCredentialResult> {
+  return sendJson(
+    "PUT",
+    credentialPath(tenant, connectionId),
+    { credential },
+    GitCredentialResultSchema,
+  );
+}
+
+export async function deleteConnectionCredential(
+  tenant: string,
+  connectionId: number,
+): Promise<GitCredentialResult> {
+  return sendJson(
+    "DELETE",
+    credentialPath(tenant, connectionId),
+    undefined,
+    GitCredentialResultSchema,
+  );
+}
+
+// ── The install flow (RFC-0020 §3.4 phase 4) ────────────────────────────────
+// Two calls, and neither carries a credential in either direction. Starting an
+// install returns a provider URL to SEND THE BROWSER TO — the consent screen
+// where a human picks which repositories the app may see, which is a choice the
+// cockpit deliberately does not make for them. Nothing is authenticated until the
+// provider redirects back to the backend's own callback.
+
+export const GitInstallStartSchema = z.object({
+  ok: z.boolean(),
+  connection_id: z.number(),
+  provider: z.string(),
+  // Carries a single-use state that expires. Follow it once; do not keep it.
+  authorize_url: z.string(),
+  expires_in_seconds: z.number().optional(),
+});
+export type GitInstallStart = z.infer<typeof GitInstallStartSchema>;
+
+function installPath(tenant: string, connectionId: number): string {
+  return tenantPath(tenant, `git-connections/${String(connectionId)}/install`);
+}
+
+export async function startGitInstall(
+  tenant: string,
+  connectionId: number,
+): Promise<GitInstallStart> {
+  return sendJson("POST", `${installPath(tenant, connectionId)}:start`, {}, GitInstallStartSchema);
+}
+
+export async function deleteGitInstall(tenant: string, connectionId: number): Promise<unknown> {
+  return sendJson("DELETE", installPath(tenant, connectionId), undefined, GitDeleteSchema);
 }
 
 export async function updateCopilotSettings(
@@ -1010,4 +1369,267 @@ export async function searchWorkItems(q: string, limit = 20): Promise<SearchResu
   const params = new URLSearchParams({ q, limit: String(limit) });
   const body = await getJson(`/api/search?${params.toString()}`, SearchResponseSchema, "search");
   return body.results;
+}
+
+// --- Planning cards (RFC-0019 Phase 1, #302) -------------------------------
+
+// A card is the planning-time home of a correlation: humans (and, via MCP,
+// agents) create and prioritise cards; when one enters the factory it gains a
+// `correlation_key` and threads the existing work-item timeline. Statuses are
+// the PLANNING axis (backlog → done) and are orthogonal to the PARR pipeline
+// stage statuses rendered by Board.tsx.
+export const CardStatusSchema = z.enum(["backlog", "ready", "in_progress", "blocked", "done"]);
+export type CardStatus = z.infer<typeof CardStatusSchema>;
+
+// Difficulty tiers reuse RFC-0011's intake vocabulary.
+export const CardTierSchema = z.enum(["low", "medium", "hard"]);
+export type CardTier = z.infer<typeof CardTierSchema>;
+
+// The three pipeline stages a card can be pushed into (RFC-0020 §3.7).
+export const CardStageSchema = z.enum(["plan", "code", "test"]);
+export type CardStage = z.infer<typeof CardStageSchema>;
+
+// One stage's dispatch record: what the factory was actually asked to do, and
+// how it turned out. `queued` is committed to by a sequence but not yet sent.
+export const StageRunSchema = z
+  .object({
+    service: z.string().optional(),
+    status: z.enum(["queued", "dispatched", "done", "failed"]),
+    dispatched_at: z.string().nullable().optional(),
+    ref: z.string().nullable().optional(),
+    detail: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type StageRun = z.infer<typeof StageRunSchema>;
+
+export const CardSchema = z
+  .object({
+    card_key: z.string(),
+    tenant_id: z.string(),
+    title: z.string(),
+    // Free-form markdown body; where an imported issue's body lands (RFC-0020 §3.6).
+    description: z.string().nullish(),
+    acceptance_criteria: z.array(z.string()),
+    status: CardStatusSchema,
+    // Lower is higher priority (1 sorts above 2).
+    priority: z.number(),
+    tier: CardTierSchema.nullable(),
+    assignee: z.string().nullable(),
+    milestone: z.string().nullable(),
+    // Set once the card's work enters the factory (RFC-0001 correlation), and
+    // then REUSED by every later stage rather than re-pointed.
+    correlation_key: z.string().nullable(),
+    // Mirrored FROM the git host and never pushed to it (RFC-0019 §3.5): which
+    // issue this card is the projection of ("owner/repo#123"), that issue's state
+    // there, and its labels. The ref carries no HOST — the board is
+    // multi-provider, so a link out is built from the connection THIS CARD's
+    // repository is reached through, never from a hardcoded github.com (see
+    // `issueUrlResolver` in cards.ts). Nullish/defaulted so a card served by a
+    // pre-Phase-6 backend still parses.
+    issue_ref: z.string().nullish(),
+    // Which of the tenant's repositories this card targets (RFC-0020 §3.3).
+    // Null/absent means the tenant DEFAULT repository, which is what every card
+    // created before there was more than one means.
+    repository_id: z.number().nullish(),
+    issue_state: z.string().nullish(),
+    labels: z.array(z.string()).default([]),
+    // Per-stage dispatch records, keyed by stage name. Optional so a card served
+    // by a pre-Phase-7 backend still parses.
+    stage_runs: z.record(CardStageSchema, StageRunSchema).default({}),
+    // The imported issue DISCUSSION, as two scalars (Factory#375). The bodies are
+    // a separate GET — 46 cards each carrying a full thread is a payload nobody
+    // asked for, and the thread renders collapsed anyway. `comments_synced_at`
+    // null means the thread has never been read successfully, which is NOT the
+    // same as `comment_count === 0` beside a timestamp (an issue with no
+    // discussion). Defaulted/nullish so a pre-#375 backend still parses.
+    comment_count: z.number().default(0),
+    comments_synced_at: z.string().nullish(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .passthrough();
+export type Card = z.infer<typeof CardSchema>;
+
+// The list endpoint's envelope: tolerate both a bare array and the `{cards}`
+// envelope the sibling endpoints use, so either backend shape round-trips.
+const CardListSchema = z.union([
+  z.array(CardSchema),
+  z.object({ cards: z.array(CardSchema) }).passthrough(),
+]);
+
+export type CardFilters = Partial<Record<"status" | "milestone" | "assignee" | "tier", string>>;
+
+// Fields a human (or an agent) may change on an existing card. `status` +
+// `priority` are the move/reprioritise pair the planning board drives.
+export type CardPatch = Partial<
+  Pick<
+    Card,
+    "title" | "acceptance_criteria" | "status" | "priority" | "tier" | "assignee" | "milestone"
+  >
+>;
+
+export type CardCreate = Pick<Card, "title"> &
+  Partial<
+    Pick<Card, "acceptance_criteria" | "status" | "priority" | "tier" | "assignee" | "milestone">
+  >;
+
+export async function fetchCards(filters: CardFilters = {}): Promise<Card[]> {
+  const params = new URLSearchParams(
+    Object.entries(filters).filter((e): e is [string, string] => Boolean(e[1])),
+  );
+  const qs = params.toString();
+  const body = await getJson(`/api/cards${qs ? `?${qs}` : ""}`, CardListSchema, "cards");
+  return Array.isArray(body) ? body : body.cards;
+}
+
+export async function fetchCard(cardKey: string): Promise<Card> {
+  return getJson(`/api/cards/${encodeURIComponent(cardKey)}`, CardSchema, "card");
+}
+
+export async function createCard(card: CardCreate): Promise<Card> {
+  return sendJson("POST", "/api/cards", card, CardSchema);
+}
+
+export async function patchCard(cardKey: string, patch: CardPatch): Promise<Card> {
+  return sendJson("PATCH", `/api/cards/${encodeURIComponent(cardKey)}`, patch, CardSchema);
+}
+
+// One imported issue comment (Factory#375). `body` is third-party markdown and
+// is rendered through the shared `Markdown` component, which emits React nodes
+// and never HTML — an issue comment is exactly the hostile input that must not
+// be able to inject markup.
+export const CardCommentSchema = z
+  .object({
+    comment_id: z.string(),
+    author: z.string(),
+    body: z.string(),
+    url: z.string(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })
+  .passthrough();
+export type CardComment = z.infer<typeof CardCommentSchema>;
+
+// `synced_at` null means the thread has never been read successfully — never
+// imported, or the last read failed. An empty `comments` list BESIDE a timestamp
+// means the issue genuinely has no discussion. The cockpit must not conflate the
+// two, so the schema keeps them apart.
+export const CardCommentsSchema = z
+  .object({
+    card_key: z.string(),
+    issue_ref: z.string().nullish(),
+    count: z.number(),
+    synced_at: z.string().nullish(),
+    comments: z.array(CardCommentSchema),
+  })
+  .passthrough();
+export type CardComments = z.infer<typeof CardCommentsSchema>;
+
+export async function fetchCardComments(cardKey: string): Promise<CardComments> {
+  return getJson(
+    `/api/cards/${encodeURIComponent(cardKey)}/comments`,
+    CardCommentsSchema,
+    "card comments",
+  );
+}
+
+// Importing a repository's EXISTING issues (RFC-0020 §3.6). Poll-based, NOT
+// live: `last_synced_at` says how fresh the board is, and `truncated` says the
+// run hit CFACTORY_IMPORT_MAX so the board is NOT the whole backlog.
+export const CardImportSchema = z
+  .object({
+    ok: z.boolean(),
+    project: z.string(),
+    imported: z.number(),
+    updated: z.number(),
+    skipped: z.number(),
+    truncated: z.boolean(),
+    // The incremental cursor. `polled_at` beside it is when the read happened,
+    // which is what "last synced" means to a human (#374).
+    last_synced_at: z.string().nullish(),
+    polled_at: z.string().nullish(),
+    reason: z.string().nullish(),
+  })
+  .passthrough();
+export type CardImport = z.infer<typeof CardImportSchema>;
+
+export async function importCards(): Promise<CardImport> {
+  return sendJson("POST", "/api/cards/import", {}, CardImportSchema);
+}
+
+// How CURRENT the board is, per connected repository (#374). `last_polled_at` is
+// when that repository's issues were last read successfully — which is NOT
+// `watermark_at`, the incremental cursor, because the cursor does not move on a
+// repository nobody has touched. `stale` is the server's rule (no successful read
+// for more than two poll cadences), computed there so every client agrees.
+export const CardSyncRepoSchema = z.object({
+  repository_id: z.number().nullable(),
+  project: z.string(),
+  is_default: z.boolean(),
+  last_polled_at: z.string().nullable(),
+  watermark_at: z.string().nullable(),
+  stale: z.boolean(),
+});
+export type CardSyncRepo = z.infer<typeof CardSyncRepoSchema>;
+
+export const CardSyncStateSchema = z.object({
+  now: z.string(),
+  poll: z.object({
+    enabled: z.boolean(),
+    interval_seconds: z.number(),
+    live: z.boolean(),
+  }),
+  repositories: z.array(CardSyncRepoSchema),
+});
+export type CardSyncState = z.infer<typeof CardSyncStateSchema>;
+
+export async function fetchCardSyncState(): Promise<CardSyncState> {
+  return getJson("/api/cards/sync-state", CardSyncStateSchema, "card sync-state");
+}
+
+// What a stage action answers with: what the dispatch did, and the card as it now
+// stands. Deliberately tolerant — the dispatch half mirrors an upstream response
+// whose shape is the factory's, not ours.
+export const StageActionResultSchema = z
+  .object({
+    stage: z
+      .object({
+        stage: CardStageSchema.optional(),
+        dispatched: z.boolean().optional(),
+        ok: z.boolean().optional(),
+        reason: z.string().optional(),
+        skipped: z.string().optional(),
+        target_service: z.string().optional(),
+        sequence: z.array(CardStageSchema).optional(),
+        warnings: z.array(z.string()).optional(),
+      })
+      .passthrough(),
+    card: CardSchema.nullable(),
+  })
+  .passthrough();
+export type StageActionResult = z.infer<typeof StageActionResultSchema>;
+
+/**
+ * Push a card into one stage, or through the whole sequence when `action` is
+ * "run" (RFC-0020 §3.7). A REFUSED transition is a 409 whose `detail.message`
+ * `sendJson` throws verbatim, so the caller surfaces the backend's own sentence
+ * rather than inventing one.
+ */
+export async function runCardStage(
+  cardKey: string,
+  action: CardStage | "run",
+): Promise<StageActionResult> {
+  return sendJson(
+    "POST",
+    `/api/cards/${encodeURIComponent(cardKey)}/actions/${action}`,
+    {},
+    StageActionResultSchema,
+  );
+}
+
+export async function deleteCard(cardKey: string): Promise<void> {
+  const resp = await fetch(`/api/cards/${encodeURIComponent(cardKey)}`, { method: "DELETE" });
+  // 204 (no body) is the expected success shape; anything non-2xx surfaces the
+  // backend detail exactly like the JSON writers above.
+  if (!resp.ok) throw new Error(await errorDetail(resp));
 }

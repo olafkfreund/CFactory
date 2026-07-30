@@ -24,7 +24,7 @@ name: Code quality (ratchet)
 on:
   pull_request: {}
   push:
-    branches: [main]
+    branches: [dev, main]
 
 concurrency:
   group: code-quality-${{ github.ref }}

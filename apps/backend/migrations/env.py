@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from logging.config import fileConfig
 
-from alembic import context
-from sqlalchemy import engine_from_config, pool
-
-from cfactory.db import Base, resolve_database_url
+import cfactory.audit
+import cfactory.cards  # registers CardRow on Base.metadata
 import cfactory.store  # noqa: F401  (registers WorkItemRow on Base.metadata)
-import cfactory.audit  # noqa: F401  (registers AuditEntry on Base.metadata)
+from alembic import context
+from cfactory.db import Base, resolve_database_url
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 

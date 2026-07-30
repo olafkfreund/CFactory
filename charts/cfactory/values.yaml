@@ -103,6 +103,32 @@ config:
   # host that reaches the backend directly (e.g.
   # https://cfactory-api.freundcloud.org.uk). Empty = not shown.
   publicApiUrl: ""
+  # Board issue reconciliation (#374). The backend polls each connected repository
+  # every importPollSeconds and imports what changed, so the board keeps itself
+  # level with the repository instead of drifting until somebody clicks. ON by
+  # default in the app; set importPoll: false to stop it. importPollGapSeconds
+  # paces the repositories inside one cycle (the rate-limit guard).
+  #
+  # Safe at replicaCount > 1: each repository's cycle is claimed by one replica via
+  # a lease in card_import_state, and the unique (tenant_id, issue_ref) index means
+  # the worst a lost lease can cost is a duplicated READ, never a duplicated card.
+  # It does assume the replicas share a database — with the SQLite fallback (no
+  # databaseUrl) each replica has its own board and its own poll.
+  importPoll: true
+  importPollSeconds: 300
+  importPollGapSeconds: 2
+  # Issue COMMENTS on cards (Factory#375). The thread comes in with the issue and
+  # refreshes on the same pass; for planning the decision usually lives there. On
+  # GitHub a refresh is ONE repository-wide request however big the board is, so a
+  # 55-card cycle costs two API calls in total. GitLab and Azure DevOps have no
+  # bulk comments endpoint, so a refresh there is one call per card — set
+  # importComments: false if that is not a trade you want.
+  #
+  # importCommentBackfillMax bounds the cold path: a never-read card has no `since`
+  # window to narrow and costs a call, so a freshly connected 200-issue repository
+  # fills in over consecutive passes instead of firing 200 requests in one tick.
+  importComments: true
+  importCommentBackfillMax: 25
   # Extra free-form CFACTORY_* (or other) env vars, e.g.
   #   - name: ANTHROPIC_API_KEY
   #     valueFrom: { secretKeyRef: { name: cfactory-llm, key: anthropic-key } }

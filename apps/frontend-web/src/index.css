@@ -139,9 +139,14 @@ body {
 
 /* ── Main + topbar ─────────────────────────────────────── */
 .main { display: flex; flex-direction: column; min-width: 0; }
+/* flex-wrap at every width, not just on phones (#211): between 641px and the
+   width the whole row happens to fit, none of these controls shrink, so the row
+   used to run past the viewport and scroll the whole page sideways. Wrapping
+   only engages when the row genuinely does not fit, so wide layouts are
+   unchanged — and nothing has to be hidden to make it fit. */
 .topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0.6rem 1.4rem; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 0.5rem; padding: 0.6rem 1.4rem; border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 60%, transparent); backdrop-filter: blur(6px);
 }
 /* Portal switcher (#149): the four portals as one product, in the topbar. */
@@ -171,7 +176,9 @@ body {
   letter-spacing: 0.03em; color: var(--muted);
 }
 .tab.active { color: var(--text); background: var(--panel-2); box-shadow: inset 0 -2px 0 var(--cyan); }
-.topbar-right { display: flex; align-items: center; gap: 0.7rem; }
+/* Wraps for the same reason .topbar does: the cluster is itself wider than a
+   narrow viewport, so it folds onto a second line instead of overflowing. */
+.topbar-right { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem 0.7rem; }
 .icon-btn {
   display: grid; place-items: center; width: 32px; height: 32px;
   border-radius: 8px; border: 1px solid var(--border); background: var(--panel);
@@ -214,6 +221,11 @@ body {
   color: var(--red);
   background: color-mix(in srgb, var(--red) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+}
+.banner--info {
+  color: var(--cyan);
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent);
 }
 
 /* ── Mission Control ───────────────────────────────────── */
@@ -752,13 +764,35 @@ body {
 .md .md-h1 { font-size: 1.02rem; }
 .md .md-h2 { font-size: 0.96rem; }
 .md .md-h3, .md .md-h4 { font-size: 0.9rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.md a { color: var(--cyan); }
+/* Fenced code and task lists (#213 — imported issue bodies use both). The block
+   scrolls INSIDE itself: a wide code fence must never widen the page. */
+.md .md-pre {
+  margin: 0.45rem 0; padding: 0.5rem 0.6rem; max-width: 100%; overflow-x: auto;
+  background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 7px;
+}
+.md .md-pre code {
+  background: none; border: 0; padding: 0; font-size: 0.76rem; white-space: pre;
+}
+.md .md-tasks { list-style: none; padding-left: 0.15rem; }
+.md .md-task { accent-color: var(--cyan); margin-right: 0.4rem; vertical-align: -0.08em; }
 
 .chat-input { display: flex; gap: 0.5rem; }
 .chat-input input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 0.5rem 0.7rem; font-size: 0.86rem; font-family: inherit; }
 .chat-input input:focus { outline: none; border-color: var(--cyan); }
 
 /* ── Settings view ─────────────────────────────────────── */
-.set-card { max-width: 520px; }
+/* Settings cards are dense forms, not the Services view's status tiles, so they
+   get their own track instead of borrowing .svc-grid's 240px (#211): wide enough
+   that a label and its help text stay readable. min() keeps a narrow viewport
+   from overflowing the track. */
+.set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); gap: 1rem; align-items: start; }
+.set-card { max-width: 560px; }
+/* The status drops below the title rather than running across it (#211). */
+.set-card .svc-top { flex-wrap: wrap; }
+.set-card .svc-ident { min-width: auto; }
+/* Whatever the pill is too short to say, said under the card's role line. */
+.set-status-note { color: var(--muted); font-size: 0.78rem; margin: -0.35rem 0 0.7rem; }
 .set-field { margin-top: 0.9rem; }
 .set-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.35rem; }
 .set-toggle { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
@@ -772,8 +806,48 @@ body {
 .set-toggle-btn.active { background: color-mix(in srgb, var(--cyan) 16%, transparent); color: var(--text); }
 .set-conn { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.7rem; }
 .set-hint { font-size: 0.74rem; color: var(--muted); }
+/* A hint under the provider toggle is a paragraph, not a caption beside it: the
+   toggle is inline-flex, so without this the sentence wraps around the buttons. */
+.set-toggle + .set-hint { display: block; margin-top: 0.4rem; }
 .set-actions { display: flex; align-items: center; gap: 0.7rem; margin-top: 1.1rem; }
+/* The credential's masked state line, above its (write-only) input. */
+.set-cred-state { margin-bottom: 0.35rem; }
 .set-saved { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--green); font-size: 0.8rem; }
+
+/* Git connections (#373): a growing LIST of cards rather than one, so it gets a
+   heading of its own above its .set-grid. */
+.set-section { margin-top: 1.6rem; }
+/* A resolved host is a URL, which has nothing to wrap at either. */
+.set-card .svc-role { overflow-wrap: anywhere; }
+.set-section-head { margin-bottom: 0.8rem; }
+.set-section-title { font-size: 1rem; margin: 0 0 0.25rem; }
+.set-section-note { color: var(--muted); font-size: 0.82rem; margin: 0; max-width: 68ch; }
+/* One repository inside a connection card. A project path has no spaces to wrap
+   at, so it is told explicitly that it may break — otherwise a long
+   organization/project/repo widens the grid track and scrolls the page sideways. */
+.set-repo { border: 1px solid var(--border); border-radius: 9px; padding: 0.55rem 0.6rem; margin-bottom: 0.5rem; }
+.set-repo-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.set-repo-name { font-size: 0.82rem; color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.set-repo-meta { display: flex; flex-direction: column; gap: 0.1rem; margin-top: 0.3rem; font-size: 0.74rem; color: var(--muted); overflow-wrap: anywhere; }
+.set-repo-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.45rem; }
+.set-repo-form { border-top: 1px dashed var(--border); margin-top: 0.6rem; padding-top: 0.2rem; }
+.set-badge { font-family: var(--font-mono); font-size: 0.68rem; color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 30%, transparent); border-radius: 999px; padding: 0.1rem 0.5rem; white-space: nowrap; }
+
+/* The capability matrix beside the provider selector (RFC-0020 §3.5, #366).
+   Deliberately quiet: it sits under a toggle inside a form, so it reads as a
+   consequence of the choice above it rather than as a second control. The dashed
+   rule is the same one .set-repo-form uses to separate a nested block. */
+.set-caps { border-top: 1px dashed var(--border); margin-top: 0.7rem; padding-top: 0.6rem; }
+.set-cap { margin-bottom: 0.5rem; }
+.set-cap:last-of-type { margin-bottom: 0.35rem; }
+/* Name and pill on one line, wrapping rather than colliding — the #211 rule.
+   The pill carries a SHORT state word only; the sentence is the .set-hint under
+   it, which is what stopped a status running across a card title. */
+.set-cap-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.set-cap-name { font-size: 0.8rem; color: var(--text); min-width: 0; }
+.set-cap .set-hint { display: block; margin-top: 0.15rem; max-width: 60ch; }
+/* The trailing "unchanged on this host" line is a paragraph, not a caption. */
+.set-caps > .set-hint { display: block; margin-top: 0.5rem; }
 
 /* Task detail drawer (#44) */
 .card-wi--clickable { cursor: pointer; }
@@ -1066,7 +1140,6 @@ body {
   .tabs { display: none; }
   .cmdk-trigger span, .cmdk-trigger kbd { display: none; }
   .cmdk-trigger { padding: 0.4rem; }
-  .topbar { flex-wrap: wrap; }
   .portal-label { display: none; } /* dots-only switcher on phones */
   .portal-opt { padding: 0.28rem 0.4rem; }
   .content { padding: 0.9rem 0.9rem 2rem; }
@@ -1281,9 +1354,14 @@ body {
 .token-back:hover { text-decoration: underline; }
 
 /* ── Persistent PARR pipeline strip (under the topbar, every view) ── */
+/* Three stage nodes joined by connectors: it cannot wrap without breaking the
+   connectors, and dropping a stage would lose a stage. So below the width it
+   fits, the STRIP scrolls sideways rather than the whole page (#211) — the same
+   technique as the phone nav rail. Everything stays reachable. */
 .pstrip {
   display: flex; align-items: center; gap: 0.5rem;
   height: 72px; padding: 0 1.4rem; flex: none;
+  overflow-x: auto;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 55%, var(--bg));
 }
@@ -1814,3 +1892,160 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .cmdk-scrim, .cmdk { animation: none; }
 }
+
+/* --- Planning cards (RFC-0019 Phase 1, #302) -------------------------------
+   The Backlog list and the planning Kanban reuse .board/.column/.page-head/
+   .rt-toolbar wholesale; only the card body, the form controls and the per-status
+   column accents are new. */
+.column--card-backlog { border-top-color: var(--faint); }
+.column--card-ready { border-top-color: var(--cyan); }
+.column--card-progress { border-top-color: var(--code); }
+.column--card-blocked { border-top-color: var(--red); }
+.column--card-done { border-top-color: var(--green); }
+.column--card-backlog .column-dot { background: var(--faint); }
+.column--card-ready .column-dot { background: var(--cyan); }
+.column--card-progress .column-dot { background: var(--code); }
+.column--card-blocked .column-dot { background: var(--red); }
+.column--card-done .column-dot { background: var(--green); }
+
+.backlog-list { display: flex; flex-direction: column; gap: 0.6rem; }
+
+.card-pl {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 0.7rem 0.8rem; transition: border-color 0.15s, opacity 0.15s;
+}
+.card-pl--busy { opacity: 0.55; }
+.card-pl__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.card-pl__prio { font-size: 0.72rem; color: var(--faint); }
+.card-pl__title { font-size: 0.92rem; font-weight: 500; margin: 0.35rem 0 0.5rem; line-height: 1.35; overflow-wrap: anywhere; }
+.card-pl__chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.55rem; }
+.card-pl__actions { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+
+/* The imported issue body, collapsed (#213). A <details>, so the disclosure is the
+   platform's — keyboard-operable and announced without any JS. Collapsed, the card
+   costs exactly ONE clamped line, which is what keeps a 46-card backlog scannable;
+   expanded, the body is capped and scrolls inside itself rather than pushing the
+   rest of the list off the screen. */
+.card-pl__body { margin: -0.15rem 0 0.55rem; }
+.card-pl__peek {
+  display: flex; align-items: center; gap: 0.4rem; min-width: 0;
+  cursor: pointer; list-style: none;
+}
+.card-pl__peek::-webkit-details-marker { display: none; }
+.card-pl__peek::before { content: "▸"; flex: none; color: var(--faint); font-size: 0.72rem; }
+.card-pl__body[open] > .card-pl__peek::before { content: "▾"; }
+.card-pl__peek:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 5px; }
+.card-pl__peek-text {
+  min-width: 0; font-size: 0.8rem; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.card-pl__peek:hover .card-pl__peek-text { color: var(--text); }
+.card-pl__detail {
+  margin-top: 0.45rem; padding: 0.5rem 0.65rem; max-height: 24rem; overflow-y: auto;
+  background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 8px;
+}
+.card-pl__detail-h {
+  font: 600 0.68rem var(--font-mono); color: var(--faint);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.card-pl__ac { margin: 0.3rem 0 0.55rem; padding-left: 1.2rem; font-size: 0.82rem; color: var(--muted); }
+.card-pl__ac li { margin: 0.12rem 0; }
+.card-md { font-size: 0.82rem; color: var(--muted); overflow-wrap: anywhere; }
+/* The detail box is already --panel-2, so a fence inside it needs its own tone to
+   read as a code block at all. */
+.card-pl__detail .md-pre { background: var(--bg); }
+
+/* The imported issue DISCUSSION, collapsed (Factory#375). Same <details> chrome as
+   the body peek above — reused deliberately, so a card has one disclosure idiom and
+   not two — and collapsed for the same reason: a 46-card backlog rendering every
+   thread in full is worse than the board that carried no comments at all. Nothing
+   renders when a card has none. */
+.card-pl__comments { margin: -0.15rem 0 0.55rem; }
+.card-pl__comments[open] > .card-pl__peek::before { content: "▾"; }
+.card-pl__comment-wait { font-size: 0.78rem; color: var(--faint); }
+/* One comment. The rule between entries is what keeps a long thread readable as
+   separate voices rather than as one wall of prose. */
+.card-comment { padding: 0.35rem 0; border-top: 1px solid var(--border-soft); }
+.card-comment:first-child { border-top: 0; padding-top: 0; }
+.card-comment__head {
+  display: flex; align-items: baseline; gap: 0.4rem;
+  font: 500 0.7rem var(--font-mono); color: var(--faint);
+}
+.card-comment__author { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.card-chip {
+  font: 500 0.7rem var(--font-mono); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border-soft);
+  border-radius: 999px; padding: 0.12rem 0.5rem;
+}
+.card-chip--live { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, var(--border)); }
+/* Mirrored issue metadata (#213). A label is third-party text of any length, so it
+   truncates rather than widening the card; the issue ref is a link when the tenant's
+   git host is known, and plain text when it is not. */
+.card-chip--label { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-chip--issue {
+  text-decoration: none; color: var(--cyan);
+  border-color: color-mix(in srgb, var(--cyan) 35%, var(--border));
+}
+.card-chip--issue:hover { border-color: var(--cyan); }
+.card-chip--state-open { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.card-chip--state-closed { color: var(--faint); }
+.card-tier {
+  font: 600 0.7rem var(--font-mono); border-radius: 999px; padding: 0.12rem 0.5rem;
+  border: 1px solid var(--border);
+}
+.card-tier--low { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.card-tier--medium { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
+.card-tier--hard { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--border)); }
+
+.card-select, .card-input {
+  font: 500 0.76rem var(--font-mono); color: var(--text);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 7px; padding: 0.3rem 0.5rem;
+}
+.card-select:focus-visible, .card-input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.card-input--sm { width: 8.5rem; }
+.card-textarea { width: 100%; resize: vertical; font-family: var(--font-ui); }
+
+.card-btn {
+  font: 600 0.74rem var(--font-mono); cursor: pointer; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 7px; padding: 0.3rem 0.6rem;
+}
+.card-btn:hover { color: var(--text); border-color: var(--cyan); }
+.card-btn:disabled { opacity: 0.5; cursor: default; }
+.card-btn--danger:hover { color: var(--red); border-color: var(--red); }
+
+/* The board's sync line (#374): how current the board is, beside Sync now. Muted
+   by default because "a few minutes behind" is the normal state and does not want
+   attention; amber only when the board has actually gone stale. */
+.card-sync {
+  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.6rem;
+}
+.card-sync__age { font: 500 0.76rem var(--font-mono); color: var(--muted); }
+.card-sync__age--stale { color: var(--amber); }
+
+/* Stage actions (RFC-0020 §3.7): plan / code / test / run-all on a card, plus the
+   per-stage dispatch-record chip. A disabled button carries the refusal reason as
+   its title, so the state is readable and not merely greyed out. */
+.card-pl__stages {
+  display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;
+  margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-soft);
+}
+.card-btn--stage { display: inline-flex; align-items: center; gap: 0.3rem; }
+.card-stage-dot { width: 6px; height: 6px; border-radius: 50%; background: currentcolor; }
+.card-btn--stage-dispatched { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 40%, var(--border)); }
+.card-btn--stage-done { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.card-btn--stage-failed { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--border)); }
+.card-btn--stage-queued { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
+.card-stage-chip--queued { color: var(--amber); }
+.card-stage-chip--dispatched { color: var(--cyan); }
+.card-stage-chip--done { color: var(--green); }
+.card-stage-chip--failed { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+
+.card-form {
+  display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.9rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem;
+}
+.card-form__row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.card-form__actions { display: flex; gap: 0.4rem; }

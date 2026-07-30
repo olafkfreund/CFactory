@@ -11,12 +11,17 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 import websockets
 from starlette.concurrency import run_in_threadpool
 
+from . import card_ops
 from .adapters.base import first
+from .audit import get_audit_store
+from .card_intake import apply_status
+from .cards import get_cards_store
 from .config import Settings, get_settings
 from .models import CompletionEvent, Service
 from .store import WorkItemStore
@@ -75,6 +80,24 @@ async def handle_message(
     work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
     # Idempotent: a duplicate upstream message is not re-broadcast.
     if applied:
+        # Same card write-back as the REST ingress (RFC-0019 §3.2) — a card must
+        # not go stale just because its progress arrived over the WS relay
+        # instead of /api/events. Includes advancing an explicitly-driven stage
+        # sequence (RFC-0020 §3.7), for the same reason: which ingress the event
+        # arrived on must not decide whether the next stage runs. Unscoped store
+        # and default transport: a relayed upstream message carries no tenant
+        # header to scope by and no test seam to inject.
+        ctx = card_ops.AuditContext(
+            get_audit_store(), card_ops.SEQUENCE_ACTOR, endpoint="/ws/upstream"
+        )
+        await run_in_threadpool(
+            partial(
+                apply_status,
+                get_cards_store(),
+                work_item,
+                on_dispatch=card_ops.dispatch_recorder(ctx),
+            )
+        )
         await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
     return event
 

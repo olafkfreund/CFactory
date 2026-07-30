@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from .adapters import BaseHTTPAdapter, ServiceProbe, build_adapters
 from .audit import AuditStore, get_audit_store
 from .auth import READ, authorize_headers, get_keystore
+from .cards import CardStore, get_cards_store
 from .config import get_settings, resolve_tenant
 from .copilot import Copilot, get_copilot
 from .live_agent_proxy import ConnectFn
@@ -59,6 +60,20 @@ def store_dep(
     if settings.multi_tenant:
         return get_store().scoped(resolve_tenant(x_tenant_id, settings))
     return get_store()
+
+
+def cards_store_dep(
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+) -> CardStore:
+    """Dependency seam for the planning-card store — overridden in tests.
+
+    Tenant scoping is resolved exactly as ``store_dep`` does it (#172): scoped
+    view when CFACTORY_MULTI_TENANT is on, unscoped store otherwise.
+    """
+    settings = get_settings()
+    if settings.multi_tenant:
+        return get_cards_store().scoped(resolve_tenant(x_tenant_id, settings))
+    return get_cards_store()
 
 
 def adapters_dep() -> list[BaseHTTPAdapter]:
@@ -106,6 +121,14 @@ def observe_transport_dep() -> httpx.BaseTransport | None:
 def provider_health_transport_dep() -> httpx.BaseTransport | None:
     """Dependency seam for the per-service provider-auth health fetch (#109) —
     overridden in tests with a MockTransport. None → real transport."""
+    return None
+
+
+def fleet_transport_dep() -> httpx.AsyncBaseTransport | None:
+    """Dependency seam for the fleet agent-skills aggregate's sibling fetches
+    (RFC-0019 §3.4) — overridden in tests with a MockTransport. None → real
+    transport. Async, unlike the probes above: the three siblings are fetched
+    concurrently so one slow origin cannot serialise the others."""
     return None
 
 

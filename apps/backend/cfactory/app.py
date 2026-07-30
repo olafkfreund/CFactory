@@ -23,12 +23,16 @@ from fastapi.responses import JSONResponse
 from . import (
     __version__,
     routes_actions,
+    routes_cards,
     routes_connect,
     routes_copilot,
     routes_events,
+    routes_git_config,
     routes_health,
+    routes_install,
     routes_live_agents,
     routes_services,
+    routes_well_known,
     routes_workitems,
     routes_ws,
 )
@@ -46,7 +50,9 @@ from .api_deps import (  # noqa: F401 — public re-export surface
     action_transport_dep,
     adapters_dep,
     audit_dep,
+    cards_store_dep,
     copilot_dep,
+    fleet_transport_dep,
     live_agent_connect_dep,
     observe_transport_dep,
     progress_hub_dep,
@@ -54,12 +60,14 @@ from .api_deps import (  # noqa: F401 — public re-export surface
     store_dep,
 )
 from .auth import READ, authorize_headers, get_keystore
+from .cards import get_cards_store
 from .config import (
     check_audit_secret,
     get_settings,
     load_copilot_overrides,
     load_service_overrides,
 )
+from .issue_import import poll_forever
 from .progress import get_progress_hub, start_progress, stop_progress
 from .store import get_store
 from .upstream_ws import start_subscribers
@@ -76,9 +84,25 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     # Refuse to silently boot a hosted deploy on the forgeable dev audit secret (#81).
     check_audit_secret(settings)
+    # Adopt every pre-phase-8 single git configuration into a connection + a
+    # default repository, re-sealing its credential onto the connection without
+    # ever writing the plaintext (RFC-0020 §3.3 phase 8). Idempotent and ordered
+    # BEFORE the seed: a tenant that has a legacy row must be adopted, not
+    # re-seeded from environment variables it has since edited away from.
+    cards = get_cards_store(settings)
+    cards.adopt_legacy_git_config(settings)
+    # One-release seed of the default tenant's git config from the legacy env
+    # vars (RFC-0020 §3.3), so an existing single-tenant deployment keeps working
+    # with no operator action and its values become editable in the portal. A
+    # no-op once a connection exists — see CardStore.seed_git_config_from_env.
+    cards.seed_git_config_from_env(settings)
     tasks: list[asyncio.Task[None]] = []
     if settings.subscribe_upstreams:
         tasks = start_subscribers(get_store(), get_manager(), settings)
+    if settings.import_poll:
+        # Poll-based issue reconciliation (RFC-0020 §3.6). NOT live — see
+        # cfactory.issue_import. Off unless CFACTORY_IMPORT_POLL is set.
+        tasks.append(asyncio.create_task(poll_forever(get_cards_store(settings), settings)))
     progress_tasks = start_progress(get_progress_hub(), get_manager(), settings)
     try:
         yield
@@ -141,11 +165,24 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     app.include_router(routes_health.router)
+    # Public capability manifest (RFC-0019 §3.4) — unauthenticated by design; it
+    # sits outside the guarded /api//connect prefixes, like /health and /mcp.
+    app.include_router(routes_well_known.router)
     app.include_router(routes_events.router)
     app.include_router(routes_services.router)
     app.include_router(routes_workitems.router)
     app.include_router(routes_live_agents.router)
     app.include_router(routes_actions.router)
+    app.include_router(routes_cards.router)
+    app.include_router(routes_git_config.router)
+    # The git-provider install callback (RFC-0020 §3.4 phase 4). Outside the
+    # guarded /api//connect prefixes on purpose and by necessity: a provider
+    # redirect is a browser navigation with no API key and no session, so it
+    # cannot present one. It is served on the MCP host, which already bypasses
+    # oauth2-proxy — no exemption is added to the perimeter that fronts the
+    # cockpit. Its own defence is the single-use, hashed, tenant-bound state plus
+    # a provider round trip; see routes_install's module docstring.
+    app.include_router(routes_install.router)
     app.include_router(routes_copilot.router)
     app.include_router(routes_connect.router)
     app.include_router(routes_ws.router)

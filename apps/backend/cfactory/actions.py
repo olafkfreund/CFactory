@@ -67,6 +67,10 @@ ActionKind = Literal[
     "reject_review",  # send code back to the QA fixer with a reason
     "recover",  # unstick a stalled/errored task
     "delete_task",  # remove the task from the upstream factory
+    # RFC-0019 §3.2: send a ready planning card into the factory. Built by
+    # cfactory.card_intake, not by a propose_* tool — the "proposal" is the human
+    # moving the card to the ready column, so it has no entry in PROPOSERS.
+    "dispatch_card",
 ]
 
 

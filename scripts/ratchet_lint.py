@@ -35,11 +35,19 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+
+# Canonical shared ratchet rules, vendored byte-exact from the Factory hub
+# and byte-exact drift-gated (Factory#403). scripts/ is sys.path[0] when this
+# runs as a script, so the sibling import resolves without packaging.
+from ratchet_helpers import MYPY_TEST_RELAX, is_test_file
 
 PACKAGE_DEFAULT = "apps/backend/cfactory"
 
@@ -66,13 +74,56 @@ def changed_python_files(base: str, package: str) -> list[str]:
     return out
 
 
-def ruff_counts(source: str, filename: str) -> Counter[str]:
-    """Per-rule ruff violation counts for *source* checked as *filename*."""
-    suffix = Path(filename).name
-    with tempfile.NamedTemporaryFile("w", suffix=f"__{suffix}", delete=False) as fh:
+@contextmanager
+def materialized(source: str, filename: str) -> Iterator[str]:
+    """Write *source* to a unique temp file NEXT TO *filename*, yielding its path.
+
+    The copy must live inside the package directory: from a /tmp path the
+    file's own relative imports (`from . import __version__`) cannot resolve,
+    so mypy reports "No parent module -- cannot perform relative import" and
+    then degrades e.g. `fastapi.APIRouter` to `Any`, inventing an
+    `untyped-decorator` error that does not exist in place (issue #193). Both
+    the base and the HEAD source go through here, so the comparison stays
+    symmetric.
+    """
+    target = Path(filename)
+    with tempfile.NamedTemporaryFile(
+        "w", dir=target.parent, prefix="_ratchet_", suffix=f"__{target.name}", delete=False
+    ) as fh:
         fh.write(source)
         tmp = fh.name
     try:
+        yield tmp
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+@contextmanager
+def ruff_materialized(source: str, filename: str) -> Iterator[str]:
+    """Materialise *source* for RUFF under its REAL basename in a fresh temp dir.
+
+    Deliberately NOT ``materialized()`` above. That one writes beside the target
+    because mypy needs the real package location or relative imports break
+    (issue #193) - but it uses a random prefix, which defeats ruff
+    per-file-ignores like ``**/test_*.py``. A net-new test file was therefore
+    held to the non-test bar and tripped S101 while clean under its real path.
+
+    The two tools want different things and cannot share one strategy: mypy
+    needs the LOCATION, ruff needs the BASENAME. ruff resolves no imports, so a
+    fresh directory costs it nothing. Factory#403.
+    """
+    tmpdir = tempfile.mkdtemp()
+    try:
+        tmp = Path(tmpdir) / Path(filename).name
+        tmp.write_text(source)
+        yield str(tmp)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def ruff_counts(source: str, filename: str) -> Counter[str]:
+    """Per-rule ruff violation counts for *source* checked as *filename*."""
+    with ruff_materialized(source, filename) as tmp:
         res = _run(["ruff", "check", "--config", "ruff.toml", "--output-format", "json", tmp])
         if not res.stdout.strip():
             return Counter()
@@ -82,11 +133,9 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
             sys.stderr.write(res.stdout + res.stderr)
             sys.exit(2)
         return Counter(item["code"] for item in items)
-    finally:
-        Path(tmp).unlink(missing_ok=True)
 
 
-def mypy_command(target: str) -> list[str]:
+def mypy_command(target: str, original: str | None = None) -> list[str]:
     """The mypy invocation used for both the base and HEAD version of a file.
 
     ``--follow-imports=silent`` keeps mypy from reporting errors in imported
@@ -104,6 +153,7 @@ def mypy_command(target: str) -> list[str]:
         "--no-error-summary",
         "--no-color-output",
         "--hide-error-context",
+        *(MYPY_TEST_RELAX if is_test_file(original if original is not None else target) else []),
         target,
     ]
 
@@ -113,17 +163,12 @@ def mypy_count(source: str, filename: str) -> int:
 
     With ``--follow-imports=silent`` mypy only reports errors in the file it
     was explicitly given, so every error line belongs to this file. Base and
-    HEAD are both checked from a temp file so the comparison is symmetric.
+    HEAD are both checked from a temp copy next to the original (see
+    `materialized`) so the comparison is symmetric and relative imports resolve.
     """
-    suffix = Path(filename).name
-    with tempfile.NamedTemporaryFile("w", suffix=f"__{suffix}", delete=False) as fh:
-        fh.write(source)
-        tmp = fh.name
-    try:
-        res = _run(mypy_command(tmp), env={**os.environ, "MYPYPATH": "apps/backend"})
+    with materialized(source, filename) as tmp:
+        res = _run(mypy_command(tmp, filename), env={**os.environ, "MYPYPATH": "apps/backend"})
         return sum(1 for line in res.stdout.splitlines() if _MYPY_ERROR_RE.match(line))
-    finally:
-        Path(tmp).unlink(missing_ok=True)
 
 
 def file_at_base(base: str, path: str) -> str | None:
@@ -150,12 +195,52 @@ def regressions(base: str, path: str, tool: str) -> list[str]:
     return out
 
 
+# --self-test probes. The clean one uses the house relative-import style that
+# used to be reported as "No parent module" from a /tmp copy (issue #193); the
+# broken one carries exactly one genuine strict-mode error.
+_PROBE_CLEAN = '''"""Self-test probe for the ratchet."""
+
+from __future__ import annotations
+
+from . import __version__
+
+
+def probe() -> str:
+    return __version__
+'''
+_PROBE_BROKEN = _PROBE_CLEAN.replace("-> str:", "-> int:")
+
+
+def self_test(package: str) -> int:
+    """Check the ratchet's own legs against synthetic probes in *package*."""
+    probe = str(Path(package) / "ratchet_self_test_probe.py")
+    clean_n = mypy_count(_PROBE_CLEAN, probe)
+    broken_n = mypy_count(_PROBE_BROKEN, probe)
+    checks = [
+        ("mypy: relative-import probe is clean (issue #193)", clean_n == 0, f"got {clean_n}"),
+        ("mypy: genuine type error is caught", broken_n > clean_n, f"got {broken_n}"),
+        ("ruff: unused import is flagged", ruff_counts("import os\n", probe)["F401"] == 1, ""),
+    ]
+    failed = 0
+    for label, ok, detail in checks:
+        print(f"  {'PASS' if ok else 'FAIL'}  {label}{f' ({detail})' if not ok and detail else ''}")
+        failed += not ok
+    print("self-test PASSED" if not failed else f"self-test FAILED ({failed} check(s))")
+    return 1 if failed else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base", required=True, help="git ref to diff against")
+    parser.add_argument("--base", help="git ref to diff against")
     parser.add_argument("--tool", choices=["ruff", "mypy"], default="ruff")
     parser.add_argument("--package", default=PACKAGE_DEFAULT)
+    parser.add_argument("--self-test", action="store_true", help="check the ratchet itself")
     args = parser.parse_args()
+
+    if args.self_test:
+        return self_test(args.package)
+    if not args.base:
+        parser.error("--base is required (unless --self-test)")
 
     files = changed_python_files(args.base, args.package)
     if not files:

@@ -31,6 +31,7 @@ tags:
   - name: Copilot
   - name: Actions
   - name: Audit
+  - name: Git config
 
 paths:
   /health:
@@ -383,6 +384,352 @@ paths:
         "401": { description: Missing or invalid API key (when keys configured). }
         "403": { description: API key lacks the write scope. }
 
+  /api/cards:
+    get:
+      tags: [Cards]
+      summary: List planning cards (the backlog), highest priority first
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/CardStatus" } }
+        - { name: milestone, in: query, schema: { type: string } }
+        - { name: assignee, in: query, schema: { type: string } }
+        - { name: tier, in: query, schema: { $ref: "#/components/schemas/CardTier" } }
+      responses:
+        "200":
+          description: This tenant's cards.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  cards:
+                    type: array
+                    items: { $ref: "#/components/schemas/Card" }
+    post:
+      tags: [Cards]
+      summary: Create a planning card (requires the `write` scope)
+      description: >-
+        Omit `card_key` to have the next `FCT-<n>` assigned for the tenant.
+        Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Card" }
+      responses:
+        "201":
+          description: The created card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Card" }
+        "409": { description: The tenant already holds that card_key. }
+
+  /api/cards/import:
+    post:
+      tags: [Cards]
+      summary: Import the repository's EXISTING issues as cards (requires `write`)
+      description: >-
+        RFC-0020 §3.6. Lists the configured project's issues through the shared
+        git-provider protocol (so GitHub, GitLab and Azure DevOps alike) and
+        upserts each as a card. Imported cards land in `backlog` — a closed issue
+        in `done` — and **never** in `ready`: `ready` + a tier is the dispatch
+        trigger, so importing a repo full of `factory:low` issues must not fire a
+        build per issue. Idempotent (an upsert against a unique
+        `(tenant_id, issue_ref)` index), pull requests are never imported, and it
+        is **poll-based, not live** — there is no webhook receiver, so an issue
+        filed since the last run appears on the next one. Audited.
+      parameters:
+        - { name: project, in: query, schema: { type: string },
+            description: "Project path to import from; defaults to the tenant's configured intake project." }
+        - { name: full, in: query, schema: { type: boolean, default: false },
+            description: "Ignore the last-synced watermark and re-read every issue." }
+      responses:
+        "200":
+          description: >-
+            The import tally. `ok` is false (still 200) when the provider was
+            unreachable or unconfigured.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  project: { type: string }
+                  imported: { type: integer }
+                  updated: { type: integer }
+                  skipped:
+                    type: integer
+                    description: Issues whose card was soft-deleted locally, or which failed to map.
+                  seen: { type: integer }
+                  truncated:
+                    type: boolean
+                    description: CFACTORY_IMPORT_MAX capped the run — the board is NOT the whole backlog.
+                  import_max: { type: integer }
+                  incremental: { type: boolean }
+                  live:
+                    type: boolean
+                    description: Always false. Import is a poll; webhooks remain deferred.
+                  last_synced_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: >-
+                      The incremental CURSOR (newest issue updated_at seen, minus a
+                      clock-skew overlap) — NOT when the read happened. It does not
+                      move on a repository nobody has touched; use `polled_at`.
+                  polled_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: >-
+                      When this pass read the provider successfully — what "last
+                      synced" means to a human. Null on a failed pass.
+                  reason: { type: string }
+
+  /api/cards/sync-state:
+    get:
+      tags: [Cards]
+      summary: How current the board is, per repository (requires `read`)
+      description: >-
+        Issue #374. Reconciliation runs on a background poll
+        (`CFACTORY_IMPORT_POLL`, on by default) rather than a webhook, so the board
+        is recent and never live — this says how recent, per connected repository,
+        which is what makes a stale board visible rather than silently wrong. The
+        MCP twin is `cfactory_card_sync_state`.
+      responses:
+        "200":
+          description: One entry per configured repository, including never-synced ones.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  now: { type: string, format: date-time }
+                  poll:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                        description: Whether anything reconciles on its own (CFACTORY_IMPORT_POLL).
+                      interval_seconds: { type: number }
+                      live:
+                        type: boolean
+                        description: Always false. This is a poll; webhooks remain deferred.
+                  repositories:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        repository_id:
+                          type: integer
+                          nullable: true
+                          description: Null for the environment-variable bridge target.
+                        project: { type: string }
+                        is_default: { type: boolean }
+                        last_polled_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                          description: Last SUCCESSFUL read. Null means never synced.
+                        watermark_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                          description: The incremental cursor. Do not read staleness off it.
+                        stale:
+                          type: boolean
+                          description: >-
+                            No successful read for more than two poll cadences (or
+                            never). Computed server-side so every client agrees.
+
+  /api/tenants/{tenant}/git-config:
+    parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema: { type: string }
+        description: >-
+          The tenant. CHECKED, not trusted: it must equal the tenant the request
+          resolved to (X-Tenant-Id, injected by oauth2-proxy from the Keycloak
+          claim), else 403. Single-tenant deployments resolve to `default`.
+    get:
+      tags: [Git config]
+      summary: This tenant's git configuration (requires `read`)
+      description: >-
+        RFC-0020 §3.3. Which git host the board syncs cards with, which project,
+        which project issues are imported from, and which AIFactory project a
+        dispatched card is built in. `status` is derived, never stored. No
+        credential is ever returned — credentials stay deployment-level until
+        RFC-0020 phase 3. Never 404s: an unconfigured tenant is a state.
+      responses:
+        "200":
+          description: The configuration, with its derived status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitConfig" }
+        "403": { description: The tenant in the path is not the caller's tenant. }
+    put:
+      tags: [Git config]
+      summary: Replace this tenant's git configuration (requires `write`)
+      description: >-
+        A FULL replacement — an omitted optional field is cleared — which also
+        clears any recorded verification, because it proved a configuration this
+        one no longer is. Audited on the tamper-evident HMAC chain. No credential
+        is accepted here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider: { type: string, enum: [github, gitlab, azure_devops], default: github }
+                base_url:
+                  type: string
+                  nullable: true
+                  description: Host root; omit for the provider's public default.
+                project:
+                  type: string
+                  nullable: true
+                  description: "owner/repo, a GitLab group path, or organization/project/repo."
+                intake_project:
+                  type: string
+                  nullable: true
+                  description: Import issues from here instead; defaults to `project`.
+                aifactory_project_id:
+                  type: string
+                  nullable: true
+                  description: AIFactory project a dispatched card is BUILT in. Not a repo path.
+                default_labels:
+                  type: array
+                  items: { type: string }
+                  description: Labels put on issues the board opens. A `factory:<tier>` label is refused.
+      responses:
+        "200":
+          description: The stored configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitConfig" }
+        "400": { description: Unknown provider, unaddressable project path, non-http base_url, or an intake-trigger label. }
+        "403": { description: The tenant in the path is not the caller's tenant. }
+
+  /api/tenants/{tenant}/git-config:verify:
+    parameters:
+      - { name: tenant, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Git config]
+      summary: Check the configuration reaches its project (requires `write`)
+      description: >-
+        ONE cheap authenticated read of the repository (`get_repository_info` on
+        the shared provider protocol) — enough to prove the host resolves, the
+        credential is accepted and the project is visible. Records the outcome,
+        so `status` becomes `verified` or keeps the failure reason. Always 200:
+        an unreachable host is `ok: false` with the reason, not a board error.
+      responses:
+        "200":
+          description: The verification result and the configuration as it now stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  reason: { type: string }
+                  repository: { type: string, nullable: true }
+                  status: { type: string }
+                  config: { $ref: "#/components/schemas/GitConfig" }
+        "403": { description: The tenant in the path is not the caller's tenant. }
+
+  /api/cards/{card_key}:
+    parameters:
+      - { name: card_key, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Cards]
+      summary: Get one planning card
+      responses:
+        "200":
+          description: The card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Card" }
+        "404": { description: No card for the key (in this tenant). }
+    patch:
+      tags: [Cards]
+      summary: Update a card — also how it MOVES (status) and is REPRIORITISED (priority)
+      description: >-
+        Partial update: only fields present in the body are applied. Requires
+        the `write` scope. Audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Card" }
+      responses:
+        "200":
+          description: The updated card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Card" }
+        "404": { description: No card for the key (in this tenant). }
+    delete:
+      tags: [Cards]
+      summary: Delete a planning card (requires the `write` scope). Audited.
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card_key: { type: string }
+                  deleted: { type: boolean }
+        "404": { description: No card for the key (in this tenant). }
+
+  /api/cards/{card_key}/comments:
+    parameters:
+      - { name: card_key, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Cards]
+      summary: The card's imported issue discussion, oldest comment first
+      description: >-
+        Comments are STORED and refreshed on the same incremental pass as the
+        issue itself, so this read never calls the git host. `synced_at` null
+        means the thread has never been read successfully — which is NOT the
+        same as an empty `comments` list beside a timestamp, that being an issue
+        with no discussion. Requires the `read` scope.
+      responses:
+        "200":
+          description: The stored thread.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card_key: { type: string }
+                  issue_ref: { type: string, nullable: true }
+                  count: { type: integer }
+                  synced_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: >-
+                      When the thread was last read IN FULL. Null means unknown.
+                  comments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        comment_id:
+                          type: string
+                          description: The provider's own id; re-import is idempotent on it.
+                        author: { type: string }
+                        body: { type: string, description: Markdown, rendered as inert nodes. }
+                        url: { type: string }
+                        created_at: { type: string, format: date-time }
+                        updated_at: { type: string, format: date-time }
+        "404": { description: No card for the key (in this tenant). }
+
   /api/audit:
     get:
       tags: [Audit]
@@ -411,6 +758,99 @@ components:
       in: header
       name: X-API-Key
   schemas:
+    CardStatus:
+      type: string
+      enum: [backlog, ready, in_progress, blocked, done]
+    CardTier:
+      type: string
+      description: RFC-0011 difficulty tier.
+      enum: [low, medium, hard]
+    GitConfig:
+      type: object
+      description: >-
+        RFC-0020 §3.3 tenant git configuration. Exactly one per tenant. Holds
+        provider + project only — never a credential (the copilot-settings
+        precedent), which is what the derived `credential_missing` status
+        reports.
+      properties:
+        tenant_id: { type: string }
+        provider: { type: string, enum: [github, gitlab, azure_devops] }
+        base_url:
+          type: string
+          description: Always populated on a read — the tenant's value, or the provider default.
+        project: { type: string, nullable: true, description: Where a ready card opens its issue. }
+        intake_project:
+          type: string
+          nullable: true
+          description: Where imports read from. Null means "the same as project".
+        aifactory_project_id:
+          type: string
+          nullable: true
+          description: AIFactory project a dispatched card is BUILT in. Not a repository path.
+        default_labels: { type: array, items: { type: string } }
+        status:
+          type: string
+          enum: [unconfigured, credential_missing, configured, verified]
+          description: >-
+            Derived on every read, never stored: no project -> unconfigured; a
+            project with no usable deployment credential -> credential_missing;
+            otherwise configured, or verified once a `:verify` call proved it.
+        verified_at: { type: string, format: date-time, nullable: true }
+        verify_error: { type: string, nullable: true }
+        source:
+          type: string
+          enum: [stored, env]
+          description: >-
+            `env` while the tenant is still falling back to the deployment's
+            (deprecated, one-release) environment variables; `stored` once saved.
+
+    Card:
+      type: object
+      description: >-
+        RFC-0019 §3.1 planning card. Lives in its own `cards` table, NOT on
+        work_items (whose rows the reconcile/prune machinery rewrites and
+        deletes from upstream polling). `correlation_key` is null while the
+        card is only planned and joins work_items once it enters the factory.
+      properties:
+        card_key: { type: string, description: "Stable human id, e.g. FCT-42. Unique per tenant." }
+        tenant_id: { type: string }
+        title: { type: string }
+        description:
+          type: string
+          nullable: true
+          description: >-
+            Free-form markdown body (RFC-0020 §3.6). Where an imported issue's
+            body lands. MIRRORED — the host owns it, like the title — and
+            deliberately NOT parsed into `acceptance_criteria`, which would
+            fabricate the statements the factory verifies against.
+        acceptance_criteria: { type: array, items: { type: string } }
+        status: { $ref: "#/components/schemas/CardStatus" }
+        priority: { type: integer, description: "Lower = higher priority." }
+        tier: { $ref: "#/components/schemas/CardTier" }
+        assignee:
+          type: string
+          nullable: true
+          description: A human handle or a factory runtime (e.g. "aifactory").
+        milestone: { type: string, nullable: true }
+        correlation_key: { type: string, nullable: true }
+        comment_count:
+          type: integer
+          description: >-
+            How many imported issue comments are stored for this card
+            (Factory#375). The bodies are a separate GET
+            `/api/cards/{card_key}/comments` — a backlog of 46 cards each
+            carrying a full thread is a payload nobody asked for.
+        comments_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            When the thread was last read IN FULL. Null means unknown — never
+            imported, or the last read failed. `comment_count == 0` beside a
+            timestamp means the issue genuinely has no discussion; beside null
+            it means the board does not know, and the two are never conflated.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     TokenUsage:
       type: object
       description: RFC-0001 v1.1 additive per-stage token/cost usage.

@@ -1,0 +1,112 @@
+name: deploy drift watchdog
+
+# Fails loudly when main is built-but-undeployed (#219).
+#
+# deploy.yml sets `cancel-in-progress: true`, which is correct -- an older
+# commit must not race a newer one to the cluster. The hazard is that
+# cancelling run A is only safe if run B actually deploys something newer. On
+# 2026-07-26 neither did: the cancelled run's `test` job took `build-push-bump`
+# down with it (needs:), so no image was built and no gitops bump happened.
+# Main sat undeployed while every PR check was green and the run showed
+# `cancelled` -- an outcome nothing alerts on.
+#
+# WHY A SEPARATE WORKFLOW. The obvious fix, a post-deploy step asserting the
+# live tag matches the commit, cannot catch this: `seam-check` already
+# `needs: build-push-bump`, so a cancelled run cancels its own verification
+# too. Anything that checks a run from inside that run dies with it.
+#
+# Being out of band also makes it general -- it catches a cancelled run, a
+# skipped job, an unset GITOPS_PAT, a failed gitops push and a manual revert
+# identically, because it compares the deployed world against the intended
+# commit rather than watching one mechanism. Same instinct as the CronJob
+# health watchdog in Factory#381: no news must not read as success.
+
+on:
+  schedule:
+    # Every 30 minutes. The script's own grace period (45m) decides what counts
+    # as late, so this only controls how quickly a real stall is noticed.
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Explicitly NOT cancel-in-progress. Cancelling the thing that detects
+  # cancellation damage would be an unusually direct way to reintroduce #219.
+  group: deploy-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: main is actually deployed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the deployable commit is found with a pathspec-scoped
+          # git log, which a depth-1 checkout cannot answer.
+          fetch-depth: 0
+          ref: main
+
+      - name: Resolve the newest commit that should have deployed
+        id: expected
+        run: |
+          set -euo pipefail
+          # deploy.yml ignores docs/** and root-level *.md, so main's HEAD is
+          # NOT necessarily the commit that should be live -- a docs-only merge
+          # legitimately leaves the deployed tag behind. Compare against the
+          # newest commit that would actually have triggered a deploy, or this
+          # watchdog reports drift every time someone edits a README.
+          #
+          # The `glob` magic matters and must match deploy.yml (Factory#454):
+          # a bare ':(exclude)*.md' pathspec is fnmatch WITHOUT pathname
+          # semantics, so its '*' crosses '/' and it would exclude EVERY
+          # markdown file at any depth -- wider than deploy.yml now ignores.
+          # This watchdog would then go quiet exactly when a nested-markdown
+          # commit failed to deploy. ':(exclude,glob)' stops '*' at '/', so
+          # only root-level markdown is excluded here too.
+          sha=$(git log -1 --format='%H' main -- . ':(exclude)docs' ':(exclude,glob)*.md')
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "epoch=$(git log -1 --format='%ct' "${sha}")" >> "$GITHUB_OUTPUT"
+          echo "Newest deployable commit: ${sha}"
+
+      - name: Read the tag factory-gitops has deployed
+        id: deployed
+        env:
+          GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GITOPS_PAT}" ]; then
+            # FAIL, do not skip. deploy.yml treats a missing PAT as a soft
+            # notice because it must not break a build - but a watchdog that
+            # cannot see the deployed state and still reports success is a
+            # blind watchdog reporting green, which is the exact class of
+            # false-green this workflow exists to catch (#219). The only
+            # honest answer to "is main deployed?" without the credential is
+            # "I cannot tell", and that has to be loud.
+            echo "::error::GITOPS_PAT is unset, so deploy drift CANNOT be checked."
+            echo "This watchdog is blind. Set the secret or delete the workflow;"
+            echo "leaving it green while it checks nothing is worse than both."
+            exit 1
+          fi
+          # Credentials via env, never on the command line.
+          tag=$(curl -sSf \
+            -H "Authorization: Bearer ${GITOPS_PAT}" \
+            -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/olafkfreund/factory-gitops/contents/apps/cfactory/manifests/kustomization.yaml" \
+            | awk '/newTag:/ {print $2; exit}')
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Deployed tag: ${tag}"
+
+      - name: Compare (blocking)
+        run: |
+          python3 scripts/check_deploy_drift.py \
+            --expected-sha "${{ steps.expected.outputs.sha }}" \
+            --commit-epoch "${{ steps.expected.outputs.epoch }}" \
+            --deployed-tag "${{ steps.deployed.outputs.tag }}"
+
+      - name: Self-test the comparison logic
+        # Cheap, and it means a broken watchdog fails as a broken watchdog
+        # rather than quietly passing everything.
+        run: python3 scripts/check_deploy_drift.py --self-test

@@ -7,7 +7,7 @@ name: Test (CI gate)
 on:
   pull_request: {}
   push:
-    branches: [main]
+    branches: [dev, main]
   workflow_call: {}
 
 concurrency:

@@ -25,6 +25,26 @@ DEV_AUDIT_HMAC_SECRET = "dev-insecure-audit-hmac-secret-change-me"
 
 
 class Settings(BaseSettings):
+    """Deployment configuration, including every secret the cockpit holds.
+
+    **Every credential-bearing field below carries ``repr=False`` (Factory#377).**
+    A ``BaseSettings`` instance renders all of its fields in ``repr()`` exactly
+    like a dataclass, and this object is a long-lived process singleton: it sits
+    in the traceback frame of anything that reads configuration, which put nine
+    live secrets one unhandled exception away from the log sink.
+
+    ``repr=False`` rather than ``SecretStr`` here, deliberately. Settings values
+    are interpolated directly — ``f"Bearer {settings.upstream_token}"`` in
+    :mod:`cfactory.actions` and :mod:`cfactory.upstream_ws` — and under
+    ``SecretStr`` that line still compiles while silently sending
+    ``Authorization: Bearer **********``. A masked credential at the point of use
+    is a broken auth path, not a secure one. ``repr=False`` loses nothing that
+    ``SecretStr`` would gain, because no Settings instance is ever
+    ``model_dump()``-ed. Request models, whose secret is read at exactly one call
+    site where a miss fails loudly, use ``SecretStr`` instead — see
+    :class:`cfactory.routes_git_config.GitCredentialUpdate`.
+    """
+
     model_config = SettingsConfigDict(
         env_prefix="CFACTORY_", env_file=".env", extra="ignore", populate_by_name=True
     )
@@ -59,14 +79,126 @@ class Settings(BaseSettings):
     # this token on every adapter request, the live-progress poll, and each
     # upstream WS subscription. Leave unset for local dev where the factories run
     # with APP_DISABLE_AUTH=true. Stays server-side — never sent to the browser.
-    upstream_token: str | None = None
+    upstream_token: str | None = Field(default=None, repr=False)
 
     # Service token for AIFactory's live agent console WebSocket (#34). When set,
     # the live-agents proxy sends it as `Authorization: Bearer <token>` to the
     # upstream rmux WS. Falls back to `upstream_token` when unset. Leave both unset
     # for local dev where AIFactory runs with DISABLE_AUTH. The token stays
     # server-side — it is never sent to the browser.
-    aifactory_token: str | None = None
+    aifactory_token: str | None = Field(default=None, repr=False)
+
+    # ── DEPRECATED: a one-release SEED, not configuration (RFC-0020 §3.3) ────
+    # AIFactory project a dispatched planning card is built in (RFC-0019 §3.2).
+    # AIFactory's `/api/tasks/from-issue` requires a project_id and a card
+    # carries none. This used to be the ONLY way to set it, which is the problem
+    # RFC-0020 §3.3 names: an operator could not tell from the portal what it
+    # was, why it existed, or what to set it to.
+    #
+    # It is now the TENANT's git configuration (`aifactory_project_id`), editable
+    # in Settings > Git integration. This variable survives one release as a
+    # seed: on first boot a tenant with no stored config materialises one from it
+    # (CardStore.seed_git_config_from_env), after which the stored value is
+    # authoritative and edits are never overwritten by a restart. Removed next
+    # release. Note it is an AIFactory project UUID, not a repository path.
+    intake_project_id: str | None = None
+
+    # GitHub card <-> issue sync (RFC-0019 §3.5, Phase 6). Sync is OFF unless
+    # this is set, so an unconfigured deploy behaves exactly as before: no
+    # network call on a card write, no issue opened. Server-side only.
+    #
+    # Deliberately does NOT accept the bare GITHUB_TOKEN / GH_TOKEN the way the
+    # copilot accepts OLLAMA_API_KEY. Those are ambient on any machine with `gh`
+    # logged in, and this credential OPENS ISSUES in someone's repo — inheriting
+    # it would turn the feature on by accident for every developer, which is
+    # exactly what happened the first time this was wired that way.
+    github_token: str | None = Field(default=None, repr=False)
+    # DEPRECATED as configuration, a one-release SEED (RFC-0020 §3.3), exactly
+    # like intake_project_id above: the repository a card's issue is OPENED in is
+    # now the TENANT's `project`, editable in Settings > Git integration. Format
+    # unchanged: "owner/repo" on GitHub, "group/project" (subgroups allowed) on
+    # GitLab, "organization/project/repo" on Azure DevOps. Adopting an existing
+    # issue needs no default — the card's own issue_ref names its project.
+    github_repo: str | None = None
+    # Overridable for GitHub Enterprise (and pinned in tests). Seeds the tenant's
+    # `base_url` on a GitHub deploy; per-tenant thereafter.
+    github_api_url: str = "https://api.github.com"
+
+    # Which git host the board syncs cards with (RFC-0020 phase 1): "github"
+    # (default), "gitlab" or "azure_devops". DEPRECATED as configuration on the
+    # same one-release seed rule as the two above — the tenant's `provider` is
+    # the answer now. The default keeps every existing deploy on exactly the
+    # behaviour it has today.
+    git_provider: str = "github"
+    # Credential for the selected provider. The provider-neutral name for
+    # `github_token` above: set either, this one wins. It carries the same
+    # deliberate omission — the bare GITHUB_TOKEN / GH_TOKEN is NOT accepted,
+    # because it is ambient wherever `gh` is logged in and this credential opens
+    # issues in someone's repo.
+    git_provider_token: str | None = Field(default=None, repr=False)
+    # Base URL of the provider instance — a self-hosted GitLab, an Azure DevOps
+    # server, a GitHub Enterprise. Unset means the provider's public default
+    # (`github_api_url` for GitHub, https://gitlab.com, https://dev.azure.com).
+    # DEPRECATED as configuration on the same one-release seed rule: the tenant's
+    # `base_url` is the answer now.
+    git_provider_url: str | None = None
+
+    # ── Importing a repo's EXISTING issues (RFC-0020 §3.6) ───────────────────
+    # Which issues a backfill asks for: "open" (the default), "closed" or "all".
+    # The default is deliberately the WIDE one — "connect my repo" means "show me
+    # my backlog", and a filter that quietly hides most of it produces the worst
+    # failure this feature has, with no error to diagnose. The incremental pass
+    # always uses "all" regardless, so closures and reopenings are not missed.
+    import_state: str = "open"
+    # Optional comma-separated label filter for the backfill. Empty (the default)
+    # means no filter. Opt-in narrowing, never the default.
+    import_labels: str = ""
+    # Ceiling on how many issues one import brings in. Truncation is REPORTED in
+    # the result, never silent — a board holding the first 1000 of 3000 issues
+    # looks complete and is not.
+    import_max: int = 1000
+    # Background reconciliation (#374). Import is POLL-BASED, not live: there is
+    # no webhook receiver, so an issue filed after the last pass appears at the
+    # next one. The cadence default is the RFC's five minutes — fast enough that a
+    # board is rarely more than a coffee out of date, slow enough that a hundred
+    # tenants do not exhaust a rate limit.
+    #
+    # ON by default, unlike the other background loops here (subscribe_upstreams,
+    # live_progress), and deliberately: "will the issues be imported
+    # automatically?" is a question whose only defensible answer is yes. A board
+    # that silently drifts from the repository is worse than no import at all,
+    # because it looks current. The loop is inert on a deployment with no
+    # configured repository or no credential — it resolves nothing and calls
+    # nobody — so switching it on costs an unconfigured deploy one no-op per five
+    # minutes. Set CFACTORY_IMPORT_POLL=false to stop it.
+    import_poll: bool = True
+    import_poll_seconds: float = 300.0
+    # Pause between two repositories inside one cycle. THE RATE-LIMIT GUARD: a
+    # tenant with forty repositories must not fire forty reads at one host in one
+    # tick, however cheap each one is. Two seconds spreads forty repositories over
+    # eighty seconds of a three-hundred-second cycle, which no provider notices.
+    # Zero disables the pacing and is a deliberate foot-gun, not a tuning.
+    import_poll_gap_seconds: float = 2.0
+    # Import an issue's COMMENTS along with its body (Factory#375). On by default:
+    # for planning, the thread is usually where the decision lives, and a card that
+    # silently drops it is the failure this feature exists to fix.
+    #
+    # Affordable because the refresh uses the provider's BULK path where it has one
+    # — GitHub answers a whole board's comment refresh in ONE request via the
+    # repository-wide endpoint with `since`. The cold backfill has no window to
+    # narrow and costs one call per card, which is why it is spread across passes
+    # rather than fired in one tick (see `import_comment_backfill_max`). Providers
+    # with no bulk endpoint (GitLab, Azure DevOps) refresh one call per card; set
+    # this false if that is not a trade you want.
+    import_comments: bool = True
+    # How many NEVER-READ cards one pass may backfill. The bound on the only
+    # unbounded path: a freshly connected 200-issue repository would otherwise
+    # spend 200 comment calls in a single tick, which is exactly the stampede
+    # `import_poll_gap_seconds` exists to prevent one level up. Cards are taken
+    # oldest first, so a board becomes comment-complete over consecutive passes
+    # instead of all at once, and every already-read card still refreshes on
+    # every pass. Zero disables the backfill without disabling the refresh.
+    import_comment_backfill_max: int = 25
 
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None
@@ -103,18 +235,27 @@ class Settings(BaseSettings):
     ollama_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("CFACTORY_OLLAMA_API_KEY", "OLLAMA_API_KEY"),
+        repr=False,
     )
 
     # Scoped API keys (#20). Local-first: when empty/None, auth enforcement is
     # OPEN (single-user local mode). When set, requests must carry a known key
     # with the required scope. Format: "<key>:read,write;<key2>:read".
-    api_keys: str | None = None
+    api_keys: str | None = Field(default=None, repr=False)
 
-    # Bearer token the MCP transport (POST /mcp) requires (#113). When unset the
-    # MCP server accepts all requests (dev convenience); set it in any
-    # hosted/shared deploy. Routed through Settings so every secret flows through
-    # one typed boundary rather than an inline os.environ read in mcp.py.
-    mcp_secret: str | None = None
+    # Bearer token the MCP transport (POST /mcp) requires (#113). Treated as a
+    # LEGACY FULL-SCOPE credential since RFC-0019 Phase 2a: a caller presenting it
+    # holds both read and write. Existing prod clients keep working unchanged.
+    # Routed through Settings so every secret flows through one typed boundary
+    # rather than an inline os.environ read in mcp.py.
+    mcp_secret: str | None = Field(default=None, repr=False)
+
+    # Explicit dev opt-in that re-opens /mcp when NO credential is configured
+    # (RFC-0019 Phase 2a). Unconfigured used to mean "open"; it now means DENY, so
+    # that adding write tools cannot silently expose mutation on a fail-open
+    # surface. Set CFACTORY_MCP_DEV_OPEN=true for local dev only — never in a
+    # hosted/shared deploy. Ignored once mcp_secret or api_keys is set.
+    mcp_dev_open: bool = False
 
     # Public base URL of the token-gated API surface for editor/external clients
     # (#73 follow-up). When set (e.g. https://cfactory-api.freundcloud.org.uk —
@@ -133,12 +274,79 @@ class Settings(BaseSettings):
     # reads/writes are scoped to the resolved tenant via store_dep (#172).
     multi_tenant: bool = False
 
+    # Key-encryption key (KEK) for the per-tenant git credential store (RFC-0020
+    # §3.4, phase 3). It wraps a per-record data key; the credential itself is
+    # sealed with that data key (AES-GCM). Format:
+    #
+    #     <key-id>:<base64 of 32 random bytes>
+    #
+    # comma-separated when rotating, ACTIVE KEY FIRST — every older key stays
+    # listed so records wrapped with it can still be unwrapped (and re-wrapped
+    # onto the active one). A bare base64 value with no ``<key-id>:`` prefix is
+    # read as key id ``v1``.
+    #
+    # UNSET MEANS: storing a credential is REFUSED, loudly. It never falls back
+    # to writing plaintext, and it never invents a key — an unset KEK is an
+    # operator decision not to hold credentials, not a reason to hold them badly.
+    # Losing this value makes every stored credential permanently undecryptable.
+    credential_key: str | None = Field(default=None, repr=False)
+
+    # ── The install flow (RFC-0020 §3.4, phase 4) ────────────────────────────
+    #
+    # THE APP CREDENTIALS ARE DEPLOYMENT CONFIGURATION, NOT TENANT DATA. A GitHub
+    # App is registered by a human at github.com/settings/apps and a GitLab OAuth
+    # application in that instance's admin UI; both hand back credentials only
+    # that person can obtain. Putting them here — one set for the whole
+    # deployment, supplied by environment/secret — is what lets a SELF-HOSTED
+    # operator register their own rather than depending on ours. See
+    # docs/guides/git-app-install.md for the registration runbook.
+    #
+    # None of these is ever written to the database, and none is ever returned by
+    # any API: what a tenant stores is an ``installation_id`` (GitHub — an
+    # identifier, not a secret) or a sealed refresh token (GitLab).
+
+    # Public base URL the PROVIDER redirects back to. It must reach this backend
+    # WITHOUT passing oauth2-proxy: a provider redirect arrives unauthenticated
+    # and would be bounced to a login page, losing the code. The deployed answer
+    # is the MCP host (https://cfactory-mcp.freundcloud.org.uk), which already
+    # bypasses the auth perimeter — no exemption is carved into the perimeter that
+    # fronts the cockpit. Unset means the install flow is OFF: the panel keeps the
+    # paste box and every install:start is refused rather than minting a state
+    # bound to a callback nobody can reach.
+    install_callback_base_url: str | None = None
+
+    # The GitHub App's numeric App ID (from its settings page). Not a secret.
+    github_app_id: str | None = None
+    # The App's URL slug, used to build the install link
+    # (https://github.com/apps/<slug>/installations/new). Not a secret.
+    github_app_slug: str | None = None
+    # The App's RSA private key, PEM as downloaded from GitHub. THE ONE
+    # DEPLOYMENT-WIDE SECRET of the GitHub half: it signs a short-lived App JWT,
+    # which mints an installation token scoped to the repositories the installer
+    # selected. Multi-line values are fine in an env var (mount a k8s Secret via
+    # config.extraEnv). Prefer github_app_private_key_file where the platform
+    # mounts secrets as files.
+    github_app_private_key: str | None = Field(default=None, repr=False)
+    # Path to that PEM on disk. Read at use time, never cached, and it WINS over
+    # the inline value so a mounted secret cannot be shadowed by a stale env var.
+    github_app_private_key_file: str | None = None
+
+    # GitLab OAuth application (Applications > New application on the instance).
+    # The client id is public; the secret is the deployment-wide secret of the
+    # GitLab half. Both are per-DEPLOYMENT, and a tenant's own refresh token —
+    # which IS per tenant — goes into the phase-3 encrypted store instead.
+    gitlab_oauth_client_id: str | None = None
+    gitlab_oauth_client_secret: str | None = Field(default=None, repr=False)
+    # Scope requested from GitLab. ``api`` is what reading and writing issues
+    # needs; narrowing it further breaks the board's writes.
+    gitlab_oauth_scope: str = "api"
+
     # HMAC secret anchoring the tamper-evident audit chain (#21). Each audit
     # entry's hash is HMAC-SHA256 over its canonical fields chained to the prior
     # entry's hash, so any after-the-fact mutation breaks the chain. The default
     # below is a CLEARLY-LABELLED dev secret: set CFACTORY_AUDIT_HMAC_SECRET to a
     # real secret in any hosted/shared deployment.
-    audit_hmac_secret: str = DEV_AUDIT_HMAC_SECRET
+    audit_hmac_secret: str = Field(default=DEV_AUDIT_HMAC_SECRET, repr=False)
 
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""

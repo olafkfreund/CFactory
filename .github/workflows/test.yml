@@ -11,7 +11,19 @@ on:
   workflow_call: {}
 
 concurrency:
-  group: test-${{ github.ref }}
+  # #265: this group used to be `test-${{ github.ref }}`, which does not mention
+  # the workflow. A single push to `main` starts TWO instances of this file — the
+  # standalone `push:` trigger above, and the `workflow_call` copy deploy.yml runs
+  # as its `test` job — and both landed in the identical group, so one cancelled
+  # the other on every push. Which one lost was a race: when the standalone lost,
+  # nothing broke; when the called one loses, `needs: test` sees a cancelled job
+  # and the deploy is silently skipped. Meanwhile `Test (CI gate)` showed
+  # cancelled on every main push, which trains people to stop reading its colour.
+  #
+  # `github.workflow` resolves to the CALLER's workflow name inside a reusable
+  # workflow, so the deploy-invoked copy gets its own group and the two stop
+  # colliding. Nothing is narrowed: both instances still run.
+  group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

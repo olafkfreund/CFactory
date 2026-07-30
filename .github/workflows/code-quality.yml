@@ -121,7 +121,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
-          ref: 48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9
+          ref: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
           path: factory-hub-contracts
       - name: Diff vendored configs against the pinned hub baseline
         run: |

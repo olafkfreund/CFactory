@@ -5,7 +5,7 @@
 # The backend target is configurable at runtime via $BACKEND_URL (envsubst on
 # the nginx template at container start).
 
-FROM alpine:3.20 AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci

@@ -20,6 +20,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  id-token: write        # cosign keyless via GitHub OIDC (CFactory#191, Factory#430)
 
 env:
   BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/cfactory
@@ -63,6 +64,7 @@ jobs:
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Build + push backend
+        id: build_backend
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -76,6 +78,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build + push frontend (cockpit)
+        id: build_frontend
         uses: docker/build-push-action@v6
         with:
           context: apps/frontend-web
@@ -87,6 +90,40 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # ----------------------------------------------------------------------
+      # CFactory#191 / Factory#430 — cosign keyless signing.
+      #
+      # CFactory was the one fleet service with no signing at all, in either
+      # release or CD, and is the stated blocker on moving the cluster's
+      # verify-factory-image-signatures policy from Audit to Enforce: an
+      # Enforce policy that covered cfactory would have denied every cockpit
+      # Pod. Signing here is what lets that rule be added.
+      #
+      # Sign by DIGEST, not tag: cosign signatures are digest-keyed, so one
+      # signature per image covers both :sha-<short> and :latest.
+      # ----------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign both images (cosign keyless via Sigstore + GitHub OIDC)
+        run: |
+          cosign sign --yes "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}"
+          cosign sign --yes "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"
+
+      # Not decoration: without it a broken signing step fails open and we are
+      # back to an unverifiable image that looks shipped. This is the same
+      # assertion Kyverno makes at admission, run at build time.
+      - name: Verify signatures (self-test)
+        run: |
+          for REF in \
+            "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}" \
+            "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"; do
+            cosign verify \
+              --certificate-identity-regexp "^https://github\.com/${{ github.repository_owner }}/CFactory/" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$REF"
+          done
 
       - name: Bump factory-gitops (if GITOPS_PAT set)
         if: ${{ env.GITOPS_PAT != '' }}

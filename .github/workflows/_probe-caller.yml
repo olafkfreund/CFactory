@@ -1,0 +1,13 @@
+# TEMPORARY probe for #265. Delete with its PR — never merge.
+#
+# Stands in for deploy.yml: calls _probe-called.yml as a job, the same way
+# deploy.yml calls test.yml.
+
+name: Probe (caller)
+
+on:
+  pull_request: {}
+
+jobs:
+  called:
+    uses: ./.github/workflows/_probe-called.yml

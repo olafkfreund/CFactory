@@ -1,0 +1,21 @@
+# TEMPORARY probe for #265. Delete with its PR — never merge.
+#
+# Mirrors test.yml's trigger shape exactly (a standalone trigger AND
+# workflow_call) so it can be observed running both ways at once, and prints the
+# concurrency group string test.yml would compute in each case.
+
+name: Probe (called)
+
+on:
+  pull_request: {}
+  workflow_call: {}
+
+jobs:
+  show:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Concurrency group this instance would compute
+        run: |
+          echo "github.workflow = '${{ github.workflow }}'"
+          echo "old group        = 'test-${{ github.ref }}'"
+          echo "new group        = 'test-${{ github.workflow }}-${{ github.ref }}'"

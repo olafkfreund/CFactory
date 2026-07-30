@@ -25,12 +25,12 @@ name: verification-core drift gate
 
 on:
   pull_request:
-    branches: [main]
+    branches: [dev, main]
     paths:
       - "scripts/ratchet_helpers.py"
       - ".github/workflows/verification-core-drift.yml"
   push:
-    branches: [main]
+    branches: [dev, main]
     paths:
       - "scripts/ratchet_helpers.py"
       - ".github/workflows/verification-core-drift.yml"

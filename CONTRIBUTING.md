@@ -106,6 +106,44 @@ prettier scope. Never run `prettier --write` over it.
 
 ## Maintainers
 
-Branch protection on `main` and `dev` is applied via `gh api`. Both branches
-require the two checks above; `main` additionally requires one approving review
-and conversation resolution.
+Branch protection on `main` and `dev` is declared as code in the Factory hub, in
+[`scripts/apply_branch_protection.sh`](https://github.com/olafkfreund/Factory/blob/main/scripts/apply_branch_protection.sh)
+— one engine covering all four service repos plus the hub and gitops, rather than
+a copy per repo that drifts on its own. From a Factory checkout:
+
+```bash
+scripts/apply_branch_protection.sh --repo CFactory           # CHECK: report drift, write nothing
+scripts/apply_branch_protection.sh --apply --repo CFactory   # WRITE the declared intent
+```
+
+Check is the **default**: it reads the live configuration, diffs it against the
+declared intent, and exits non-zero on any divergence without changing anything.
+Applying requires the explicit `--apply`. Either mode needs a token with admin on
+the repo, because reading branch protection is an admin-only endpoint. A scheduled
+job in the hub runs check mode across the fleet daily, so drift surfaces without
+anyone having to remember to look.
+
+What is protected:
+
+| | `main` | `dev` |
+| --- | --- | --- |
+| Required CI checks | `Backend pytest`, `Frontend typecheck + build` | same |
+| Branch must be up to date | yes | no |
+| Approving reviews | 1 | none |
+| Code-owner review | no (no `CODEOWNERS` file yet) | no |
+| Conversation resolution | yes | no |
+| Force-push / deletion | blocked | blocked |
+
+`dev` requires no review deliberately. It is the default branch and the one PRs
+target, and a solo maintainer — or one of the factory's own agents — has nobody to
+approve their own PR, so requiring one there would stall every merge; `strict`
+would additionally force a rebase before each one. The CI checks are *not*
+relaxed on `dev`: it is looser about review, never about tests. `main` keeps the
+full set because it is the release branch and only receives promotion merges from
+`dev`.
+
+Note the check names are this repo's own (`Backend pytest`,
+`Frontend typecheck + build`) and differ from the Python services'
+(`backend (ruff + pytest)`). That is why the intent is declared per repo in one
+shared script rather than copied into each repo — a copy carrying another repo's
+check names was the subject of Factory#468.

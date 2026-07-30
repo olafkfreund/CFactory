@@ -34,6 +34,12 @@ version: 2
 updates:
   - package-ecosystem: docker
     directory: "/"
+    # Factory#491: without this, Dependabot raises against whatever the repo
+    # default happens to be. Every bump this repo has ever received (#198, #243,
+    # #254, #255, #256) landed on `main` for that reason, putting base-image
+    # changes on the deployed branch without passing through `dev` — and leaving
+    # `main` 7 commits ahead of `dev`. Pin it rather than inherit it.
+    target-branch: dev
     schedule:
       interval: weekly
     labels:
@@ -46,6 +52,12 @@ updates:
 
   - package-ecosystem: docker
     directory: "/apps/frontend-web"
+    # Factory#491: without this, Dependabot raises against whatever the repo
+    # default happens to be. Every bump this repo has ever received (#198, #243,
+    # #254, #255, #256) landed on `main` for that reason, putting base-image
+    # changes on the deployed branch without passing through `dev` — and leaving
+    # `main` 7 commits ahead of `dev`. Pin it rather than inherit it.
+    target-branch: dev
     schedule:
       interval: weekly
     labels:

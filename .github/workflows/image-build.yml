@@ -1,0 +1,103 @@
+# image-build.yml — Factory#486.
+#
+# Compiles both CFactory Dockerfiles on every pull request. Until this existed,
+# no PR check in this repo built either of them: test.yml runs pytest and a host
+# `vite build`, and deploy.yml — which runs only on push to main — was the first
+# thing to compile a Dockerfile. #255 bumped the cockpit build stage from
+# node:22-alpine to node:26-alpine, four major versions, and was first compiled
+# after it had already landed on the deployed branch.
+#
+# Shape copied from TFactory's nix-runner-image.yml and PFactory's
+# runner-images.yml, which already do exactly this for their runner images.
+# Differences, on purpose:
+#
+#   NO `paths:` filter. A required status check that does not run on a given PR
+#   leaves that PR blocked forever, so this runs on every PR unconditionally.
+#   (Related trap this fleet has been bitten by: in GitHub path filters `*` does
+#   not cross `/`, so '*.md' and '**/*.md' select different things.)
+#
+#   No registry write. `push: false`, no docker/login-action, no packages: write.
+#   `load: true` only so the smoke steps below can run the images.
+#
+# Rule 4.7 — every way this job can fail to do its work is an explicit failure:
+#   * No matrix, so there is no "matrix resolved to zero targets" silent pass.
+#     Both images are built by named steps that always run.
+#   * No `if:` on any step, so no step can be skipped into a green.
+#   * Neither build is trusted on its own. Each has a smoke step asserting the
+#     image was actually produced (`docker image inspect`) and actually runs. The
+#     frontend smoke asserts the Vite bundle is non-empty inside the image, which
+#     is precisely what a bad Node major bump would break.
+
+name: Image build (PR gate)
+
+on:
+  pull_request: {}
+  # Populate the gha layer cache on the default branch so PR runs are warm.
+  push:
+    branches: [dev]
+
+concurrency:
+  # Includes github.workflow: a bare `<name>-${{ github.ref }}` group collides
+  # with any other workflow that reuses the same key on the same ref, and the two
+  # runs then cancel each other — which is exactly what test.yml was doing (#265).
+  group: image-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BACKEND_TAG: cfactory:pr-${{ github.sha }}
+  FRONTEND_TAG: cfactory-frontend:pr-${{ github.sha }}
+
+jobs:
+  build:
+    name: Build both Dockerfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # amd64 only, matching deploy.yml — the p510 k3d cluster is amd64.
+      - name: Build backend Dockerfile (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.BACKEND_TAG }}
+          cache-from: type=gha,scope=image-build-backend
+          cache-to: type=gha,mode=max,scope=image-build-backend
+
+      - name: Smoke — backend image exists and imports the app
+        run: |
+          set -euo pipefail
+          docker image inspect "${BACKEND_TAG}" > /dev/null
+          docker run --rm "${BACKEND_TAG}" \
+            python -c 'import cfactory.app; print("cfactory backend image ok")'
+
+      - name: Build cockpit frontend Dockerfile (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/frontend-web
+          file: apps/frontend-web/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.FRONTEND_TAG }}
+          cache-from: type=gha,scope=image-build-frontend
+          cache-to: type=gha,mode=max,scope=image-build-frontend
+
+      - name: Smoke — frontend image exists and carries a built bundle
+        run: |
+          set -euo pipefail
+          docker image inspect "${FRONTEND_TAG}" > /dev/null
+          docker run --rm --entrypoint sh "${FRONTEND_TAG}" -c '
+            set -eu
+            test -s /usr/share/nginx/html/index.html
+            test -d /usr/share/nginx/html/assets
+            echo "cfactory frontend image ok"
+          '

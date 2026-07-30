@@ -11,12 +11,12 @@ name: factory-github drift
 
 on:
   pull_request:
-    branches: [main]
+    branches: [dev, main]
     paths:
       - "apps/backend/runners/github/**"
       - ".github/workflows/factory-github-drift.yml"
   push:
-    branches: [main]
+    branches: [dev, main]
     paths:
       - "apps/backend/runners/github/**"
       - ".github/workflows/factory-github-drift.yml"

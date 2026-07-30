@@ -33,6 +33,22 @@ env:
   FRONTEND_IMAGE: ghcr.io/${{ github.repository_owner }}/cfactory-frontend
   GITOPS_REPO: olafkfreund/factory-gitops
   GITOPS_PATH: apps/cfactory/manifests
+  # The exact signer identity the cluster's `verify-factory-image-signatures`
+  # ClusterPolicy asserts at admission. Defined once so the two self-tests
+  # below cannot drift apart from each other, or from the gate they model.
+  #
+  # Anchored at BOTH ends and naming the workflow and the ref. The previous
+  # value was the repo prefix alone, which is scoped to owner and repo but
+  # accepts any workflow in this repo on any ref -- `some-other.yml@refs/
+  # heads/main` and `deploy.yml@refs/heads/attacker-branch` both passed it.
+  # A self-test weaker than the gate it models is misleading: it would go
+  # green on an image that admission would reject. Factory#522.
+  #
+  # NOTE: a `workflow_dispatch` run from a branch other than main WILL fail
+  # these steps, because the certificate would then read `@refs/heads/<branch>`.
+  # That is intended, not a bug -- such an image is denied at admission too, so
+  # failing here is the self-test doing its job.
+  SIGNER_IDENTITY: '^https://github\.com/${{ github.repository_owner }}/CFactory/\.github/workflows/deploy\.yml@refs/heads/main$'
 
 jobs:
   # Gate the deploy on a green test run (#81): re-run the CI suite (backend
@@ -175,7 +191,7 @@ jobs:
             "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}" \
             "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"; do
             cosign verify \
-              --certificate-identity-regexp "^https://github\.com/${{ github.repository_owner }}/CFactory/" \
+              --certificate-identity-regexp "${SIGNER_IDENTITY}" \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               "$REF"
           done
@@ -210,7 +226,7 @@ jobs:
             "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"; do
             for TYPE in spdxjson cyclonedx; do
               cosign verify-attestation --type "$TYPE" \
-                --certificate-identity-regexp "^https://github\.com/${{ github.repository_owner }}/CFactory/" \
+                --certificate-identity-regexp "${SIGNER_IDENTITY}" \
                 --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
                 "$REF" > /dev/null
             done

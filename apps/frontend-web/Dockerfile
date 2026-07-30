@@ -13,7 +13,7 @@ COPY . .
 RUN npm run build
 
 # Runtime: nginx-unprivileged listens on 8080 and runs as uid 101 (non-root).
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine AS runtime
 
 # Backend Service the cockpit's /api + /health + /api/ws calls are proxied to.
 # Overridden by the Helm chart (http://<release>-cfactory:80).

@@ -103,28 +103,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: cfactory
+      # Neither hub checkout carries continue-on-error: an unreachable hub is a
+      # gate that cannot run, and per standards rule 4.7 that must fail rather
+      # than pass. Both steps used to be `continue-on-error: true` with each
+      # diff guarded on `steps.hub_*.outcome == 'success'`, so a private repo,
+      # an expired token, a renamed hub or a garbage-collected pin would skip
+      # the comparison and report SUCCESS from a blocking gate. If Factory
+      # becomes private, add a read token here - do not restore the soft-skip.
+      # Factory#434; same removal AIFactory#1092 / #1095 made in that repo.
       - name: Check out hub standards at the pinned SHA
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
           ref: 93c3bb49ed5f3f3d3d46aae5f8a13ff601550702
           path: factory-hub-standards
-          # If Factory is private, a token with read access is needed here.
-        continue-on-error: true
-        id: hub_standards
       - name: Check out hub at the pinned contracts SHA
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
           ref: 48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9
           path: factory-hub-contracts
-          # If Factory is private, a token with read access is needed here.
-        continue-on-error: true
-        id: hub_contracts
       - name: Diff vendored configs against the pinned hub baseline
-        if: steps.hub_standards.outcome == 'success'
         run: |
-          set -e
+          set -euo pipefail
           # Vendored copies carry a header above the body; compare the rule body
           # only by stripping leading comment lines from both sides.
           strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
@@ -136,13 +137,9 @@ jobs:
             fi
           done
           echo "No drift: vendored configs match the pinned hub baseline."
-      - name: Standards hub unavailable (private repo / no token)
-        if: steps.hub_standards.outcome != 'success'
-        run: echo "Hub checkout unavailable; skipping config drift diff (configure a read token to enforce)."
       - name: Diff vendored module against the pinned hub source
-        if: steps.hub_contracts.outcome == 'success'
         run: |
-          set -e
+          set -euo pipefail
           vendored="cfactory/apps/backend/cfactory/_contracts/factory_contracts/__init__.py"
           hub="factory-hub-contracts/shared/factory-contracts/python/factory_contracts/__init__.py"
           if ! diff -u "$vendored" "$hub"; then
@@ -151,9 +148,6 @@ jobs:
             exit 1
           fi
           echo "No drift: vendored factory-contracts matches the pinned hub source."
-      - name: Contracts hub unavailable (private repo / no token)
-        if: steps.hub_contracts.outcome != 'success'
-        run: echo "Hub checkout unavailable; the in-repo checksum drift test still guards local edits."
 
   frontend-quality:
     name: frontend lint + format + unit tests (blocking)

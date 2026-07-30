@@ -1,0 +1,57 @@
+# Base-image updates for both Dockerfiles. Before this file, nothing in the repo
+# updated a base image (Factory#436).
+#
+# What this replaces. renovate.json was added on 2026-07-19 by Factory#300
+# ("close Renovate coverage gaps") and closed as done. It never ran: the Renovate
+# GitHub App is not installed on this account, so across all five Factory repos
+# there are zero Renovate PRs and no Dependency Dashboard issue has ever been
+# opened, in spite of ":dependencyDashboard" being set in four of them. The gap
+# the issue set out to close stayed open, invisibly, because the config read as
+# the fix.
+#
+# The sibling repos learned the cost the expensive way: AIFactory, PFactory and
+# TFactory all pinned the same Chainguard digest, upstream garbage-collected it,
+# and their docker acceptance gate could not start a build for about nine weeks
+# (AIFactory#1091). This repo pins no digests -- python:3.13-slim,
+# node:22-alpine, nginx-unprivileged:1.27-alpine are all floating tags -- so it
+# cannot fail in that exact way. It can still drift onto an unpatched base
+# indefinitely, and it ships to the cluster with neither a Trivy image scan nor
+# a cosign signature (Factory#310 gap #8), which makes a current base the only
+# supply-chain control this image actually has.
+#
+# Two entries because the frontend image is built from its own context;
+# Dependabot scopes a docker entry to one directory.
+#
+# Weekly, not daily: unlike the digest-pinned siblings there is no rot window to
+# close here, so the cadence is set for review load rather than for outage risk.
+#
+# Not covered, stated rather than implied: github-actions SHA pinning, and
+# `COPY --from=<image>` pins -- Dependabot's Dockerfile parser only reads FROM,
+# verified 2026-07-30 with dependabot-cli v1.91.0. Neither was covered before.
+# If the Renovate App is ever installed, delete this file rather than let two
+# bots rewrite the same FROM lines.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - docker
+      - base-image
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: "/apps/frontend-web"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - docker
+      - base-image
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5

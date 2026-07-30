@@ -9,7 +9,7 @@
 # Chainguard distroless (cgr.dev/chainguard/python) for a non-root, minimal,
 # CVE-scanned runtime — migrate here once the build is stable.
 
-FROM python:3.13-slim AS base
+FROM python:3.14-slim AS base
 
 # Faster, quieter, deterministic Python + pip behaviour.
 ENV PYTHONUNBUFFERED=1 \

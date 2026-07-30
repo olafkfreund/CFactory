@@ -312,6 +312,88 @@ def test_execute_action_stops_chain_on_first_failure():
     assert len(result["steps"]) == 1  # merge never attempted
 
 
+# --- Factory#460: a 200 that means "failed" -------------------------------
+#
+# AIFactory answered a merge GitHub REFUSED with `200 {"success": false}`. Judged
+# on `resp.is_success` alone the cockpit said "Done.", the audit trail recorded
+# `ok=true`, and the stop-on-failure guard above could never fire. `ok` must mean
+# the operation succeeded, not that the HTTP call was answered.
+
+# The exact body the deployed AIFactory returns for a refused merge.
+_REFUSED = {
+    "success": False,
+    "error": "could not merge pull request #462; GitHub refused it",
+}
+
+
+def test_execute_action_treats_success_false_body_as_failure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_REFUSED)
+
+    action = PreparedAction(
+        kind="approve_review", correlation_key="42", target_service="aifactory",
+        method="POST", endpoint="/api/tasks/ai-7/worktree/merge", payload={},
+        rationale="approve",
+    )
+    result = execute_action(action, transport=httpx.MockTransport(handler))
+    assert result["ok"] is False, "a refused merge must never audit as ok=true"
+    assert result["status_code"] == 200  # the status really was 200
+    assert result["error"] == _REFUSED["error"]  # and the reason is surfaced
+
+
+def test_execute_action_stops_chain_on_a_200_wrapped_failure():
+    # The sharper edge: create-pr fails in-body, so the merge follow-up must not
+    # run. Nothing must be merged for a PR that never opened.
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(200, json=_REFUSED)
+
+    action = PreparedAction(
+        kind="approve_review", correlation_key="42", target_service="aifactory",
+        method="POST", endpoint="/api/tasks/ai-7/worktree/create-pr", payload={},
+        follow_ups=[{"method": "POST", "endpoint": "/api/tasks/ai-7/worktree/merge"}],
+        rationale="approve",
+    )
+    result = execute_action(action, transport=httpx.MockTransport(handler))
+    assert result["ok"] is False
+    assert len(calls) == 1, f"merge ran after create-pr failed: {calls}"
+
+
+def test_execute_action_still_succeeds_on_a_success_true_body():
+    # The guard must not fire on the success envelope, nor on a body with no
+    # `success` key at all (PFactory's session endpoints return plain objects).
+    for body in ({"success": True, "data": {"merged": True}}, {"id": 7}, []):
+        action = PreparedAction(
+            kind="recover", correlation_key="42", target_service="aifactory",
+            method="POST", endpoint="/api/tasks/ai-7/recover", payload={},
+            rationale="why",
+        )
+        result = execute_action(
+            action,
+            transport=httpx.MockTransport(lambda r, b=body: httpx.Response(200, json=b)),
+        )
+        assert result["ok"] is True, f"false alarm on {body!r}"
+        assert "error" not in result
+
+
+def test_execute_action_reports_a_bare_success_false_body():
+    # No `error`/`detail`/`message` key: still a failure, with a usable reason.
+    action = PreparedAction(
+        kind="recover", correlation_key="42", target_service="aifactory",
+        method="POST", endpoint="/api/tasks/ai-7/recover", payload={}, rationale="why",
+    )
+    result = execute_action(
+        action,
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"success": False})
+        ),
+    )
+    assert result["ok"] is False
+    assert result["error"]
+
+
 def test_execute_action_swallows_transport_errors():
     def boom(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down", request=request)
@@ -348,6 +430,36 @@ def test_execute_endpoint_runs_confirmed_action(client_with_transport):
     assert len(recorder.requests) == 1
     assert recorder.requests[0].method == "DELETE"
     assert str(recorder.requests[0].url) == "http://localhost:3101/api/tasks/ai-7"
+
+
+def test_execute_endpoint_audits_a_200_wrapped_refusal_as_not_ok(store, tmp_path):
+    # Factory#460, the durable half: the reviewer being told "Done." is bad, the
+    # audit trail AGREEING is what makes it unrecoverable. `ok` in the record
+    # must mean the operation succeeded.
+    recorder = _RecordingTransport(httpx.Response(200, json=_REFUSED))
+    app = create_app()
+    app.dependency_overrides[store_dep] = lambda: store
+    app.dependency_overrides[action_transport_dep] = lambda: recorder
+    audit = AuditStore(f"sqlite:///{tmp_path / 'a.db'}")
+    app.dependency_overrides[audit_dep] = lambda: audit
+    api = TestClient(app)
+    _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7")
+
+    resp = api.post(
+        "/api/actions/execute",
+        json={
+            "kind": "approve_review", "correlation_key": "42",
+            "target_service": "aifactory", "method": "POST",
+            "endpoint": "/api/tasks/ai-7/worktree/merge", "payload": {},
+            "rationale": "approve",
+        },
+    )
+    assert resp.status_code == 200  # the cockpit's own call was answered
+    assert resp.json()["ok"] is False  # ...but the merge was refused
+
+    entries = audit.list()
+    assert len(entries) == 1
+    assert entries[0].ok is False, "the audit trail recorded a refused merge as ok"
 
 
 def test_execute_delete_task_prunes_local_card(client_with_transport, store):

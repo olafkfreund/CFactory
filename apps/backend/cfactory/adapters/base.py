@@ -25,10 +25,21 @@ class AdapterItem(BaseModel):
     phase: str | None = None
     title: str | None = None
     repo: str | None = None  # target repo owner/name (W5, Factory #218)
+    # #245: PFactory's per-lens plan-review verdict. `gates_passed` alone says
+    # THAT a plan is blocked, not WHY, so the cockpit could only render an
+    # enabled Approve button and let the click 409 with a lens it never showed.
+    # Optional -- absent for every other service and for un-reviewed sessions.
+    review: dict[str, Any] | None = None
 
     def to_state(self) -> ServiceState:
         return ServiceState(
-            task_id=self.task_id, status=self.status, phase=self.phase, repo=self.repo
+            task_id=self.task_id,
+            status=self.status,
+            phase=self.phase,
+            repo=self.repo,
+            # Carried under `extra` so it rides the same slice map the event path
+            # writes to, and the frontend reads one shape either way.
+            extra={"review": self.review} if self.review else {},
         )
 
 

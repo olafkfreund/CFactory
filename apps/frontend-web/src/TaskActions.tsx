@@ -4,7 +4,7 @@ import {
   proposeAction,
   executeAction,
   detailOf,
-  blockingLenses,
+  approvalBlockReason,
   type PreparedAction,
   type ExecuteResult,
   type WorkItem,
@@ -68,10 +68,7 @@ export default function TaskActions({
         // #245: a gate-blocked plan CANNOT be approved — PFactory answers 409.
         // Say so here instead of letting the user click, wait, and read the
         // refusal. Reject stays enabled: sending it back is the way out.
-        const blocked = blockingLenses(wi.pfactory.extra?.review);
-        return blocked.length
-          ? `blocked by the plan review — ${blocked.join(", ")}. Reject to send it back.`
-          : null;
+        return approvalBlockReason(wi.pfactory.extra?.review);
       }
       case "reject_review":
         return overall === "review"

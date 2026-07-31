@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  approvalBlockReason,
   blockingLenses,
   CostRoutingSchema,
   FeedMessageSchema,
@@ -265,5 +266,33 @@ describe("blockingLenses", () => {
       lenses: [{ lens: "security", score: 0.9, findings: [{ title: "blocking" }] }],
     });
     expect(blockingLenses(r)).toEqual(["security 0.90/0.75"]);
+  });
+});
+
+// The gate keys off gates_passed, not the lens list — an older PFactory sends
+// only the boolean, and "no lens detail" must not read as "not blocked" (#245).
+describe("approvalBlockReason", () => {
+  it("names the lens when the detail is there", () => {
+    expect(
+      approvalBlockReason({
+        gates_passed: false,
+        threshold: 0.75,
+        lenses: [{ lens: "security", score: 0.7, findings: [] }],
+      }),
+    ).toBe("blocked by the plan review — security 0.70/0.75. Reject to send it back.");
+  });
+
+  it("still blocks when only the boolean arrived", () => {
+    expect(approvalBlockReason({ gates_passed: false })).toBe(
+      "blocked by the plan review. Reject to send it back.",
+    );
+  });
+
+  it("allows approval when the gates passed", () => {
+    expect(approvalBlockReason({ gates_passed: true })).toBeNull();
+  });
+
+  it("allows approval when there is no review at all", () => {
+    expect(approvalBlockReason(undefined)).toBeNull();
   });
 });

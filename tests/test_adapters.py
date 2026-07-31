@@ -26,9 +26,7 @@ def test_adapter_sends_bearer_token_when_configured():
         seen["auth"] = request.headers.get("Authorization")
         return httpx.Response(200, json={"tasks": []})
 
-    adapter = AIFactoryAdapter(
-        "http://x", token="sekret", transport=httpx.MockTransport(capture)
-    )
+    adapter = AIFactoryAdapter("http://x", token="sekret", transport=httpx.MockTransport(capture))
     adapter.list_items()
     assert seen["auth"] == "Bearer sekret"
 
@@ -51,13 +49,21 @@ def test_pfactory_hits_plan_sessions_path_and_reads_sessions_envelope():
         seen["path"] = request.url.path
         return httpx.Response(
             200,
-            json={"sessions": [{"session_id": "s1", "board_state": "human_review",
-                                "github_issue": 42, "title": "Login plan"}]},
+            json={
+                "sessions": [
+                    {
+                        "session_id": "s1",
+                        "board_state": "human_review",
+                        "github_issue": 42,
+                        "title": "Login plan",
+                    }
+                ]
+            },
         )
 
     items = PFactoryAdapter("http://x", transport=httpx.MockTransport(capture)).list_items()
-    assert seen["path"] == "/api/plan/sessions"   # not the old /api/plans (404)
-    assert len(items) == 1                          # {"sessions": [...]} envelope is unwrapped
+    assert seen["path"] == "/api/plan/sessions"  # not the old /api/plans (404)
+    assert len(items) == 1  # {"sessions": [...]} envelope is unwrapped
     assert items[0].correlation_key == "42"
     assert items[0].task_id == "s1"
     assert items[0].status == "human_review"
@@ -90,13 +96,22 @@ def test_probe_offline_on_connect_error():
 
 
 def test_aifactory_normalizes_and_extracts_issue_key():
-    payload = {"tasks": [{"id": "t1", "status": "coding", "phase": "code",
-                          "metadata": {"githubIssueNumber": 42}, "title": "Login"}]}
+    payload = {
+        "tasks": [
+            {
+                "id": "t1",
+                "status": "coding",
+                "phase": "code",
+                "metadata": {"githubIssueNumber": 42},
+                "title": "Login",
+            }
+        ]
+    }
     adapter = AIFactoryAdapter("http://x", transport=_transport(payload))
     items = adapter.list_items()
     assert len(items) == 1
     it = items[0]
-    assert it.correlation_key == "42"      # from metadata.githubIssueNumber
+    assert it.correlation_key == "42"  # from metadata.githubIssueNumber
     assert it.service is Service.AIFACTORY
     assert it.task_id == "t1"
     assert it.status == "coding"
@@ -104,8 +119,14 @@ def test_aifactory_normalizes_and_extracts_issue_key():
 
 
 def test_pfactory_accepts_bare_list_and_board_state():
-    payload = [{"session_id": "s1", "board_state": "human_review", "github_issue": 42,
-                "title": "Login plan"}]
+    payload = [
+        {
+            "session_id": "s1",
+            "board_state": "human_review",
+            "github_issue": 42,
+            "title": "Login plan",
+        }
+    ]
     items = PFactoryAdapter("http://x", transport=_transport(payload)).list_items()
     assert items[0].correlation_key == "42"
     assert items[0].task_id == "s1"
@@ -114,8 +135,16 @@ def test_pfactory_accepts_bare_list_and_board_state():
 
 
 def test_tfactory_reads_nested_provenance():
-    payload = {"items": [{"spec_id": "spec1", "status": "triaged", "phase": "test",
-                          "source": {"aifactory": {"github_issue": 42}}}]}
+    payload = {
+        "items": [
+            {
+                "spec_id": "spec1",
+                "status": "triaged",
+                "phase": "test",
+                "source": {"aifactory": {"github_issue": 42}},
+            }
+        ]
+    }
     items = TFactoryAdapter("http://x", transport=_transport(payload)).list_items()
     assert items[0].correlation_key == "42"
     assert items[0].task_id == "spec1"
@@ -141,10 +170,18 @@ def test_http_error_raises_adapter_error():
 
 
 def test_hydrate_threads_services_by_correlation_key(store):
-    pf = PFactoryAdapter("http://x", transport=_transport(
-        [{"session_id": "s1", "board_state": "done", "github_issue": 42, "title": "Login"}]))
-    ai = AIFactoryAdapter("http://x", transport=_transport(
-        {"tasks": [{"id": "t1", "status": "coding", "metadata": {"githubIssueNumber": 42}}]}))
+    pf = PFactoryAdapter(
+        "http://x",
+        transport=_transport(
+            [{"session_id": "s1", "board_state": "done", "github_issue": 42, "title": "Login"}]
+        ),
+    )
+    ai = AIFactoryAdapter(
+        "http://x",
+        transport=_transport(
+            {"tasks": [{"id": "t1", "status": "coding", "metadata": {"githubIssueNumber": 42}}]}
+        ),
+    )
 
     n = hydrate(store, pf.list_items()) + hydrate(store, ai.list_items())
     assert n == 2
@@ -153,5 +190,44 @@ def test_hydrate_threads_services_by_correlation_key(store):
     assert wi is not None
     assert wi.pfactory.status == "done"
     assert wi.aifactory.status == "coding"
-    assert wi.title == "Login"          # set from the first item that carried one
-    assert wi.timeline == []            # snapshots don't append events
+    assert wi.title == "Login"  # set from the first item that carried one
+    assert wi.timeline == []  # snapshots don't append events
+
+
+def test_pfactory_adapter_carries_the_review_verdict():
+    """The polled session row is how PFactory state actually reaches the cockpit (#245)."""
+    row = {
+        "session_id": "027-money-safe-vat-quote-endpoint",
+        "board_state": "human_review",
+        "gates_passed": False,
+        "review": {
+            "gates_passed": False,
+            "threshold": 0.75,
+            "aggregate_score": 0.94,
+            "lenses": [{"lens": "security", "score": 0.70, "findings": [{"title": "No auth"}]}],
+        },
+    }
+    item = PFactoryAdapter("http://x")._normalize(row)
+    assert item is not None
+    assert item.review["gates_passed"] is False
+    # and it must survive the hop into the slice the cockpit reads
+    assert item.to_state().extra["review"]["lenses"][0]["lens"] == "security"
+
+
+def test_pfactory_adapter_synthesises_a_block_from_the_bare_boolean():
+    """An older PFactory sends only `gates_passed`; that must still disable Approve."""
+    item = PFactoryAdapter("http://x")._normalize(
+        {"session_id": "s", "board_state": "human_review", "gates_passed": False}
+    )
+    assert item is not None
+    assert item.review == {"gates_passed": False}
+
+
+def test_pfactory_adapter_leaves_a_passing_or_unreviewed_session_alone():
+    a = PFactoryAdapter("http://x")._normalize(
+        {"session_id": "s", "board_state": "human_review", "gates_passed": True}
+    )
+    assert a is not None and a.review is None and a.to_state().extra == {}
+
+    b = PFactoryAdapter("http://x")._normalize({"session_id": "s", "board_state": "draft"})
+    assert b is not None and b.review is None

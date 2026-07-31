@@ -269,6 +269,20 @@ export const PlanReviewSchema = z
   .passthrough();
 export type PlanReview = z.infer<typeof PlanReviewSchema>;
 
+/** Why Approve is unavailable, or null when the plan can be approved.
+ *
+ * `gates_passed === false` is the trigger, NOT the lens list: an older PFactory
+ * sends only the boolean, and treating "no lens detail" as "not blocked" would
+ * re-enable the button that 409s. Lens detail sharpens the message when present.
+ */
+export function approvalBlockReason(review: PlanReview | undefined): string | null {
+  if (!review || review.gates_passed !== false) return null;
+  const lenses = blockingLenses(review);
+  return lenses.length
+    ? `blocked by the plan review — ${lenses.join(", ")}. Reject to send it back.`
+    : "blocked by the plan review. Reject to send it back.";
+}
+
 /** The lenses blocking approval: below threshold, or carrying a blocking finding. */
 export function blockingLenses(review: PlanReview | undefined): string[] {
   if (!review || review.gates_passed !== false) return [];

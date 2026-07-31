@@ -193,6 +193,18 @@ def create_app() -> FastAPI:
 
     app.include_router(mcp_router)
 
+    # Factory#516 — OTLP distributed tracing. Last, so the FastAPI
+    # instrumentation sees the full route table. A no-op unless
+    # OTEL_EXPORTER_OTLP_ENDPOINT is set, which it is only in-cluster, so
+    # tests and local runs pay nothing. When it IS set, init_tracing()
+    # proves the endpoint and credential with one empty export before it
+    # claims to be enabled — see tracing.py. Deferred like the mcp router
+    # above: the module pulls the OTel SDK, which must not be an import-time
+    # cost of `import cfactory.app`.
+    from .tracing import init_tracing  # noqa: PLC0415
+
+    init_tracing(app)
+
     return app
 
 

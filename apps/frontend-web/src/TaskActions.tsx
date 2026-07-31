@@ -4,6 +4,7 @@ import {
   proposeAction,
   executeAction,
   detailOf,
+  approvalBlockReason,
   type PreparedAction,
   type ExecuteResult,
   type WorkItem,
@@ -61,7 +62,14 @@ export default function TaskActions({
   /** Why a button is unavailable in the task's current state, or null when ok. */
   const gate = (kind: Kind): string | null => {
     switch (kind) {
-      case "approve_review":
+      case "approve_review": {
+        if (overall !== "review")
+          return `needs a task in review — this one is ${STATE_LABEL[overall]}`;
+        // #245: a gate-blocked plan CANNOT be approved — PFactory answers 409.
+        // Say so here instead of letting the user click, wait, and read the
+        // refusal. Reject stays enabled: sending it back is the way out.
+        return approvalBlockReason(wi.pfactory.extra?.review);
+      }
       case "reject_review":
         return overall === "review"
           ? null

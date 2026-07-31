@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  approvalBlockReason,
+  blockingLenses,
   CostRoutingSchema,
   FeedMessageSchema,
   HealthSchema,
@@ -223,5 +225,74 @@ describe("FeedMessageSchema (WS boundary)", () => {
 
   it("rejects an unknown frame type", () => {
     expect(() => FeedMessageSchema.parse({ type: "bogus", item: {} })).toThrow();
+  });
+});
+
+// #245: the Approve button must be disabled BEFORE the click on a gate-blocked
+// plan. Previously the cockpit could not see the review at all, so it rendered
+// an enabled button beside a `human_review` badge and the user got a 409.
+describe("blockingLenses", () => {
+  const review = (over: Record<string, unknown> = {}) => ({
+    gates_passed: false,
+    threshold: 0.75,
+    aggregate_score: 0.94,
+    lenses: [
+      { lens: "security", score: 0.7, findings: [{ title: "No auth criteria" }] },
+      { lens: "clarity", score: 1.0, findings: [] },
+    ],
+    ...over,
+  });
+
+  it("names the lens that blocks, not the ones that pass", () => {
+    expect(blockingLenses(review())).toEqual(["security 0.70/0.75"]);
+  });
+
+  it("ignores the aggregate — it is recorded for humans, not the test", () => {
+    // 0.94 aggregate sits well above the 0.75 threshold and must not clear it.
+    expect(blockingLenses(review()).length).toBe(1);
+  });
+
+  it("returns nothing when the gates passed", () => {
+    expect(blockingLenses(review({ gates_passed: true }))).toEqual([]);
+  });
+
+  it("returns nothing when there is no review at all", () => {
+    // PFactory does not send it yet: the button must behave exactly as today.
+    expect(blockingLenses(undefined)).toEqual([]);
+  });
+
+  it("flags a lens that clears the threshold but carries a finding", () => {
+    const r = review({
+      lenses: [{ lens: "security", score: 0.9, findings: [{ title: "blocking" }] }],
+    });
+    expect(blockingLenses(r)).toEqual(["security 0.90/0.75"]);
+  });
+});
+
+// The gate keys off gates_passed, not the lens list — an older PFactory sends
+// only the boolean, and "no lens detail" must not read as "not blocked" (#245).
+describe("approvalBlockReason", () => {
+  it("names the lens when the detail is there", () => {
+    expect(
+      approvalBlockReason({
+        gates_passed: false,
+        threshold: 0.75,
+        lenses: [{ lens: "security", score: 0.7, findings: [] }],
+      }),
+    ).toBe("blocked by the plan review — security 0.70/0.75. Reject to send it back.");
+  });
+
+  it("still blocks when only the boolean arrived", () => {
+    expect(approvalBlockReason({ gates_passed: false })).toBe(
+      "blocked by the plan review. Reject to send it back.",
+    );
+  });
+
+  it("allows approval when the gates passed", () => {
+    expect(approvalBlockReason({ gates_passed: true })).toBeNull();
+  });
+
+  it("allows approval when there is no review at all", () => {
+    expect(approvalBlockReason(undefined)).toBeNull();
   });
 });

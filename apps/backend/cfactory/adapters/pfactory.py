@@ -30,6 +30,17 @@ class PFactoryAdapter(BaseHTTPAdapter):
         issue = first(
             row, "github_issue", "githubIssueNumber", "issue_number", "metadata.githubIssueNumber"
         )
+        # #245: the per-lens review verdict, when this PFactory is new enough to
+        # send it. Older ones return only the `gates_passed` boolean, which says
+        # THAT a plan is blocked but not WHY -- enough to disable Approve, not
+        # enough to say which lens. Synthesise the minimal block in that case so
+        # the cockpit degrades to "blocked, reason unavailable" rather than to a
+        # button that 409s.
+        review = first(row, "review")
+        if not isinstance(review, dict):
+            gates_passed = first(row, "gates_passed")
+            review = {"gates_passed": False} if gates_passed is False else None
+
         return AdapterItem(
             correlation_key=str(issue if issue is not None else task_id),
             service=self.service,
@@ -38,4 +49,5 @@ class PFactoryAdapter(BaseHTTPAdapter):
             phase="plan",
             title=first(row, "title", "name"),
             repo=first(row, "repo"),  # W5 (#218): target repo owner/name
+            review=review,
         )

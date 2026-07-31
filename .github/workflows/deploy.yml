@@ -271,8 +271,8 @@ jobs:
               # Tell them apart: already pinned (fine) versus the edit matched
               # nothing (a broken bump that reported success). BOTH images are
               # checked -- one moving and the other not is the interesting failure.
-              if grep -rq "${BACKEND_IMAGE}:${SHA}" "${GITOPS_PATH}/" \
-                 && grep -rq "${FRONTEND_IMAGE}:${SHA}" "${GITOPS_PATH}/"; then
+              if grep -rq "newTag: ${SHA}\|${BACKEND_IMAGE}:${SHA}" "${GITOPS_PATH}/" \
+                 && grep -rq "newTag: ${SHA}\|${FRONTEND_IMAGE}:${SHA}" "${GITOPS_PATH}/"; then
                 echo "gitops already pinned to ${SHA}; nothing to do."
                 pushed="already"
                 break
@@ -302,8 +302,12 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           rm -rf gitops-verify
           git clone --quiet --depth 1 "https://x:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git" gitops-verify
-          if grep -rq "${BACKEND_IMAGE}:${SHA}" "gitops-verify/${GITOPS_PATH}/" \
-             && grep -rq "${FRONTEND_IMAGE}:${SHA}" "gitops-verify/${GITOPS_PATH}/"; then
+          # `kustomize edit set image` writes `name:` and `newTag:` as SEPARATE
+          # YAML fields -- never `image:tag` on one line -- so the joined form
+          # NEVER matched and this failed a deploy that had worked. Both images
+          # share one manifest and one sha, so a single newTag check covers both.
+          if grep -rq "newTag: ${SHA}\|${BACKEND_IMAGE}:${SHA}" "gitops-verify/${GITOPS_PATH}/" \
+             && grep -rq "newTag: ${SHA}\|${FRONTEND_IMAGE}:${SHA}" "gitops-verify/${GITOPS_PATH}/"; then
             echo "verified: ${GITOPS_REPO} pins both images at ${SHA}"
           else
             echo "::error::pushed, but ${GITOPS_REPO} does not pin both images at ${SHA}."

@@ -1271,7 +1271,18 @@ body {
   padding: 3px 6px;
   border-radius: 5px;
 }
-.act-error { color: var(--red); font-size: 12px; margin-top: 8px; }
+/* pre-wrap: a refusal detail is multi-line by design. PFactory's gate refusal
+   is a lens line, then an indented finding, then its detail -- collapsing that
+   to one paragraph runs the sentences together ("...threshold. - No
+   authentication/authorization criteria (medium) A software plan has no..."),
+   which is how the message reads in the cockpit today. #244 got the detail onto
+   the screen; this makes it legible. wrap still applies, so long lines fold. */
+.act-error {
+  color: var(--red);
+  font-size: 12px;
+  margin-top: 8px;
+  white-space: pre-wrap;
+}
 .act-result {
   display: flex;
   align-items: center;

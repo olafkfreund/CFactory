@@ -235,6 +235,49 @@ export const VoteSplitSchema = z
   .passthrough();
 export type VoteSplit = z.infer<typeof VoteSplitSchema>;
 
+// #245: PFactory's plan-review verdict. Every lens must clear `threshold`
+// individually -- `aggregate_score` is recorded for humans and is explicitly NOT
+// the test, so a plan can sit at 0.94 aggregate and still be refused for one
+// lens at 0.70. Read `gates_passed`, never the aggregate.
+export const PlanReviewSchema = z
+  .object({
+    gates_passed: z.boolean().optional(),
+    threshold: z.number().optional(),
+    aggregate_score: z.number().optional(),
+    lenses: z
+      .array(
+        z
+          .object({
+            lens: z.string().optional(),
+            score: z.number().optional(),
+            findings: z
+              .array(
+                z
+                  .object({
+                    title: z.string().optional(),
+                    severity: z.string().optional(),
+                    detail: z.string().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type PlanReview = z.infer<typeof PlanReviewSchema>;
+
+/** The lenses blocking approval: below threshold, or carrying a blocking finding. */
+export function blockingLenses(review: PlanReview | undefined): string[] {
+  if (!review || review.gates_passed !== false) return [];
+  const threshold = review.threshold ?? 0.75;
+  return (review.lenses ?? [])
+    .filter((l) => (l.score ?? 1) < threshold || (l.findings?.length ?? 0) > 0)
+    .map((l) => `${l.lens ?? "?"} ${(l.score ?? 0).toFixed(2)}/${threshold.toFixed(2)}`);
+}
+
 export const ServiceStateSchema = z.object({
   task_id: z.string().nullable(),
   status: z.string().nullable(),
@@ -248,6 +291,7 @@ export const ServiceStateSchema = z.object({
       injection_scan: InjectionScanSchema.optional(),
       dependency_review: DependencyReviewSchema.optional(),
       votes: VoteSplitSchema.optional(),
+      review: PlanReviewSchema.optional(),
     })
     .passthrough()
     .optional(),

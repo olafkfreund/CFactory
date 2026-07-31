@@ -319,6 +319,9 @@ _ANNOTATION_FIELDS = (
     "injection_scan",
     "dependency_review",
     "votes",
+    # review = #245 PFactory plan-review verdict, so the cockpit can disable
+    # Approve on a gate-blocked plan instead of letting the click 409.
+    "review",
 )
 
 

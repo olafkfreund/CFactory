@@ -7,6 +7,7 @@ registers the ORM models on Base.metadata so autogenerate sees them.
 
 from __future__ import annotations
 
+import logging
 from logging.config import fileConfig
 
 import cfactory.audit
@@ -18,8 +19,27 @@ from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+if config.config_file_name is not None and not logging.getLogger().handlers:
+    # Only configure logging when NOTHING else has (i.e. `alembic upgrade` run
+    # as its own process, where root has no handlers yet).
+    #
+    # #276 / Factory#923 / AIFactory#844. This call had BOTH halves of the bug:
+    #
+    #   1. fileConfig defaults to disable_existing_loggers=True, which silences
+    #      every logger object that existed when this module imports.
+    #   2. Even with that off, fileConfig still rewrites the ROOT logger from
+    #      alembic.ini's [logger_root] -- level=WARNING, handlers=console.
+    #
+    # App loggers own no handler and propagate to root, so an in-process
+    # migration cost this service every INFO record for the life of the
+    # process. Only ERROR cleared the bar, so a component that ran perfectly
+    # logged identically to one that never started -- the ambiguity that made
+    # AIFactory#844's intake poller "appear never to start".
+    #
+    # Guarding on root having no handlers keeps standalone `alembic upgrade`
+    # logging exactly as before, and makes the in-process path inherit the
+    # app's handlers instead of destroying them.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Inject the resolved URL so alembic.ini needn't hardcode credentials.
 config.set_main_option("sqlalchemy.url", resolve_database_url())

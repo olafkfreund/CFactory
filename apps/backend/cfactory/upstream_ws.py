@@ -60,6 +60,17 @@ def parse_upstream_message(service: Service, raw: str | bytes) -> CompletionEven
     except ValueError:
         ts = datetime.now(UTC)
 
+    # #245: PFactory's plan-review verdict, when the upstream message carries it.
+    # Read here rather than only on the POST /events path because PFactory
+    # reaches the cockpit over this websocket -- without it CFactory cannot know
+    # a plan is gate-blocked and renders an ENABLED Approve button beside a
+    # `human_review` badge, so the click 409s on a lens the card never showed.
+    # Tolerant by construction: a non-dict or absent block leaves review None and
+    # the event ingests exactly as it does today.
+    review = first(data, "review", "plan_review", "gates")
+    if not isinstance(review, dict):
+        review = None
+
     return CompletionEvent(
         correlation_key=str(key),
         service=service,
@@ -67,6 +78,7 @@ def parse_upstream_message(service: Service, raw: str | bytes) -> CompletionEven
         status=str(status),
         phase=first(data, "phase"),
         updated_at=ts,
+        review=review,
     )
 
 

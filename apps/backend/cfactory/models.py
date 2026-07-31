@@ -247,6 +247,15 @@ class CompletionEvent(BaseModel):
     # TFactory#649: judge-vote split behind a verdict — {verdict, majority,
     # dissent, votes: [{judge/model, verdict}, ...]}. Free dict; optional.
     votes: dict[str, Any] | None = None
+    # #245: PFactory's plan-review verdict — {gates_passed, threshold,
+    # aggregate_score, lenses: [{lens, score, findings: [...]}, ...]}. Without it
+    # the cockpit cannot know a plan is gate-blocked, so it renders an enabled
+    # Approve button next to a `human_review` badge; the user clicks, waits, and
+    # gets a 409. Free dict for the same tolerance reason as the blocks above —
+    # PFactory owns the shape. Optional, so every envelope that predates this
+    # ingests unchanged and the cockpit keeps today's behaviour until PFactory
+    # starts sending it.
+    review: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _reconcile_timestamps(self) -> CompletionEvent:

@@ -135,3 +135,48 @@ def test_attach_access_and_verification_coexist():
 def test_attach_access_verification_noop_when_absent():
     out = _attach_access_verification({"status": "coding"}, _event(Service.AIFACTORY, "coding"))
     assert "extra" not in out
+
+
+def test_attach_review_block_lands_under_extra():
+    """PFactory's plan-review verdict must reach the cockpit (#245).
+
+    Without it CFactory cannot know a plan is gate-blocked, so it renders an
+    ENABLED Approve button beside a `human_review` badge -- the user clicks,
+    waits, and gets a 409 naming a lens the card never showed.
+    """
+    review = {
+        "gates_passed": False,
+        "threshold": 0.75,
+        "aggregate_score": 0.94,
+        "lenses": [
+            {"lens": "security", "score": 0.70, "findings": [{"title": "No auth criteria"}]},
+            {"lens": "clarity", "score": 1.0, "findings": []},
+        ],
+    }
+    ev = CompletionEvent(
+        correlation_key="42",
+        service=Service.PFACTORY,
+        task_id="t",
+        status="human_review",
+        updated_at=datetime(2026, 6, 4, 12, 0, tzinfo=UTC),
+        review=review,
+    )
+    out = _attach_access_verification({}, ev)
+    assert out["extra"]["review"] == review
+    # The aggregate is deliberately carried but is NOT the test -- every lens
+    # must clear the threshold, so 0.94 beside a 0.70 lens still means blocked.
+    assert out["extra"]["review"]["gates_passed"] is False
+
+
+def test_review_block_absent_leaves_the_slice_untouched():
+    """PFactory does not send it yet; today's envelopes must ingest unchanged."""
+    ev = CompletionEvent(
+        correlation_key="42",
+        service=Service.PFACTORY,
+        task_id="t",
+        status="human_review",
+        updated_at=datetime(2026, 6, 4, 12, 0, tzinfo=UTC),
+    )
+    assert ev.review is None
+    out = _attach_access_verification({"status": "human_review"}, ev)
+    assert "extra" not in out

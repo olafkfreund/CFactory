@@ -81,3 +81,41 @@ def test_upstream_ws_urls_target_ws_events_not_api_ws():
     assert urls["tfactory"] == "ws://tf:3103/ws/events"  # trailing slash trimmed
     assert all(u.endswith("/ws/events") for u in urls.values())
     assert not any("/api/ws" in u for u in urls.values())
+
+
+def test_parse_carries_the_plan_review_block():
+    """PFactory reaches the cockpit over this socket, so the verdict must too (#245)."""
+    review = {
+        "gates_passed": False,
+        "threshold": 0.75,
+        "aggregate_score": 0.94,
+        "lenses": [
+            {"lens": "security", "score": 0.70, "findings": [{"title": "No auth criteria"}]}
+        ],
+    }
+    raw = json.dumps(
+        {
+            "correlation_key": "27",
+            "task_id": "027-money-safe-vat-quote-endpoint",
+            "status": "human_review",
+            "review": review,
+        }
+    )
+    ev = parse_upstream_message(Service.PFACTORY, raw)
+    assert ev is not None
+    assert ev.review == review
+    assert ev.review["gates_passed"] is False
+
+
+def test_parse_tolerates_a_missing_or_malformed_review():
+    """Today's messages carry no review; they must parse exactly as before."""
+    base = {"correlation_key": "27", "task_id": "t", "status": "human_review"}
+
+    absent = parse_upstream_message(Service.PFACTORY, json.dumps(base))
+    assert absent is not None and absent.review is None
+
+    # A non-dict `review` must not blow up ingestion or reach the model as junk.
+    malformed = parse_upstream_message(
+        Service.PFACTORY, json.dumps({**base, "review": "gates_passed"})
+    )
+    assert malformed is not None and malformed.review is None

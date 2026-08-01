@@ -27,12 +27,38 @@ from pydantic import BaseModel
 from sqlalchemy import Boolean, DateTime, Integer, String, select
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
 
+from .auth import get_keystore, key_actor
 from .config import Settings, get_settings
 from .db import Base, make_engine
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def redact_actor(actor: str) -> str:
+    """Replace a live API key standing as the actor with a safe reference (#251).
+
+    :func:`cfactory.enterprise.identity_dep` already maps a presented key to a
+    non-reversible reference, so on the WRITE path this is the backstop that
+    stops any other caller — a future route, an MCP tool, a test harness — from
+    landing a working credential in the trail.
+
+    Applied on the READ path too, because rows written before that fix still
+    hold the raw key: this keeps them out of ``GET /api/audit`` and off the
+    Audit view. It does NOT clean the copy at rest. Entries are HMAC-chained
+    (:func:`compute_entry_hash`), so rewriting a stored actor is
+    indistinguishable from tampering and would break :meth:`AuditStore.verify`
+    for every later entry — retiring the key is the remediation for the rows
+    already written, not a migration.
+
+    Only a CURRENTLY configured key is redacted. That is the property that
+    matters (no live credential is served); a key that has since been rotated
+    out is no longer a credential.
+    """
+    if get_keystore().scopes_for(actor) is not None:
+        return key_actor(actor)
+    return actor
 
 
 # Field order is part of the on-disk contract: the canonical string fed to the
@@ -114,7 +140,7 @@ class AuditEntry(Base):
         return AuditEntryModel(
             id=self.id,
             ts=self.ts,
-            actor=self.actor,
+            actor=redact_actor(self.actor),
             kind=self.kind,
             correlation_key=self.correlation_key,
             target_service=self.target_service,
@@ -184,7 +210,7 @@ class AuditStore:
             ).first()
             row = AuditEntry(
                 ts=_now(),
-                actor=actor,
+                actor=redact_actor(actor),
                 kind=kind,
                 correlation_key=correlation_key,
                 target_service=target_service,

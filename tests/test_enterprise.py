@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from cfactory.app import action_transport_dep, audit_dep, create_app, store_dep
-from cfactory.auth import KeyStore, keystore_dep
+from cfactory.auth import KeyStore, key_actor, keystore_dep, reset_keystore, set_keys
 from cfactory.enterprise import LOCAL_IDENTITY, identity_dep
 
 EXECUTE_BODY = {
@@ -59,7 +59,13 @@ def test_actor_is_local_in_open_mode(store, audit):
     assert audit.list()[0].actor == LOCAL_IDENTITY
 
 
-def test_actor_is_api_key_when_keys_configured(store, audit):
+def test_actor_is_never_the_api_key(store, audit):
+    """#251: the presented key must NOT become the audit actor.
+
+    It used to. The trail is rendered in the cockpit's Audit view and returned
+    by ``GET /api/audit``, so storing the key there handed a working
+    write-scoped credential to anyone with read access to the trail.
+    """
     api = _client(store, audit, keys={"rw-key": {"read", "write"}})
     resp = api.post(
         "/api/actions/execute",
@@ -67,7 +73,66 @@ def test_actor_is_api_key_when_keys_configured(store, audit):
         headers={"Authorization": "Bearer rw-key"},
     )
     assert resp.status_code == 200
-    assert audit.list()[0].actor == "rw-key"
+    actor = audit.list()[0].actor
+    assert "rw-key" not in actor
+    # Honest about what it does and does not know: a key is a client, not a
+    # person, so the actor says unattributed and carries a stable reference to
+    # WHICH key acted rather than inventing a plausible-looking name.
+    assert actor == key_actor("rw-key")
+    assert actor.startswith("unattributed:key-")
+
+
+def test_key_actor_is_stable_and_distinguishes_keys():
+    assert key_actor("rw-key") == key_actor("rw-key")
+    assert key_actor("rw-key") != key_actor("ro-key")
+
+
+def test_audit_store_redacts_a_live_key_passed_straight_in(audit):
+    """Backstop: not every audit write goes through ``identity_dep``.
+
+    ``AuditStore.record`` is the single write path, so the guard lives there
+    too — a future route that hand-builds an actor cannot reintroduce #251.
+    """
+    set_keys({"rw-key": {"read", "write"}})
+    try:
+        entry = audit.record(
+            actor="rw-key",
+            kind="approve_review",
+            correlation_key="42",
+            target_service="aifactory",
+            endpoint="/api/tasks/ai-7/approve",
+            status_code=200,
+            ok=True,
+        )
+        assert entry.actor == key_actor("rw-key")
+    finally:
+        reset_keystore()
+
+
+def test_rows_written_before_the_fix_do_not_serve_a_live_key(audit):
+    """Historical rows still hold the raw key; reads must not hand it back.
+
+    The entries are HMAC-chained, so the stored rows are NOT rewritten (that is
+    indistinguishable from tampering) — the read path redacts instead. Retiring
+    the key is the remediation for the copy at rest.
+    """
+    set_keys({})  # no keys configured yet: the raw actor is stored verbatim
+    audit.record(
+        actor="rw-key",
+        kind="approve_review",
+        correlation_key="42",
+        target_service="aifactory",
+        endpoint="/api/tasks/ai-7/approve",
+        status_code=200,
+        ok=True,
+    )
+    set_keys({"rw-key": {"read", "write"}})
+    try:
+        assert audit.list()[0].actor == key_actor("rw-key")
+        # The chain still verifies: no stored row was touched.
+        assert audit.verify() == []
+    finally:
+        reset_keystore()
 
 
 def test_identity_dep_is_overridable():

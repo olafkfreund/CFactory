@@ -16,6 +16,7 @@ override ``keystore_dep`` (preferred) or call ``set_keys()`` / ``reset_keystore(
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 
 from fastapi import Depends, Header, HTTPException
@@ -25,6 +26,28 @@ from .config import get_settings
 # Recognised scopes.
 READ = "read"
 WRITE = "write"
+
+# Audit actor for a caller known ONLY by an API key (#251). A key identifies a
+# client, not a person, and every cockpit user shares one — so the honest actor
+# says so out loud rather than dressing the client up as an identity. The
+# `key-<digest>` suffix keeps two different keys distinguishable in the trail.
+UNATTRIBUTED_ACTOR = "unattributed"
+
+
+def key_actor(key: str) -> str:
+    """Return a stable, non-reversible audit actor for a presented API key.
+
+    NEVER return the key itself: the audit trail is rendered in the cockpit,
+    screenshotted, exported and shipped to a SIEM, so a raw key stored as the
+    actor hands write access to the fleet to anyone with read access to the
+    trail (#251).
+
+    SHA-256 truncated to 12 hex chars — stable across restarts (unlike a random
+    id), non-reversible for a high-entropy random key, and long enough that two
+    configured keys will not collide. It is a *reference* to a credential, not a
+    verifier for one: nothing authenticates against this value.
+    """
+    return f"{UNATTRIBUTED_ACTOR}:key-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:12]}"
 
 
 def secret_matches(candidate: str | None, expected: str | None) -> bool:

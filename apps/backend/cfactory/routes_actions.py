@@ -54,8 +54,9 @@ async def execute_prepared_action(
 
     Every confirmed action is recorded in the audit log (the HITL trail)
     before the result is returned. The audit ``actor`` is the caller
-    identity from the identity seam (the API key when keys are configured,
-    else ``"local"``).
+    identity from the identity seam — an ``unattributed:key-<digest>``
+    reference to the presented key when keys are configured, else ``"local"``.
+    Never the key itself (#251).
 
     Requires the ``write`` scope when API keys are configured; in local
     single-user mode (no keys) it is open."""

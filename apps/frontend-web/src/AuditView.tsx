@@ -12,6 +12,16 @@ function rel(iso: string): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
+/** The exact instant, in UTC, for the row tooltip (#258).
+ *
+ * `rel()` above is now correct because the backend serialises an offset, but
+ * "60m ago" is not an audit record. A compliance reader needs the instant, and
+ * needs it in one zone rather than in whichever one their laptop is set to. */
+function absUtc(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : `${d.toISOString().replace("T", " ").slice(0, 19)} UTC`;
+}
+
 export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
@@ -52,7 +62,7 @@ export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
               </span>
               <span className="t-kind">{a.status}</span>
               <span className="t-target mono">{a.phase ?? "—"}</span>
-              <span className="t-time ta-r">{rel(a.updated_at)}</span>
+              <span className="t-time ta-r" title={absUtc(a.updated_at)}>{rel(a.updated_at)}</span>
             </div>
           ))
         )}
@@ -80,7 +90,7 @@ export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
                 </span>
               </span>
               <span className="t-actor mono">{e.actor}</span>
-              <span className="t-time ta-r">{rel(e.ts)}</span>
+              <span className="t-time ta-r" title={absUtc(e.ts)}>{rel(e.ts)}</span>
             </div>
           ))
         )}

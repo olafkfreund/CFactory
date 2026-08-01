@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, overload
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -23,6 +23,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # instead of re-declared per service. The JSON shape is unchanged (see the
 # behaviour tests in tests/test_factory_contracts_consumption.py).
 from ._contracts.factory_contracts import Usage as _SharedUsage
+
+
+@overload
+def as_utc(dt: datetime) -> datetime: ...
+
+
+@overload
+def as_utc(dt: None) -> None: ...
 
 
 def as_utc(dt: datetime | None) -> datetime | None:

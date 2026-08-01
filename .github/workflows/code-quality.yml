@@ -10,9 +10,29 @@ name: Code quality (ratchet)
 # strict gate is intentionally NOT blocking (127 legacy ruff violations and a
 # ~90-error mypy --strict backlog would make it instantly red).
 #
-# Also runs a whole-repo `ruff format --check` (formatting is auto-applied, never
-# reviewed - section 3.6) and a drift gate confirming the vendored configs still
-# match the pinned hub baseline.
+# Also runs `ruff format --check` over PACKAGE_DIR (formatting is auto-applied,
+# never reviewed - section 3.6) and a drift gate confirming the vendored configs
+# still match the pinned hub baseline.
+#
+# SCOPE, stated honestly (#267). Both Python jobs cover PACKAGE_DIR only. They do
+# NOT cover apps/backend/run.py, apps/backend/migrations/**, tests/ or scripts/.
+# This job used to be named "whole repo", which it never was. Widening it is a
+# separate, costed decision, not a rename:
+#
+#   - apps/backend/runners/github/** (7 files ruff would reformat) is VENDORED
+#     from the Factory hub and byte-identical drift-gated by
+#     factory-github-drift.yml. Reformatting it locally would BREAK that gate, so
+#     a literal "whole repo" format check is unreachable by construction and the
+#     name could never have been made true as written.
+#   - Of the rest, measured at ruff 0.15.17 on this tree: 7 first-party files
+#     under apps/backend (run.py + 6 alembic revisions) and 27 under tests/ would
+#     be reformatted - 41 files repo-wide, 34 of them legitimately widenable.
+#
+# So widening means a 34-file blame-churning reformat commit plus a permanent
+# explicit exclude for the vendored tree. That is a deliberate choice to make on
+# its own, and burying it in a gate-honesty fix would hide it. Until then the
+# name states the scope the gate actually has. Same call, same reasoning, as
+# PFactory#417 / PFactory PR#428.
 #
 # The Python backend gate (ratchet + format + drift) plus the React/Vite
 # frontend gate (#112): ESLint 9 flat config (typescript-eslint strictTypeChecked
@@ -78,7 +98,7 @@ jobs:
         run: python scripts/ratchet_lint.py --tool mypy --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
 
   format-check:
-    name: ruff format --check (whole repo, blocking)
+    name: ruff format --check (apps/backend/cfactory, blocking)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

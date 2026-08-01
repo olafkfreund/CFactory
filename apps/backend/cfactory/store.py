@@ -18,7 +18,7 @@ from sqlalchemy.types import JSON
 
 from .config import DEFAULT_TENANT, Settings, get_settings
 from .db import Base, make_engine
-from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem
+from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem, as_utc
 from .status_taxonomy import is_running
 from .status_taxonomy import is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
@@ -51,11 +51,10 @@ def stall_deadline_seconds() -> float:
     return val if val > 0 else _DEFAULT_STALL_DEADLINE_SECONDS
 
 
-def _as_aware(dt: datetime | None) -> datetime | None:
-    """Treat a naive timestamp (SQLite drops tz) as UTC so subtraction is safe."""
-    if dt is None:
-        return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+# `_as_aware` used to live here as a second copy of `db.as_utc`, used only for
+# liveness arithmetic. Folded into the one implementation (#258) so the read
+# path and the clock arithmetic cannot disagree about what a naive stored
+# timestamp means.
 
 
 def compute_liveness(
@@ -76,7 +75,7 @@ def compute_liveness(
     """
     now = now or _now()
     deadline = stall_deadline_seconds() if deadline_seconds is None else deadline_seconds
-    updated = _as_aware(item.updated_at)
+    updated = as_utc(item.updated_at)
     age = (now - updated).total_seconds() if updated is not None else 0.0
 
     last_service: str | None = None
@@ -372,8 +371,11 @@ class WorkItemRow(Base):
             aifactory=ServiceState(**(self.aifactory or {})),
             tfactory=ServiceState(**(self.tfactory or {})),
             timeline=[CompletionEvent(**e) for e in (self.timeline or [])],
-            created_at=self.created_at,
-            updated_at=self.updated_at,
+            # Labelled UTC on the way out (#258) — a plain `DateTime` column
+            # reads back naive, and an offsetless ISO string is read by the
+            # browser in ITS zone, back-dating every row by the DST offset.
+            created_at=as_utc(self.created_at),
+            updated_at=as_utc(self.updated_at),
         )
 
 

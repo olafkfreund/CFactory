@@ -30,6 +30,7 @@ from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
 from .auth import get_keystore, key_actor
 from .config import Settings, get_settings
 from .db import Base, make_engine
+from .models import as_utc
 
 
 def _now() -> datetime:
@@ -134,12 +135,22 @@ class AuditEntry(Base):
     entry_hash: Mapped[str] = mapped_column(String(64))
 
     def _hashed_values(self) -> dict[str, object]:
+        """The chained fields, taken RAW off the row.
+
+        Deliberately not passed through :func:`as_utc`: the canonical form must
+        stay byte-identical to what was hashed at write time. It already is
+        invariant to tz-awareness (see :func:`_canonical_ts`), so this is belt
+        and braces rather than a live constraint — but the read path (#258)
+        must never be able to reach the hash input.
+        """
         return {name: getattr(self, name) for name in _CANONICAL_FIELDS}
 
     def to_model(self) -> AuditEntryModel:
         return AuditEntryModel(
             id=self.id,
-            ts=self.ts,
+            # Labelled UTC on the way out only (#258). The stored value is
+            # unchanged, so `verify()` still recomputes the original hash.
+            ts=as_utc(self.ts),
             actor=redact_actor(self.actor),
             kind=self.kind,
             correlation_key=self.correlation_key,

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, overload
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -23,6 +23,36 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # instead of re-declared per service. The JSON shape is unchanged (see the
 # behaviour tests in tests/test_factory_contracts_consumption.py).
 from ._contracts.factory_contracts import Usage as _SharedUsage
+
+
+@overload
+def as_utc(dt: datetime) -> datetime: ...
+
+
+@overload
+def as_utc(dt: None) -> None: ...
+
+
+def as_utc(dt: datetime | None) -> datetime | None:
+    """Label a naive timestamp as UTC — the zone it was always in (#258).
+
+    Every writer in this service stamps ``datetime.now(UTC)`` and every fleet
+    producer sends UTC, but the ORM columns are plain ``DateTime`` (not
+    ``timezone=True``), so PostgreSQL (``TIMESTAMP WITHOUT TIME ZONE``) and
+    SQLite both hand the value back with no tzinfo — and several producers send
+    it without an offset in the first place. Serialised, that reaches the
+    browser as an offsetless ISO-8601 date-time, which ``new Date()`` is
+    specified (ES2015+) to interpret in the RUNTIME'S LOCAL zone. Under
+    ``Europe/London`` in summer that is UTC+1, so the cockpit rendered every
+    entry an hour in the past and a fresh approval read "60m ago".
+
+    This LABELS the existing wall clock; it never shifts it. Adding an hour
+    would be wrong twice over: wrong all winter once BST ends, and a corruption
+    of an instant that was already correct.
+    """
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 class Service(str, Enum):
@@ -266,11 +296,21 @@ class CompletionEvent(BaseModel):
         ``event.updated_at`` reader and any new ``event.time`` reader both work. If
         neither is present (malformed event) default to now so ingestion never
         crashes on a timestamp.
+
+        Both are also normalised to tz-AWARE UTC (#258). The fleet services stamp
+        UTC but several still send it without an offset, and an offsetless
+        timestamp reaching the cockpit is read by the browser in the VIEWER'S
+        zone — which back-dated the whole Activity table by an hour under BST.
+        This is the single boundary all three producers pass through, so
+        labelling here is what stops it. It labels the wall clock the producer
+        sent; it never shifts it.
         """
         if self.updated_at is None:
             self.updated_at = self.time or datetime.now(UTC)
         if self.time is None:
             self.time = self.updated_at
+        self.updated_at = as_utc(self.updated_at)
+        self.time = as_utc(self.time)
         return self
 
 

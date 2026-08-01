@@ -215,9 +215,11 @@ def test_every_mutation_appends_an_audit_entry(client, audit, upstream):
     ]
     assert {e.correlation_key for e in entries} == {"FCT-5"}
     assert all(e.target_service == "cfactory" and e.ok for e in entries)
-    # The actor is the presented MCP key, and the trail says the change came in
-    # over /mcp rather than over the REST board.
-    assert all(e.actor == WRITER and e.endpoint == "/mcp/FCT-5" for e in entries)
+    # The actor REFERENCES the presented MCP key without being it (#251 — it used
+    # to be the key verbatim), and the trail says the change came in over /mcp
+    # rather than over the REST board.
+    assert all(e.actor == auth.key_actor(WRITER) and e.endpoint == "/mcp/FCT-5" for e in entries)
+    assert all(WRITER not in e.actor for e in entries)
     assert audit.verify() == []  # the HMAC chain is intact
 
 
@@ -390,7 +392,7 @@ def test_mcp_dispatch_appends_its_own_audit_entry(client, audit, upstream):
     dispatched = entries[-1]
     assert dispatched.target_service == "aifactory"  # not cfactory: it left the building
     assert dispatched.correlation_key == "task-7"
-    assert dispatched.actor == WRITER and dispatched.endpoint == "/mcp/FCT-1"
+    assert dispatched.actor == auth.key_actor(WRITER) and dispatched.endpoint == "/mcp/FCT-1"
     assert dispatched.ok is True
     assert audit.verify() == []
 

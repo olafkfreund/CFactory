@@ -48,7 +48,7 @@ env:
   # the gated file: the pin used to sit behind ratchet_helpers.py's own
   # creation fleet-wide, which would fail every service with "canonical
   # missing" (Factory#403).
-  HUB_PIN_SHA: "a9f44033dbb041d8a1468226c6325ea1f175a264"
+  HUB_PIN_SHA: "c6ce50cfcccec343a0549e18392999aba4b4f7ac"
 
 jobs:
   drift:

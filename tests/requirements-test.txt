@@ -5,3 +5,9 @@ httpx>=0.28
 # Validates the served fleet agent-skills aggregate against the vendored
 # RFC-0019 contract schema (tests/test_fleet_manifest_conformance.py).
 jsonschema>=4.23
+# test_ratchet_test_bar.py shells out to ruff to prove the gate and `ruff check`
+# agree about which files are tests (Factory#510). Pinned to code-quality.yml's
+# RUFF_VERSION so the two gates measure the same bar, and NOT optional: with
+# ruff absent those cases raise FileNotFoundError rather than skipping, which is
+# loud, which is the point.
+ruff==0.15.17

@@ -24,12 +24,36 @@ test — passes the first and silently drops S101 for the whole repo.
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
 import ratchet_helpers as rh
 
 # scripts/ is put on sys.path by tests/conftest.py.
 import ratchet_lint as rl
 
 _ASSERTION = "assert 1 == 2\n"
+
+
+@pytest.fixture(autouse=True)
+def _at_repo_root() -> Iterator[None]:
+    """Run these cases from the repo root, because the ratchet always is.
+
+    ``ruff_counts`` passes ``--config ruff.toml`` and a repo-relative
+    ``--stdin-filename``, and BOTH resolve against the current directory. CI
+    invokes the ratchet from the root so that is correct there — but pytest run
+    from ``apps/backend`` reads a different config and turns
+    ``apps/backend/...`` into ``apps/backend/apps/backend/...``. That silently
+    emptied the verdict and the assertion with teeth went green-on-nothing.
+    """
+    original = Path.cwd()
+    os.chdir(Path(__file__).resolve().parents[1])
+    try:
+        yield
+    finally:
+        os.chdir(original)
 
 
 def test_ruff_exempts_every_shape_of_test_path() -> None:

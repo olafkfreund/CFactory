@@ -41,7 +41,7 @@ _ASSERTION = "assert 1 == 2\n"
 def _at_repo_root() -> Iterator[None]:
     """Run these cases from the repo root, because the ratchet always is.
 
-    ``ruff_counts`` passes ``--config ruff.toml`` and a repo-relative
+    ``ruff_counts`` passes ``--config standards/ruff.toml`` and a repo-relative
     ``--stdin-filename``, and BOTH resolve against the current directory. CI
     invokes the ratchet from the root so that is correct there — but pytest run
     from ``apps/backend`` reads a different config and turns

@@ -48,6 +48,15 @@ from pathlib import Path
 # runs as a script, so the sibling import resolves without packaging.
 from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, ruff_stdin_argv
 
+# The VENDORED baseline, not the repo-wide config at the root (Factory#513).
+# The ratchet holds new and touched code to the full shared bar; the root
+# ruff.toml is this repo's own config, which extends the same baseline today but
+# is the file that would carry a documented carve-out. Pointing the ratchet at
+# the root would let such a carve-out quietly lower the bar the ratchet exists
+# to hold — the same shape as gating against a stale canonical.
+RUFF_CONFIG = "standards/ruff.toml"
+MYPY_CONFIG = "standards/mypy.ini"
+
 PACKAGE_DEFAULT = "apps/backend/cfactory"
 
 # mypy text output lines look like:  path/to/file.py:12: error: <msg>  [code]
@@ -111,7 +120,7 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
     (``tests/cards_harness.py`` here) was held to the production assert bar the
     real tree exempts it from.
     """
-    res = _run(ruff_stdin_argv("ruff.toml", filename), stdin=source)
+    res = _run(ruff_stdin_argv(RUFF_CONFIG, filename), stdin=source)
     if not res.stdout.strip():
         return Counter()
     try:
@@ -134,7 +143,7 @@ def mypy_command(target: str, original: str | None = None) -> list[str]:
     return [
         "mypy",
         "--config-file",
-        "mypy.ini",
+        MYPY_CONFIG,
         "--ignore-missing-imports",
         "--follow-imports=silent",
         "--no-error-summary",

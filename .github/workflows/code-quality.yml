@@ -114,7 +114,13 @@ jobs:
     name: hub drift gates (shared-baseline configs + factory-contracts)
     runs-on: ubuntu-latest
     # Two drift checks against the pinned hub, each at its own SHA:
-    #   1. Vendored standards (ruff.toml/mypy.ini/.editorconfig) vs the baseline.
+    #   1. Vendored standards/ (ruff.toml, mypy.ini, .editorconfig and
+    #      coding-standards.md) vs the baseline. The standards SHA is read from
+    #      standards/.hub-sha rather than hardcoded here (Factory#513/#514): a
+    #      SHA that lives only inside this workflow is not a pin, because nothing
+    #      outside the workflow can find it. coding-standards.md was not vendored
+    #      at all before #513, so a hub rule could say one thing while this
+    #      service did another and no gate noticed (Factory#434).
     #   2. The byte-identical factory-contracts single source of truth (Factory#160)
     #      at apps/backend/cfactory/_contracts/factory_contracts/__init__.py.
     # To update either: re-vendor from the hub and bump the corresponding SHA
@@ -131,11 +137,22 @@ jobs:
       # the comparison and report SUCCESS from a blocking gate. If Factory
       # becomes private, add a read token here - do not restore the soft-skip.
       # Factory#434; same removal AIFactory#1092 / #1095 made in that repo.
+      - name: Read the pinned hub SHA
+        id: pin
+        run: |
+          set -euo pipefail
+          sha="$(cat cfactory/standards/.hub-sha)"
+          # An empty or missing pin must fail here rather than resolve to the
+          # default branch, which would compare against a MOVING target and call
+          # it a match (standards rule 4.7).
+          [ -n "$sha" ] || { echo "standards/.hub-sha is empty" >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Check out hub standards at the pinned SHA
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
-          ref: 93c3bb49ed5f3f3d3d46aae5f8a13ff601550702
+          ref: ${{ steps.pin.outputs.sha }}
           path: factory-hub-standards
       - name: Check out hub at the pinned contracts SHA
         uses: actions/checkout@v4
@@ -150,13 +167,22 @@ jobs:
           # only by stripping leading comment lines from both sides.
           strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
           for f in ruff.toml mypy.ini .editorconfig; do
-            if ! diff <(strip "cfactory/$f") <(strip "factory-hub-standards/standards/$f"); then
-              echo "DRIFT: cfactory/$f diverged from the pinned hub baseline (standards/$f)."
-              echo "Re-vendor from the hub and bump the pinned SHA, or justify a tighten-only override."
+            if ! diff <(strip "cfactory/standards/$f") <(strip "factory-hub-standards/standards/$f"); then
+              echo "DRIFT: cfactory/standards/$f diverged from the pinned hub baseline (standards/$f)."
+              echo "Re-vendor from the hub and bump standards/.hub-sha, or justify a tighten-only override in the root ruff.toml."
               exit 1
             fi
           done
-          echo "No drift: vendored configs match the pinned hub baseline."
+          # coding-standards.md is compared BYTE-EXACT and carries no header:
+          # strip() drops lines starting with '#', which in Markdown is every
+          # heading, so a stripped compare would be blind to every section title.
+          # Hub standards rule 5.1.
+          if ! diff "cfactory/standards/coding-standards.md" "factory-hub-standards/standards/coding-standards.md"; then
+            echo "DRIFT: cfactory/standards/coding-standards.md diverged from the pinned hub baseline."
+            echo "The standard is vendored, not editable here. Change it in the hub, then re-vendor and bump standards/.hub-sha."
+            exit 1
+          fi
+          echo "No drift: vendored standards match the pinned hub baseline."
       - name: Diff vendored module against the pinned hub source
         run: |
           set -euo pipefail

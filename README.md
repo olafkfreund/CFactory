@@ -15,3 +15,5 @@ Recently shipped:
 - **LIVE AGENTS across all three stages** — the panel unions AIFactory rmux sessions (streamable, with a console) and TFactory verify sessions (informational rows), so an active verify no longer reads as "idle". The empty state is honest instead of overclaiming.
 
 See the [architecture docs](docs/architecture.md) and the [environment reference](docs/dev/environment-reference.md) for details, or the live cockpit docs at <https://cfactory.freundcloud.com>.
+
+<!-- Factory#543 proof PR: an ordinary, drift-free change. -->

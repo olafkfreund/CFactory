@@ -26,3 +26,11 @@ data:
   {{- with .Values.config.publicApiUrl }}
   CFACTORY_PUBLIC_API_URL: {{ . | quote }}
   {{- end }}
+  # Audit actor = the named human (#251). Both unset → the actor stays the
+  # unattributed key reference; neither is a secret.
+  {{- with .Values.config.oidcIssuer }}
+  CFACTORY_OIDC_ISSUER: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.oidcAudience }}
+  CFACTORY_OIDC_AUDIENCE: {{ . | quote }}
+  {{- end }}

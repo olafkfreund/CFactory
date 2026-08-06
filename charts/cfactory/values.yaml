@@ -103,6 +103,17 @@ config:
   # host that reaches the backend directly (e.g.
   # https://cfactory-api.freundcloud.org.uk). Empty = not shown.
   publicApiUrl: ""
+  # Audit actor = the human who confirmed the action (#251). Issuer of the OIDC
+  # ID token oauth2-proxy already injects in front of the cockpit, e.g.
+  # https://keycloak.example/realms/factory. Empty (the default, and any deploy
+  # with no IdP) = a confirmed action is attributed to the API key that acted,
+  # as "unattributed:key-<digest>", never to an invented name.
+  oidcIssuer: ""
+  # Expected `aud` on that token — the oauth2-proxy OIDC client id. Empty =
+  # accept any token the issuer signed (right when the realm is the trust
+  # boundary). Set it where the realm serves clients whose users must not be
+  # able to name themselves in this trail.
+  oidcAudience: ""
   # Board issue reconciliation (#374). The backend polls each connected repository
   # every importPollSeconds and imports what changed, so the board keeps itself
   # level with the repository instead of drifting until somebody clicks. ON by

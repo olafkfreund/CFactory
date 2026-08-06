@@ -52,6 +52,16 @@ server {
         # host. Empty in open mode (no key set) → a harmless "Bearer " the open
         # keystore ignores. Applies to the /api/ws upgrade too.
         proxy_set_header Authorization     "Bearer ${CFACTORY_API_KEY}";
+        # Who, not just what (#251). oauth2-proxy upstream injects the Keycloak
+        # ID token as Authorization — the line above then overwrites it, so the
+        # only identity in the request would be a shared client key and the audit
+        # trail could not name the human who confirmed an action. Forward the
+        # token under its own name instead. It is SIGNED and the backend verifies
+        # it against the issuer's JWKS, so this hop is not being trusted: a
+        # client on the direct-to-backend host cannot forge one by setting the
+        # header. Empty (no SSO in front) → nginx omits it and the actor falls
+        # back to the key reference.
+        proxy_set_header X-Forwarded-Id-Token $http_authorization;
         proxy_read_timeout 3600s;
     }
 

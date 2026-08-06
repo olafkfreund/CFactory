@@ -163,6 +163,60 @@ token, so both can be enabled at once.
 
 ---
 
+## Operator runbook — naming the human in the audit trail
+
+**The user story.** A compliance reader opens the cockpit's Audit view, sees
+`approve_review`, and asks the only question an audit trail exists to answer:
+*who approved this?* An API key cannot answer it — every cockpit user shares
+one, so the honest answer is `unattributed:key-9986a9f1…`, "this client did".
+Where the cockpit is behind oauth2-proxy the deployment already knows the
+answer, and two settings make the trail say it.
+
+### Options, and what each one does when unset
+
+| Setting | Set | Unset |
+|---|---|---|
+| `CFACTORY_OIDC_ISSUER` (Helm `config.oidcIssuer`) | Actor becomes `user:<email>` — the person who confirmed the action | Actor stays `unattributed:key-<digest>` — honest, just not a person. **This is the default.** |
+| `CFACTORY_OIDC_AUDIENCE` (Helm `config.oidcAudience`) | The token's `aud` must match this client id | Any token the issuer signed is accepted |
+
+Nothing else changes: authorization is still the keystore's, the API key is
+still what gates the request, and no schema migration is involved.
+
+### Enable it
+
+```
+helm upgrade ... --set config.oidcIssuer=https://keycloak.example/realms/factory
+```
+
+The cockpit nginx already forwards the ID token oauth2-proxy injects (as
+`X-Forwarded-Id-Token`, because the `Authorization` header is overwritten with
+the CFactory key on the way through). No oauth2-proxy change is needed —
+`injectRequestHeaders` with `claim: id_token` is the stock configuration.
+
+Verify: confirm any action in the cockpit, then
+
+```
+curl -s -H "Authorization: Bearer $KEY" .../api/audit \
+  | jq -r '.entries[0].actor'      # -> user:you@example.com
+```
+
+### Why not just trust a header
+
+The obvious cheaper move is `injectRequestHeaders: X-Auth-Request-Email` and
+believing it. **Do not.** The backend is also reachable on the editor host
+(`cfactory-mcp.…`), where a write-scoped API key is the only gate — so a
+plaintext identity header there is typed by the caller, and any key holder could
+sign someone else's name against an approval. The ID token is signed by the IdP
+and verified here against its JWKS, so it does not matter which hop the request
+arrived over. Anything that fails to verify falls back to the key reference; the
+trail never invents a name.
+
+Residual: a captured, still-valid ID token replayed on the editor host would
+name its subject. `exp` bounds that window. Closing it means the backend is
+reachable only through the proxy — perimeter work, tracked in Factory#312.
+
+---
+
 ## Reference
 
 **Endpoints**
@@ -173,6 +227,8 @@ token, so both can be enabled at once.
 - `CFACTORY_API_KEYS` — `"<key>:read,write;<key2>:read"`; empty = OPEN mode.
 - `CFACTORY_API_KEY` (frontend) — the bare key nginx injects.
 - `CFACTORY_PUBLIC_API_URL` — shown on `/settings/token` as the editor API URL.
+- `CFACTORY_OIDC_ISSUER` / `CFACTORY_OIDC_AUDIENCE` — who the audit trail names
+  (above). Both unset = `unattributed:key-<digest>`.
 
 **Extension settings**
 - `factory.cfactoryUrl` — the API base URL (the direct-to-backend host).

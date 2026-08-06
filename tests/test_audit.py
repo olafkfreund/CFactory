@@ -114,7 +114,7 @@ def test_audit_newest_first(client_with_audit):
 
 import sqlalchemy as sa  # noqa: E402
 
-from cfactory.audit import AuditEntry, compute_entry_hash  # noqa: E402
+from cfactory.audit import AuditEntry, AuditEntryModel, compute_entry_hash  # noqa: E402
 
 
 def _record(store, **overrides):
@@ -210,6 +210,172 @@ def test_secret_change_breaks_verification(tmp_path):
     # Re-open with a different secret: the chain no longer verifies.
     wrong = AuditStore(url, create=False, hmac_secret="secret-b")
     assert wrong.verify() != []
+
+
+# --------------------------------------------------------------------------
+# Concurrent appends must not fork the chain (#306)
+# --------------------------------------------------------------------------
+
+from concurrent.futures import ThreadPoolExecutor  # noqa: E402
+from threading import Barrier  # noqa: E402
+
+
+def _fork_groups(store) -> list[tuple[str, list[int]]]:
+    """Parents that more than one entry chains to — i.e. the chain has forked."""
+    with store._session() as session:
+        parents = session.execute(
+            sa.select(AuditEntry.prev_hash, sa.func.count().label("n"))
+            .group_by(AuditEntry.prev_hash)
+            .having(sa.func.count() > 1)
+        ).all()
+        return [
+            (
+                prev,
+                list(session.scalars(sa.select(AuditEntry.id).where(AuditEntry.prev_hash.is_(prev)
+                     if prev is None else AuditEntry.prev_hash == prev))),
+            )
+            for prev, _n in parents
+        ]
+
+
+def _append_concurrently(store, *, writers: int = 8, rounds: int = 12) -> None:
+    """Drive `writers` threads at `store.record`, released together each round.
+
+    The barrier is what makes this a real reproduction rather than a hopeful
+    one: every round has all writers inside `record` at the same time, which is
+    exactly the read-then-insert overlap that forked the live chain (#306).
+    """
+    barrier = Barrier(writers)
+
+    def writer(n: int) -> None:
+        for r in range(rounds):
+            barrier.wait()
+            _record(store, correlation_key=f"{n}-{r}")
+
+    with ThreadPoolExecutor(max_workers=writers) as pool:
+        for fut in [pool.submit(writer, i) for i in range(writers)]:
+            fut.result()
+
+
+def test_concurrent_appends_keep_one_unforked_chain(audit):
+    """The acceptance test for #306: verify() clean after concurrent writes."""
+    _append_concurrently(audit)
+
+    assert _fork_groups(audit) == [], "two entries chained to the same predecessor"
+    assert audit.check() == []
+    assert audit.verify() == []
+
+
+def test_concurrent_appends_all_land(audit):
+    """Serialising the append must not drop or merge entries."""
+    _append_concurrently(audit, writers=6, rounds=10)
+
+    with audit._session() as session:
+        assert session.scalar(sa.select(sa.func.count()).select_from(AuditEntry)) == 60
+
+
+# --------------------------------------------------------------------------
+# check(): a fork is not a mutation (#306)
+# --------------------------------------------------------------------------
+
+
+def _forge_sibling(store, parent: AuditEntryModel, **overrides):
+    """Insert a second entry chaining to `parent`, hashed correctly.
+
+    Reproduces the shape the pre-fix race left on the live cockpit: two rows
+    sharing a predecessor, each with a valid HMAC over its own fields.
+    """
+    from cfactory.audit import _now
+
+    values = {
+        "ts": _now().replace(tzinfo=None),
+        "actor": "racer",
+        "kind": "approve_review",
+        "correlation_key": "sibling",
+        "target_service": "aifactory",
+        "endpoint": "/api/x",
+        "status_code": 200,
+        "ok": True,
+    }
+    values.update(overrides)
+    with store._session.begin() as session:
+        row = AuditEntry(**values, prev_hash=parent.prev_hash)
+        row.entry_hash = compute_entry_hash(store._secret, values, parent.prev_hash)
+        session.add(row)
+        session.flush()
+        return row.id
+
+
+def test_check_calls_a_concurrent_fork_a_fork(audit):
+    first = _record(audit, correlation_key="1")
+    second = _record(audit, correlation_key="2")
+    sibling = _forge_sibling(audit, second)
+    _record(audit, correlation_key="3")
+
+    found = audit.check()
+    assert [(b.id, b.kind) for b in found] == [(sibling, "forked")]
+    assert str(second.id) in found[0].detail
+    assert first.id not in [b.id for b in found]
+
+
+def test_verify_stays_quiet_about_a_fork_but_check_does_not(audit):
+    """The standing false positive is gone from the alarm, not from the record."""
+    _record(audit, correlation_key="1")
+    second = _record(audit, correlation_key="2")
+    sibling = _forge_sibling(audit, second)
+
+    assert audit.verify() == []
+    assert [b.id for b in audit.check()] == [sibling]
+
+
+def test_check_flags_a_copied_row_as_a_duplicate(audit):
+    """A replayed row shares a parent like a fork does — and is not benign."""
+    _record(audit, correlation_key="1")
+    target = _record(audit, correlation_key="2")
+
+    with audit._session.begin() as session:
+        row = session.get(AuditEntry, target.id)
+        copy = AuditEntry(
+            ts=row.ts,
+            actor=row.actor,
+            kind=row.kind,
+            correlation_key=row.correlation_key,
+            target_service=row.target_service,
+            endpoint=row.endpoint,
+            status_code=row.status_code,
+            ok=row.ok,
+            prev_hash=row.prev_hash,
+            entry_hash=row.entry_hash,
+        )
+        session.add(copy)
+
+    kinds = {b.kind for b in audit.check()}
+    assert kinds == {"duplicate"}
+    assert audit.verify()  # a replay is tamper evidence, not a race
+
+
+def test_check_flags_a_deleted_entry_as_dangling(audit):
+    _record(audit, correlation_key="1")
+    middle = _record(audit, correlation_key="2")
+    third = _record(audit, correlation_key="3")
+
+    with audit._session.begin() as session:
+        session.delete(session.get(AuditEntry, middle.id))
+
+    found = audit.check()
+    assert [(b.id, b.kind) for b in found] == [(third.id, "dangling")]
+    assert third.id in audit.verify()
+
+
+def test_check_flags_a_mutated_field_as_mutated(audit):
+    _record(audit, correlation_key="1")
+    target = _record(audit, correlation_key="2")
+
+    with audit._session.begin() as session:
+        session.get(AuditEntry, target.id).endpoint = "/api/tasks/EVIL"
+
+    assert [(b.id, b.kind) for b in audit.check()] == [(target.id, "mutated")]
+    assert target.id in audit.verify()
 
 
 def test_compute_entry_hash_is_deterministic():

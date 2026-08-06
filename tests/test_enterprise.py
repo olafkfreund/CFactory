@@ -16,6 +16,7 @@ import jwt
 import pytest
 from cfactory import enterprise
 from cfactory.app import action_transport_dep, audit_dep, create_app, store_dep
+from cfactory.audit import redact_actor
 from cfactory.auth import KeyStore, key_actor, keystore_dep, reset_keystore, set_keys
 from cfactory.config import Settings
 from cfactory.enterprise import LOCAL_IDENTITY, identity_dep, oidc_actor
@@ -401,3 +402,49 @@ def test_both_jwks_fetches_send_a_browser_user_agent(monkeypatch):
     # Cloudflare's bot rules key off the Mozilla prefix, not the whole string.
     assert str(sent["discovery_ua"]).startswith("Mozilla/5.0")
     assert str(sent["jwks_ua"]).startswith("Mozilla/5.0")
+
+
+def test_rotating_the_key_cleans_the_old_rows_up_instead_of_un_redacting_them(audit):
+    """The remediation for the 126 rows already at rest must not backfire.
+
+    Those rows hold the key in clear and are not rewritten — the HMAC chain
+    makes that indistinguishable from tampering — so retiring the key is the
+    fix. But redacting only a CURRENTLY configured key means the moment it
+    leaves ``CFACTORY_API_KEYS`` the trail serves the stored string verbatim
+    again: dead, yet a 40-character opaque token rendered in the Audit view,
+    indistinguishable on screen from the live one that started #251. Shape is
+    checked too, so rotation cleans up rather than un-redacts.
+    """
+    stale = "acw_f47824bd" + "0" * 28  # a retired key's SHAPE, not a live value
+    set_keys({})  # written before the keystore existed, and never rotated back
+    audit.record(
+        actor=stale,
+        kind="approve_review",
+        correlation_key="42",
+        target_service="aifactory",
+        endpoint="/api/tasks/ai-7/approve",
+        status_code=200,
+        ok=True,
+    )
+    try:
+        served = audit.list()[0].actor
+        assert stale not in served
+        assert served == key_actor(stale)
+        assert audit.verify() == []  # no stored row was touched
+    finally:
+        reset_keystore()
+
+
+@pytest.mark.parametrize(
+    "actor",
+    ["system", "local", "user:alice@example.com", "unattributed:key-9986a9f11017", "acw_short"],
+)
+def test_shape_redaction_leaves_real_actors_alone(actor):
+    """The guard must not eat the identities the seam legitimately produces —
+    a redaction that turns every row into a digest trades one uselessness for
+    another."""
+    set_keys({})
+    try:
+        assert redact_actor(actor) == actor
+    finally:
+        reset_keystore()

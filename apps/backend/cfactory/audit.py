@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 from datetime import UTC, datetime
 
 from pydantic import BaseModel
@@ -35,6 +36,14 @@ from .models import as_utc
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+# The credential shapes this fleet issues: CFactory's own `cfk_…` and the
+# AIFactory-style `acw_…` (the one #251 was filed about). Anchored and demanding
+# real length, so it cannot match the actors this seam legitimately produces —
+# `system`, `local`, `user:<email>`, `unattributed:key-<digest>` — none of which
+# is a bare prefixed token. Widen this if a new key prefix is minted.
+_KEY_SHAPED = re.compile(r"^(?:acw|cfk)_[A-Za-z0-9]{16,}$")
 
 
 def redact_actor(actor: str) -> str:
@@ -53,11 +62,18 @@ def redact_actor(actor: str) -> str:
     for every later entry — retiring the key is the remediation for the rows
     already written, not a migration.
 
-    Only a CURRENTLY configured key is redacted. That is the property that
-    matters (no live credential is served); a key that has since been rotated
-    out is no longer a credential.
+    Two conditions, and the second exists because the first alone makes the
+    remediation backfire. Redacting only a CURRENTLY configured key is the
+    property that matters for *security* — no live credential is served. But
+    the fix for the rows already written is to RETIRE the key, and the moment
+    it leaves ``CFACTORY_API_KEYS`` those rows stop matching and the trail
+    serves the stored string verbatim again. It is dead by then, but it is a
+    40-character opaque token rendered in the Audit view, indistinguishable on
+    screen (or in a screenshot, or an export) from the live one that started
+    #251. Shape is therefore checked as well as configuration, so rotating
+    cleans the trail up instead of un-redacting it.
     """
-    if get_keystore().scopes_for(actor) is not None:
+    if get_keystore().scopes_for(actor) is not None or _KEY_SHAPED.match(actor):
         return key_actor(actor)
     return actor
 

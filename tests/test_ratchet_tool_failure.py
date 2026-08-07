@@ -16,6 +16,11 @@ BLOCKING error (a syntax error in the file under test). That case still emits an
 error line, so it is counted and gated normally; only a failed run that produced
 no error line at all is treated as "did not run".
 
+"An error line" means one naming THE FILE UNDER TEST, since CFactory#319 -- a
+blocking error in a file the target merely imports names that other file, and
+counting it gated a clean file at 1. So the mypy stubs here name the path the
+ratchet handed mypy rather than an arbitrary one.
+
 The controls are the assertions with teeth in the other direction. A guard that
 fired on every non-zero exit would break the ordinary "violations found" path
 (exit 1), and for mypy it would abort the ratchet on a syntax error rather than
@@ -55,6 +60,29 @@ class _Res:
 def stub(monkeypatch: pytest.MonkeyPatch):
     def _apply(res: _Res) -> None:
         monkeypatch.setattr(rl, "_run", lambda *_a, **_k: res)
+
+    return _apply
+
+
+@pytest.fixture
+def stub_mypy(monkeypatch: pytest.MonkeyPatch):
+    """Stub mypy so its error lines name the file the ratchet ACTUALLY handed it.
+
+    The counter compares that path now (CFactory#319), so a stub naming some
+    other file no longer stands in for "mypy reported on our file" -- which is
+    the whole point of the fix. Reading the target out of argv keeps these stubs
+    honest without hard-coding the temp name, which is random per call.
+    """
+
+    def _apply(returncode: int, *messages: str) -> None:
+        def run(cmd: list[str], **_kwargs: object) -> _Res:
+            target = cmd[-1]
+            return _Res(
+                returncode,
+                stdout="".join(f"{target}:{i + 1}: error: {m}\n" for i, m in enumerate(messages)),
+            )
+
+        monkeypatch.setattr(rl, "_run", run)
 
     return _apply
 
@@ -115,19 +143,19 @@ def test_mypy_clean_file_still_counts_zero(stub) -> None:
     assert rl.mypy_count("x = 1\n", _FILE) == 0
 
 
-def test_mypy_blocking_error_is_counted_not_treated_as_a_crash(stub) -> None:
+def test_mypy_blocking_error_is_counted_not_treated_as_a_crash(stub_mypy) -> None:
     # Control with teeth: a syntax error exits 2 as well, but still emits an
     # error line. Keying the guard on the exit code alone would abort the
     # ratchet here instead of blocking the regression.
-    stub(_Res(2, stdout="_ratchet_x__main.py:1: error: invalid syntax  [syntax]\n"))
+    stub_mypy(2, "invalid syntax  [syntax]")
     assert rl.mypy_count("x = 1\n", _FILE) == 1
 
 
-def test_mypy_errors_are_still_counted(stub) -> None:
+def test_mypy_errors_are_still_counted(stub_mypy) -> None:
     # Control: exit 1 is the ordinary "found something" path.
-    out = (
-        "_ratchet_x__main.py:3: error: Function is missing a type annotation  [no-untyped-def]\n"
-        "_ratchet_x__main.py:9: error: Returning Any from function  [no-any-return]\n"
+    stub_mypy(
+        1,
+        "Function is missing a type annotation  [no-untyped-def]",
+        "Returning Any from function  [no-any-return]",
     )
-    stub(_Res(1, stdout=out))
     assert rl.mypy_count("x = 1\n", _FILE) == 2

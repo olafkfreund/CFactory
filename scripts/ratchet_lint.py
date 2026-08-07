@@ -76,7 +76,8 @@ PACKAGE_DEFAULT = "apps/backend/cfactory"
 VENDORED_SKIP = frozenset({"scripts/ratchet_helpers.py"})
 
 # mypy text output lines look like:  path/to/file.py:12: error: <msg>  [code]
-_MYPY_ERROR_RE = re.compile(r"^.+?:\d+: error:")
+# The path is CAPTURED because it has to be compared: see mypy_count.
+_MYPY_ERROR_RE = re.compile(r"^(?P<path>.+?):\d+: error:")
 
 
 def _run(
@@ -187,14 +188,42 @@ def mypy_command(target: str, original: str | None = None) -> list[str]:
 def mypy_count(source: str, filename: str) -> int:
     """mypy --strict error count for *source* checked as *filename*.
 
-    With ``--follow-imports=silent`` mypy only reports errors in the file it
-    was explicitly given, so every error line belongs to this file. Base and
-    HEAD are both checked from a temp copy next to the original (see
+    Only lines mypy attributed to the file it was HANDED are counted, and that is
+    the temp copy, not the repo-relative original. ``--follow-imports=silent``
+    silences imported modules for ordinary errors but NOT for a blocking one: an
+    import that fails to parse prints its own error line and stops the run before
+    the target is checked at all. Counting that line attributed a foreign file's
+    error to this one — measured, a clean file whose import would not parse came
+    back as 1 (CFactory#319, and Factory#601 for the identical hub fork). PFactory,
+    TFactory and AIFactory already compared the path; this fork did not, and its
+    regex did not even capture it.
+
+    The comparison is RESOLVED on both sides. mypy prints the temp copy relative
+    to the working directory — the copy lives inside the tree, unlike the hub's,
+    whose /tmp path comes back verbatim — while ``materialized`` yields an
+    absolute one. Comparing the strings would match nothing and count zero for
+    every file, which is the same gate failure pointing the other way.
+
+    A zero count out of a blocking run is not "clean" either, and is not treated
+    as one: ``require_tool_ran`` sees exit 2 with nothing attributed to the target
+    and aborts with "could not measure", which is the truthful verdict when mypy
+    never reached the file.
+
+    Base and HEAD are both checked from a temp copy next to the original (see
     `materialized`) so the comparison is symmetric and relative imports resolve.
+    That copy carries a random name, so two runs never share a mypy cache entry
+    and a cache hit cannot replay a stale path — measured, each run is blamed on
+    its own filename.
     """
     with materialized(source, filename) as tmp:
         res = _run(mypy_command(tmp, filename), env={**os.environ, "MYPYPATH": "apps/backend"})
-        count = sum(1 for line in res.stdout.splitlines() if _MYPY_ERROR_RE.match(line))
+        target = Path(tmp).resolve()
+        count = sum(
+            1
+            for line in res.stdout.splitlines()
+            if (m := _MYPY_ERROR_RE.match(line)) is not None
+            and Path(m.group("path")).resolve() == target
+        )
         # Same shared rule as the ruff counter, with `measured` passed: mypy's exit 2
         # also covers a BLOCKING error, which still names a file and so belongs in the
         # count rather than aborting the run.

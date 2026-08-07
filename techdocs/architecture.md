@@ -51,11 +51,25 @@ apps/
 │       ├── audit.py          # HMAC-anchored, tamper-evident action audit chain
 │       ├── auth.py           # scoped API keys (read/write); OPEN in local mode
 │       ├── enterprise.py     # identity + multi-tenant resolution seams (deferred)
-│       ├── db.py             # SQLAlchemy Base + engine factory
-│       └── migrations/       # Alembic migrations (work items, audit, HMAC chain)
+│       ├── db.py             # SQLAlchemy Base + engine factory + schema bootstrap
+│       └── migrations/       # Alembic migrations, applied at startup (see below)
 └── frontend-web/            # React 19 + Vite cockpit UI (:3110)
     └── src/                  # MissionControl · CopilotPanel · AuditView · TokensView
 ```
+
+## Schema ownership
+
+The app owns its schema end to end: `db.bootstrap_schema()` runs at the top of
+the FastAPI lifespan, before the first store is constructed, so a revision lands
+before the code that depends on it reads the table. A database with tables but
+no `alembic_version` — which is every one this service created before that
+existed — is **stamped** at head rather than upgraded, because its tables are
+already there. See `guides/deployment.md` for the three cases and their log
+lines.
+
+The stores still call `Base.metadata.create_all` at init; on a database
+bootstrap_schema created that is a no-op, and it remains the path a hermetic
+test takes when it builds a store against a temp file directly.
 
 ## The data plane
 

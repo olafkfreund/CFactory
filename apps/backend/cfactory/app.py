@@ -14,6 +14,7 @@ live in :mod:`cfactory.api_deps` and are re-exported here so existing imports
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -67,6 +68,7 @@ from .config import (
     load_copilot_overrides,
     load_service_overrides,
 )
+from .db import bootstrap_schema
 from .issue_import import poll_forever
 from .progress import get_progress_hub, start_progress, stop_progress
 from .store import get_store
@@ -78,12 +80,22 @@ from .ws import get_manager
 # guarded /api//connect prefixes in the first place.)
 _EXEMPT_PREFIXES = ("/api/events",)
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_settings()
     # Refuse to silently boot a hosted deploy on the forgeable dev audit secret (#81).
     check_audit_secret(settings)
+    # Apply pending migrations BEFORE the first store is constructed, so a
+    # revision lands before the code that depends on it reads the table (#308).
+    # Until this existed, nothing in the image, the chart or the deploy workflow
+    # ran alembic: the live schema was whatever create_all had made, there was no
+    # alembic_version row, and a future migration would have been merged and
+    # silently never applied. On a database that predates this, the first boot
+    # STAMPS rather than upgrades -- see db.bootstrap_schema.
+    logger.info("schema bootstrap: %s", bootstrap_schema())
     # Adopt every pre-phase-8 single git configuration into a connection + a
     # default repository, re-sealing its credential onto the connection without
     # ever writing the plaintext (RFC-0020 §3.3 phase 8). Idempotent and ordered

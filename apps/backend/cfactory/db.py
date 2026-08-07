@@ -1,4 +1,5 @@
-"""Database plumbing: declarative base, URL resolution, engine factory.
+"""Database plumbing: declarative base, URL resolution, engine factory, and the
+one place the schema is brought under Alembic control.
 
 CFactory uses PostgreSQL in real deployments (reusing the family's data layer)
 and falls back to a local SQLite file for dev / hermetic tests. SQLAlchemy's
@@ -7,14 +8,31 @@ JSON column type works on both, so the same models run everywhere.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase
 
 from .config import Settings, get_settings
+
+if TYPE_CHECKING:
+    from alembic.config import Config
+
+logger = logging.getLogger(__name__)
+
+# The revision every path below converges on. Named once so the log line, the
+# stamp and the tests all quote the same string.
+HEAD = "head"
+
+# Alembic's own bookkeeping table. Its ABSENCE on a populated database is the
+# whole of #308: the schema exists, nothing records which revision made it, so
+# `alembic upgrade` would replay every revision against tables that are already
+# there and fail on the first CREATE TABLE.
+VERSION_TABLE = "alembic_version"
 
 
 class Base(DeclarativeBase):
@@ -54,3 +72,83 @@ def make_engine(url: str | None = None) -> Engine:
             cur.close()
 
     return engine
+
+
+# ── bringing the schema under Alembic control (#308) ─────────────────────────
+
+
+def alembic_config(url: str) -> Config:
+    """The repo's alembic.ini, pointed at *url*.
+
+    The url travels in ``attributes`` rather than only in ``sqlalchemy.url``
+    because ``migrations/env.py`` overwrites that option with its own resolution;
+    the attribute is how a caller says "this database, not the resolved one",
+    which is what lets a test run against a temp file.
+    """
+    # Imported here, not at module scope: alembic is a startup and CLI
+    # dependency, and every module that touches the ORM imports this one.
+    from alembic.config import Config  # noqa: PLC0415
+
+    config = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", url)
+    config.attributes["cfactory_url"] = url
+    return config
+
+
+def bootstrap_schema(url: str | None = None) -> str:
+    """Bring the database at *url* to the head revision. Returns what it did.
+
+    Three cases, and the middle one is #308:
+
+    * ``"created"`` — no tables at all. Every revision runs, so a fresh
+      deployment's schema is built BY the migrations rather than beside them.
+    * ``"adopted"`` — tables, but no ``alembic_version``. This is every database
+      this service has ever created: the schema came from
+      ``Base.metadata.create_all`` at store init and nothing recorded a revision,
+      so a future migration would have been written, merged, and silently never
+      applied. It is STAMPED at head rather than upgraded — the tables are
+      already there, and replaying the revisions that created them would fail on
+      the first ``CREATE TABLE``. That the stamp is honest is not assumed: the
+      schema ``create_all`` produces and the schema ``alembic upgrade head``
+      produces are asserted identical by
+      ``tests/test_schema_bootstrap.py::test_the_migrations_and_the_models_agree``,
+      which is what makes head the right revision to stamp.
+    * ``"upgraded"`` — already under Alembic control. The normal path from the
+      first deploy of this change onward, and a no-op when nothing is pending.
+
+    Called at the TOP of the app lifespan, before any store is constructed, so a
+    revision lands before the code that depends on it reads the table. The
+    stores' own ``create_all`` still runs afterwards and is now a no-op on a
+    database this function created.
+
+    ponytail: in-process at startup rather than an init container or a Job. The
+    deployment is one replica with a Recreate strategy over a single SQLite file
+    on an RWO volume, so there is no second process to race, and an init
+    container would need the code, the volume and a change in another repo
+    (factory-gitops) to say the same thing. If CFactory ever runs more than one
+    replica this needs an advisory lock or a pre-install Job — see #308.
+    """
+    from alembic import command  # noqa: PLC0415
+
+    url = url or resolve_database_url()
+    engine = make_engine(url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    config = alembic_config(url)
+    if VERSION_TABLE in tables:
+        command.upgrade(config, HEAD)
+        return "upgraded"
+    if tables:
+        logger.info(
+            "schema exists with no %s table: stamping it at %s so future migrations apply "
+            "(#308). No revision is replayed against the existing tables.",
+            VERSION_TABLE,
+            HEAD,
+        )
+        command.stamp(config, HEAD)
+        return "adopted"
+    command.upgrade(config, HEAD)
+    return "created"

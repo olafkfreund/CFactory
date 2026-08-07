@@ -12,6 +12,12 @@ the chain (:meth:`AuditStore.verify`) detects any after-the-fact mutation,
 reordering, or deletion of an entry — the same anchoring AIFactory uses for its
 enterprise audit trail, kept deliberately small here.
 
+An append reads the chain tail and then inserts, so the two must be one
+critical section or concurrent appends fork the chain (#306). See
+:func:`_serialise_sqlite_appends` and :func:`_lock_chain` for how that is held,
+and :meth:`AuditStore.check` for how a fork left by the pre-fix code is
+classified — as a structural anomaly, distinct from tamper evidence.
+
 Mirrors :mod:`cfactory.store`: an ORM row on the shared ``Base`` plus a thin
 repository with an injectable ``url`` (a temp SQLite file for tests, PostgreSQL
 in real deployments).
@@ -23,10 +29,12 @@ import hashlib
 import hmac
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import Boolean, DateTime, Integer, String, select
-from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
+from sqlalchemy import Boolean, DateTime, Integer, String, event, select, text
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 
 from .auth import get_keystore, key_actor
 from .config import Settings, get_settings
@@ -134,6 +142,59 @@ def compute_entry_hash(secret: str, values: dict[str, object], prev_hash: str | 
     return hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+# Advisory-lock key for the audit chain on PostgreSQL. Arbitrary but fixed:
+# every appender must ask for the same key or the lock excludes nobody.
+_CHAIN_LOCK_KEY = 0x0C_FA_C7_06
+
+
+def _serialise_sqlite_appends(engine: Engine) -> None:
+    """Make every transaction on ``engine`` start with ``BEGIN IMMEDIATE``.
+
+    pysqlite does not open a transaction before a SELECT — only before DML —
+    so out of the box :meth:`AuditStore.record` reads the chain tail OUTSIDE
+    the transaction it then inserts in. Two overlapping appends read the same
+    predecessor, both insert, and neither errors: the chain forks silently
+    (#306, observed live on 2026-07-30). No lock in ``record`` can fix that,
+    because by the time the INSERT takes SQLite's write lock the stale read has
+    already happened.
+
+    ``BEGIN IMMEDIATE`` takes the write lock up front, so the tail read and the
+    insert are one critical section against SQLite's single writer. This is
+    SQLAlchemy's documented recipe for real serialisable behaviour on pysqlite:
+    turn off the driver's implicit transaction handling and emit BEGIN here.
+
+    Scoped to the audit store's own engine on purpose — the cockpit's other
+    stores share the database file and must not be serialised behind it.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _disable_implicit_begin(dbapi_conn: Any, _record: Any) -> None:
+        dbapi_conn.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def _begin_immediate(conn: Connection) -> None:
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+
+
+def _lock_chain(session: Session) -> None:
+    """Hold the chain against concurrent appends for the rest of the transaction.
+
+    SQLite needs nothing here — :func:`_serialise_sqlite_appends` already took
+    the write lock when the transaction opened.
+
+    PostgreSQL needs an explicit lock, and it must be one that covers a row
+    that does not exist yet. ``SELECT ... FOR UPDATE`` on the tail row does NOT:
+    under READ COMMITTED both appenders see the same tail, both lock it, and the
+    second still inserts a sibling once the first commits — a phantom the row
+    lock cannot see. A transaction-scoped advisory lock has no such gap and is
+    released on commit or rollback either way.
+    """
+    # ponytail: one lock for the whole chain. Appends are single rows a few
+    # times a second; finer granularity would need a chain id to lock on.
+    if session.get_bind().dialect.name == "postgresql":
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _CHAIN_LOCK_KEY})
+
+
 class AuditEntry(Base):
     __tablename__ = "audit_entries"
 
@@ -195,6 +256,73 @@ class AuditEntryModel(BaseModel):
     entry_hash: str
 
 
+def _short(digest: str | None) -> str:
+    """A hash prefix, for anomaly text that a human has to read."""
+    return "the genesis marker" if digest is None else f"{digest[:10]}..."
+
+
+class ChainBreak(BaseModel):
+    """One anomaly found by :meth:`AuditStore.check`.
+
+    ``kind`` is one of ``mutated``, ``duplicate``, ``forked``, ``dangling`` —
+    see :meth:`AuditStore.check` for what each one means and which of them are
+    tamper evidence.
+    """
+
+    id: int
+    kind: str
+    detail: str
+
+
+# `AuditStore.list` shadows the builtin inside the class body, so a return type
+# written there as `list[...]` resolves to the method and fails --strict. These
+# aliases are the same types spelled where the builtin is still the builtin.
+ChainBreaks = list[ChainBreak]
+EntryModels = list[AuditEntryModel]
+EntryIds = list[int]
+
+
+def _classify(
+    row: AuditEntry,
+    recomputed: str,
+    expected_prev: str | None,
+    by_hash: dict[str, list[int]],
+    by_parent: dict[str | None, list[int]],
+) -> ChainBreak | None:
+    """Name the anomaly this row carries, or ``None`` if it is sound.
+
+    See :meth:`AuditStore.check` for what each kind means. The order matters: a
+    row that fails its own HMAC is a mutation whatever its links say, and a
+    replayed row shares a parent exactly the way a raced append does, so both
+    are decided before the link is looked at.
+    """
+    if row.entry_hash != recomputed:
+        return ChainBreak(
+            id=row.id, kind="mutated", detail="entry_hash is not the HMAC of this row's fields"
+        )
+    twins = [i for i in by_hash[row.entry_hash] if i != row.id]
+    if twins:
+        return ChainBreak(id=row.id, kind="duplicate", detail=f"entry_hash is shared with {twins}")
+    if row.prev_hash == expected_prev:
+        return None
+    siblings = [i for i in by_parent[row.prev_hash] if i != row.id]
+    parent_exists = row.prev_hash is None or row.prev_hash in by_hash
+    if siblings and parent_exists:
+        return ChainBreak(
+            id=row.id,
+            kind="forked",
+            detail=(
+                f"shares parent {_short(row.prev_hash)} with {siblings}; every HMAC "
+                "involved is valid, so this is a concurrent append (#306)"
+            ),
+        )
+    return ChainBreak(
+        id=row.id,
+        kind="dangling",
+        detail=f"prev_hash {_short(row.prev_hash)} is not the preceding entry",
+    )
+
+
 class AuditStore:
     """Thin repository over the audit_entries table.
 
@@ -214,6 +342,8 @@ class AuditStore:
         hmac_secret: str | None = None,
     ) -> None:
         self._engine = make_engine(url)
+        if self._engine.dialect.name == "sqlite":
+            _serialise_sqlite_appends(self._engine)
         self._session = sessionmaker(self._engine, expire_on_commit=False)
         self._secret = hmac_secret if hmac_secret is not None else get_settings().audit_hmac_secret
         if create:
@@ -230,8 +360,13 @@ class AuditStore:
         status_code: int,
         ok: bool,
     ) -> AuditEntryModel:
-        """Append a new audit entry, chaining its hash to the previous entry."""
+        """Append a new audit entry, chaining its hash to the previous entry.
+
+        The tail read and the insert are one critical section (:func:`_lock_chain`);
+        without that, concurrent appends fork the chain (#306).
+        """
         with self._session.begin() as session:
+            _lock_chain(session)
             prev_hash = session.scalars(
                 select(AuditEntry.entry_hash).order_by(AuditEntry.id.desc()).limit(1)
             ).first()
@@ -251,30 +386,72 @@ class AuditStore:
             session.flush()
             return row.to_model()
 
-    def list(self, limit: int = 100) -> list[AuditEntryModel]:
+    def list(self, limit: int = 100) -> EntryModels:
         """Return the most recent entries, newest first."""
         with self._session() as session:
             rows = session.scalars(select(AuditEntry).order_by(AuditEntry.id.desc()).limit(limit))
             return [r.to_model() for r in rows]
 
-    def verify(self) -> list[int]:
-        """Recompute the chain and return the ids of any tampered/broken entries.
+    def check(self) -> ChainBreaks:
+        """Recompute the chain and classify every anomaly found.
 
-        An empty list means the chain is intact. A non-empty list flags each
-        entry whose stored ``entry_hash`` no longer matches the HMAC of its
-        fields, or whose ``prev_hash`` does not link to the preceding entry
-        (mutation, reordering, or deletion).
+        ``verify`` used to answer only "which ids do not line up", which cannot
+        tell a forged row from a benign write race — and on the live cockpit the
+        standing fork made it answer "tampered" every time, so it stopped
+        carrying information (#306). This is the diagnosis; :meth:`verify` is the
+        alarm built on top of it.
+
+        Kinds, in the order they are decided:
+
+        ``mutated``
+            The row's own ``entry_hash`` is not the HMAC of its own fields. Some
+            field was edited, or the hash was forged. Tamper evidence.
+        ``duplicate``
+            Another row carries the same ``entry_hash``. Entry hashes cover a
+            microsecond timestamp, so a repeat means a row was copied — a replay.
+            Tamper evidence.
+        ``forked``
+            The row's own HMAC is valid, its ``prev_hash`` is not its
+            predecessor's hash, but a sibling row chains to that same parent and
+            the parent exists. That is the signature of two appends racing on the
+            tail read, and nothing else: a forged branch needs the HMAC secret,
+            and with the secret an attacker would not need to fork.
+        ``dangling``
+            The link is wrong and no sibling shares the parent — a deleted or
+            reordered entry. Tamper evidence.
+
+        Rows are walked by id; a break does not cascade into the rows after it.
         """
-        breaks: list[int] = []
-        expected_prev: str | None = None
         with self._session() as session:
-            rows = session.scalars(select(AuditEntry).order_by(AuditEntry.id.asc()))
-            for row in rows:
-                recomputed = compute_entry_hash(self._secret, row._hashed_values(), row.prev_hash)
-                if row.prev_hash != expected_prev or row.entry_hash != recomputed:
-                    breaks.append(row.id)
-                expected_prev = row.entry_hash
-        return breaks
+            rows = list(session.scalars(select(AuditEntry).order_by(AuditEntry.id.asc())))
+
+        by_hash: dict[str, list[int]] = {}
+        by_parent: dict[str | None, list[int]] = {}
+        for row in rows:
+            by_hash.setdefault(row.entry_hash, []).append(row.id)
+            by_parent.setdefault(row.prev_hash, []).append(row.id)
+
+        found: list[ChainBreak] = []
+        expected_prev: str | None = None
+        for row in rows:
+            recomputed = compute_entry_hash(self._secret, row._hashed_values(), row.prev_hash)
+            anomaly = _classify(row, recomputed, expected_prev, by_hash, by_parent)
+            if anomaly is not None:
+                found.append(anomaly)
+            expected_prev = row.entry_hash
+        return found
+
+    def verify(self) -> EntryIds:
+        """Return the ids of entries carrying tamper evidence — empty means none.
+
+        Mutation, replay and deletion (see :meth:`check`). A ``forked`` entry is
+        deliberately NOT here: it is a write race this store used to permit
+        (#306), every field of it still hashes, and leaving it in made the alarm
+        permanently on and therefore unreadable. Forks are still reported — by
+        :meth:`check`, which is where an operator or auditor sees the whole
+        picture. Nothing is hidden and no row is rewritten to make this empty.
+        """
+        return [b.id for b in self.check() if b.kind != "forked"]
 
 
 _audit_store: AuditStore | None = None

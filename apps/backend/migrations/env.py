@@ -41,8 +41,13 @@ if config.config_file_name is not None and not logging.getLogger().handlers:
     # app's handlers instead of destroying them.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# Inject the resolved URL so alembic.ini needn't hardcode credentials.
-config.set_main_option("sqlalchemy.url", resolve_database_url())
+# Inject the resolved URL so alembic.ini needn't hardcode credentials. An
+# explicit `cfactory_url` attribute wins, which is how `db.bootstrap_schema`
+# names the database it was handed instead of the one settings resolve to (#308)
+# -- a standalone `alembic upgrade` passes no attribute and resolves as before.
+config.set_main_option(
+    "sqlalchemy.url", config.attributes.get("cfactory_url") or resolve_database_url()
+)
 
 target_metadata = Base.metadata
 

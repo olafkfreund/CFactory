@@ -120,7 +120,7 @@ describe("TokenTotalsSchema", () => {
       by_work_item: [{ correlation_key: "k", title: null, total_tokens: 3, cost_usd: 0.1 }],
     });
     expect(parsed.total.total_tokens).toBe(3);
-    expect(parsed.by_work_item[0].correlation_key).toBe("k");
+    expect(parsed.by_work_item[0]?.correlation_key).toBe("k");
   });
 });
 
@@ -152,7 +152,7 @@ describe("CostRoutingSchema (RFC-0014 #124)", () => {
     expect(parsed.routing?.routing_class).toBe("standard");
     expect(parsed.routing?.phase_models?.planning).toBe("opus");
     expect(parsed.estimate_vs_actual.variance_usd).toBe(0.3);
-    expect(parsed.actual_by_model.sonnet.cost_usd).toBe(2.4);
+    expect(parsed.actual_by_model.sonnet?.cost_usd).toBe(2.4);
   });
 
   it("tolerates a legacy task: null routing + null metered estimate", () => {

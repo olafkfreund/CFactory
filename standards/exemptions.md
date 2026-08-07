@@ -56,10 +56,18 @@ Factory#513 originally supposed the Python configs were "genuinely not
 applicable" to CFactory; they are, and they were already vendored - at the repo
 root, with the pin in a workflow, which is what #513 actually fixed.
 
-`standards/tsconfig.base.json` is NOT adopted, and that is an open question
-rather than a recorded exemption: measured, extending it produces **87
-TypeScript errors** (34 x `noUncheckedIndexedAccess`, 25 x
-`exactOptionalPropertyTypes`, and the rest). The baseline forbids re-opening
-holes, so partial adoption is not available - it is adopt-and-fix or record an
-exemption with a reason. Tracked separately; do not treat its absence here as a
-decision already taken.
+`standards/tsconfig.base.json` **is adopted in full** as of Factory#546, so it is
+not an exemption either. `apps/frontend-web/tsconfig.json` extends the vendored
+baseline and re-opens nothing; the 88 errors that adoption surfaced (the 87 #546
+measured, plus one the tree gained in between) are fixed rather than suppressed.
+No `any`, no `@ts-expect-error`, no new non-null assertion was used to reach
+zero - counted before and after, all still zero.
+
+Two gates hold it, because the config alone proves nothing:
+
+* `npm run typecheck` (`test.yml`, every PR) fails on a real type error.
+* `tests/test_tsconfig_tightens.py` fails if the child config drops its
+  `extends` or sets any baseline flag back to `false`. That second case is the
+  one worth naming: `tsc` stays GREEN when a hole is re-opened, because a
+  re-opened hole is exactly a thing that makes errors go away. Verified by
+  mutation both ways.

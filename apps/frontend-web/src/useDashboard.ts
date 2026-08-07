@@ -104,8 +104,8 @@ export function useDashboard(): Dashboard {
           ...prev,
         ].slice(0, 4),
       );
-      const latest = failures[failures.length - 1];
-      const wi = incoming.find((w) => w.correlation_key === latest.key);
+      const latest = failures.at(-1);
+      const wi = incoming.find((w) => w.correlation_key === latest?.key);
       const stage = wi
         ? (["tfactory", "aifactory", "pfactory"] as const).find(
             (k) => stageState(wi[k].status) === "failed",

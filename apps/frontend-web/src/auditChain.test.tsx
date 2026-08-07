@@ -34,7 +34,7 @@ describe("ChainReportSchema", () => {
       findings: [{ id: 2178, kind: "some-future-kind", detail: "x" }],
       acknowledged_forks: [],
     });
-    expect(parsed.findings[0].kind).toBe("some-future-kind");
+    expect(parsed.findings[0]?.kind).toBe("some-future-kind");
   });
 });
 

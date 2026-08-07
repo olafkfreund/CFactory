@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { at } from "./testHelpers";
+
 import { AddConnectionCard, CapabilityMatrix } from "./GitConnectionsPanel";
 import { GitCapabilitiesSchema, type GitCapabilities } from "./api";
 
@@ -93,7 +95,7 @@ describe("CapabilityMatrix", () => {
     // the title next to it. The explanation belongs in the hint underneath.
     const html = renderToStaticMarkup(<CapabilityMatrix provider="gitlab" capabilities={MATRIX} />);
     const pills = [...html.matchAll(/<span class="status-pill [^"]*">.*?<\/span>\s*([^<]*)</g)].map(
-      (m) => m[1].trim(),
+      (m) => at(m, 1).trim(),
     );
     expect(pills.length).toBeGreaterThan(0);
     for (const pill of pills) {

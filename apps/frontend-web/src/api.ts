@@ -1543,7 +1543,12 @@ const CardListSchema = z.union([
   z.object({ cards: z.array(CardSchema) }).passthrough(),
 ]);
 
-export type CardFilters = Partial<Record<"status" | "milestone" | "assignee" | "tier", string>>;
+// `| undefined` is the honest type: the filter bar holds unset filters as an
+// explicit `undefined` rather than deleting the key, and `fetchCards` already
+// drops falsy values before building the query string.
+export type CardFilters = Partial<
+  Record<"status" | "milestone" | "assignee" | "tier", string | undefined>
+>;
 
 // Fields a human (or an agent) may change on an existing card. `status` +
 // `priority` are the move/reprioritise pair the planning board drives.

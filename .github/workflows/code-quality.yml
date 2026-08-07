@@ -142,8 +142,9 @@ jobs:
       # scripts/check_pin_freshness.py in the hub reads exactly this name.
       CONTRACTS_PIN_SHA: "48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9"
     # Two drift checks against the pinned hub, each at its own SHA:
-    #   1. Vendored standards/ (ruff.toml, mypy.ini, .editorconfig and
-    #      coding-standards.md) vs the baseline. The standards SHA is read from
+    #   1. Vendored standards/ (ruff.toml, mypy.ini, .editorconfig,
+    #      coding-standards.md and tsconfig.base.json) vs the baseline. The
+    #      standards SHA is read from
     #      standards/.hub-sha rather than hardcoded here (Factory#513/#514): a
     #      SHA that lives only inside this workflow is not a pin, because nothing
     #      outside the workflow can find it. coding-standards.md was not vendored
@@ -205,11 +206,18 @@ jobs:
           # strip() drops lines starting with '#', which in Markdown is every
           # heading, so a stripped compare would be blind to every section title.
           # Hub standards rule 5.1.
-          if ! diff "cfactory/standards/coding-standards.md" "factory-hub-standards/standards/coding-standards.md"; then
-            echo "DRIFT: cfactory/standards/coding-standards.md diverged from the pinned hub baseline."
-            echo "The standard is vendored, not editable here. Change it in the hub, then re-vendor and bump standards/.hub-sha."
-            exit 1
-          fi
+          # tsconfig.base.json is compared BYTE-EXACT for the same reason it is a
+          # plain `cp` from the hub: it carries no provenance header, and JSON has
+          # no comment syntax for strip() to key on. A stripped compare would also
+          # be blind to a re-opened hole, which is the one thing this file exists
+          # to forbid (Factory#546). apps/frontend-web/tsconfig.json `extends` it.
+          for f in coding-standards.md tsconfig.base.json; do
+            if ! diff "cfactory/standards/$f" "factory-hub-standards/standards/$f"; then
+              echo "DRIFT: cfactory/standards/$f diverged from the pinned hub baseline."
+              echo "The standard is vendored, not editable here. Change it in the hub, then re-vendor and bump standards/.hub-sha."
+              exit 1
+            fi
+          done
           echo "No drift: vendored standards match the pinned hub baseline."
       - name: Diff vendored module against the pinned hub source
         run: |

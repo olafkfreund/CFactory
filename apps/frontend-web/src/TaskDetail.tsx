@@ -93,9 +93,13 @@ export default function TaskDetail({
   onActed,
 }: {
   wi: WorkItem;
-  lp?: LiveProgress;
+  // `| undefined` is deliberate under exactOptionalPropertyTypes: callers read
+  // these out of a lookup (`progress[key]`) and genuinely hand over an explicit
+  // undefined, which is a different thing from omitting the prop. Same for every
+  // other optional prop in this tree that a caller forwards rather than omits.
+  lp?: LiveProgress | undefined;
   onClose: () => void;
-  onActed?: () => void;
+  onActed?: (() => void) | undefined;
 }) {
   const [proc, setProc] = useState<ProcessDetail | null>(null);
   const [agent, setAgent] = useState<LiveAgent | null>(null);
@@ -194,14 +198,14 @@ export default function TaskDetail({
         return;
       }
       const first = focusables[0];
-      const last = focusables[focusables.length - 1];
+      const last = focusables.at(-1);
       const active = document.activeElement;
       if (e.shiftKey && (active === first || active === dlg)) {
         e.preventDefault();
-        last.focus();
+        last?.focus();
       } else if (!e.shiftKey && active === last) {
         e.preventDefault();
-        first.focus();
+        first?.focus();
       }
     };
     document.addEventListener("keydown", trap);

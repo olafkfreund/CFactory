@@ -600,7 +600,10 @@ export function CapabilityMatrix({
     <div className="set-caps">
       <span className="set-label">On {PROVIDER_LABEL[provider] ?? provider}</span>
       {reduced.map((cap) => {
-        const level = LEVEL[cap.support[provider]] ?? { tone: "warn", text: cap.support[provider] };
+        // `rows` already filtered on this key being present; "unknown" is the
+        // honest floor rather than a plausible-looking support level (#431).
+        const support = cap.support[provider] ?? "unknown";
+        const level = LEVEL[support] ?? { tone: "warn", text: support };
         return (
           <div className="set-cap" key={cap.key}>
             <div className="set-cap-head">
@@ -657,13 +660,16 @@ export function ConnectionCard({
 }: {
   connection: GitConnection;
   busy: boolean;
-  note?: string;
+  // `| undefined` throughout: callers forward these out of lookups
+  // (`notes[id]`), which under exactOptionalPropertyTypes is an explicit
+  // undefined rather than an omitted prop.
+  note?: string | undefined;
   // Whether the DEPLOYMENT has registered an app for this connection's provider.
   // Defaulted false so a cockpit talking to a backend that predates phase 4 shows
   // the paste box, which is all that backend has.
-  installAvailable?: boolean;
+  installAvailable?: boolean | undefined;
   actions: Actions;
-  capabilities?: GitCapabilities | null;
+  capabilities?: GitCapabilities | null | undefined;
 }) {
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);

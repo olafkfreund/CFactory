@@ -47,16 +47,21 @@ function buildRow(wi: WorkItem, lp: LiveProgress | undefined): Row | null {
   else percent = null;
 
   const cur = slots[activeIdx];
+  // Both indices are in range by construction (activeIdx is clamped by the
+  // forEach above, failedIdx comes from findIndex on the same 3-slot array), but
+  // the compiler cannot see that, and "unknown" beats inventing a plausible
+  // stage name if the invariant ever breaks.
+  const shownIdx = failedIdx >= 0 ? failedIdx : activeIdx;
   const whatsLeft =
     overall === "failed"
-      ? `failed at ${STAGES[failedIdx >= 0 ? failedIdx : activeIdx].label.toLowerCase()} — ${slots[failedIdx >= 0 ? failedIdx : activeIdx].status}`
+      ? `failed at ${(STAGES[shownIdx]?.label ?? "unknown").toLowerCase()} — ${slots[shownIdx]?.status ?? "unknown"}`
       : overall === "done"
         ? "all stages complete"
         : overall === "review"
           ? "awaiting review"
           : overall === "queued"
             ? "queued"
-            : (lp?.subtask || lp?.phase || cur.phase || cur.status || "working…");
+            : (lp?.subtask || lp?.phase || cur?.phase || cur?.status || "working…");
 
   // A stalled task (#105) is still "running" to the stage machine but the
   // watchdog/last-activity says no movement past the deadline — surface it.

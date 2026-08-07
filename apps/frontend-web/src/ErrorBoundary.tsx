@@ -9,13 +9,13 @@ type Props = { children: ReactNode; label?: string };
 type State = { error: Error | null };
 
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  override state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
+  override componentDidCatch(error: Error, info: ErrorInfo): void {
     // Surface it in the console for the operator / log capture; no telemetry dep.
     console.error("[cockpit] render error:", error, info.componentStack);
   }
@@ -24,7 +24,7 @@ export default class ErrorBoundary extends Component<Props, State> {
     this.setState({ error: null });
   };
 
-  render(): ReactNode {
+  override render(): ReactNode {
     const { error } = this.state;
     if (!error) return this.props.children;
     return (

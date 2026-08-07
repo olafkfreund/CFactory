@@ -116,7 +116,7 @@ describe("TraceabilityRowSchema (boundary)", () => {
       traceability: [{ ac_id: "AC-1", tests: ["t::ok"], val_level: "VAL-2", status: "passed" }],
     });
     expect(parsed.artifacts?.spec).toBe("# Spec");
-    expect(parsed.traceability?.[0].ac_id).toBe("AC-1");
+    expect(parsed.traceability?.[0]?.ac_id).toBe("AC-1");
   });
 
   it("tolerates a process payload with neither artifacts nor traceability", () => {

@@ -274,6 +274,28 @@ class Settings(BaseSettings):
     # reads/writes are scoped to the resolved tenant via store_dep (#172).
     multi_tenant: bool = False
 
+    # ── Who the audit trail names (#251 part b) ──────────────────────────────
+    #
+    # Issuer of the OIDC ID token that oauth2-proxy already injects in front of
+    # the cockpit (e.g. https://keycloak.example/realms/factory). SET IT and a
+    # confirmed HITL action is attributed to the PERSON who confirmed it
+    # (``user:<email>``); UNSET (the local/dev default, and any deployment with
+    # no IdP) and the actor stays the honest ``unattributed:key-<digest>``
+    # reference to the API key that acted.
+    #
+    # Not a secret and not a credential: it is the public issuer URL, used to
+    # fetch the JWKS (via OIDC discovery) and to check the token's ``iss``. It
+    # grants nothing — authorization remains the keystore's job — so the worst
+    # a wrong value does is drop back to the unattributed actor.
+    oidc_issuer: str | None = None
+
+    # Expected ``aud`` on that ID token — the OIDC client id the cockpit's
+    # oauth2-proxy is registered as. UNSET MEANS: accept any token the issuer
+    # signed, which is right for a single-realm deployment where the issuer is
+    # the trust boundary. Set it where the realm also serves clients whose users
+    # must not be able to name themselves in this trail.
+    oidc_audience: str | None = None
+
     # Key-encryption key (KEK) for the per-tenant git credential store (RFC-0020
     # §3.4, phase 3). It wraps a per-record data key; the credential itself is
     # sealed with that data key (AES-GCM). Format:

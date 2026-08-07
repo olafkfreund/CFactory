@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { fetchActivity, fetchAudit, type ActivityEntry, type AuditEntry } from "./api";
+import {
+  fetchActivity,
+  fetchAudit,
+  fetchAuditChain,
+  type ActivityEntry,
+  type AuditEntry,
+  type ChainReport,
+} from "./api";
+import { verdictPill } from "./auditChain";
 import { keySlug } from "./correlationKey";
 
 function rel(iso: string): string {
@@ -22,9 +30,59 @@ function absUtc(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : `${d.toISOString().replace("T", " ").slice(0, 19)} UTC`;
 }
 
+/** The one line that replaces `kubectl exec` (#309).
+ *
+ * `chain === null` with no error means the check has not answered yet, and that
+ * renders as "checking", never as green — a surface that reads healthy while it
+ * knows nothing is the failure #306 actually was. */
+export function ChainLine({ chain, err }: { chain: ChainReport | null; err: string | null }) {
+  if (err) {
+    return (
+      <p className="mc-note">
+        <span className="status-pill warn"><span className="dot" /> check unavailable</span>{" "}
+        {err} — the chain state is unknown, not healthy.
+      </p>
+    );
+  }
+  if (!chain) {
+    return (
+      <p className="mc-note">
+        <span className="status-pill queued"><span className="dot" /> checking</span>
+      </p>
+    );
+  }
+  const { cls, label } = verdictPill(chain.verdict);
+  const tamper = chain.findings.filter((f) => f.kind !== "forked");
+  const forks = chain.findings.filter((f) => f.kind === "forked");
+  const known = chain.acknowledged_forks.length;
+  return (
+    <>
+      <p className="mc-note">
+        <span className={`status-pill ${cls}`}><span className="dot" /> {label}</span>{" "}
+        <span title={absUtc(chain.checked_at)}>
+          {chain.rows.toLocaleString()} rows scanned, every HMAC recomputed
+          {" — "}{tamper.length} tamper {tamper.length === 1 ? "finding" : "findings"}
+          {forks.length > 0 && <>, {forks.length} unexplained {forks.length === 1 ? "fork" : "forks"}</>}
+          {known > 0 && <>, {known} known {known === 1 ? "fork" : "forks"} (write race, #306)</>}
+          {" — checked "}{rel(chain.checked_at)}
+        </span>
+      </p>
+      {chain.findings.length > 0 && (
+        <div className="banner banner--error">
+          {chain.findings.map((f) => (
+            <div key={f.id} className="mono">entry {f.id}: {f.kind} — {f.detail}</div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [chain, setChain] = useState<ChainReport | null>(null);
+  const [chainErr, setChainErr] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -34,6 +92,11 @@ export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
     fetchAudit()
       .then((e) => { setEntries(e); setErr(null); })
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
+    // Its own state: a failed chain check must not blank the trail, and a failed
+    // trail read must not leave the verdict looking answered.
+    fetchAuditChain()
+      .then((c) => { setChain(c); setChainErr(null); })
+      .catch((e: unknown) => { setChain(null); setChainErr(e instanceof Error ? e.message : String(e)); });
   }, [reloadSignal]);
 
   return (
@@ -70,6 +133,7 @@ export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
 
       <h2 className="panel-title audit-actions-title">Confirmed actions</h2>
       <p className="mc-note">Human-in-the-loop write actions executed against an upstream.</p>
+      <ChainLine chain={chain} err={chainErr} />
       <div className="table">
         <div className="table-head">
           <span>ACTION</span><span>TARGET</span><span>RESULT</span><span>ACTOR</span><span className="ta-r">TIME</span>

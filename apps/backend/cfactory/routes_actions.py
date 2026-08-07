@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .actions import PreparedAction, execute_action, propose
 from .api_deps import ProposeRequest, action_transport_dep, audit_dep, store_dep
-from .audit import AuditStore
+from .audit import AuditStore, ChainReport
 from .auth import require_scope
 from .config import get_settings
 from .enterprise import identity_dep
@@ -98,6 +98,25 @@ def list_audit(audit: Annotated[AuditStore, Depends(audit_dep)]) -> dict[str, ob
         "count": len(entries),
         "entries": [e.model_dump(mode="json") for e in entries],
     }
+
+
+@router.get("/api/audit/chain")
+def audit_chain(audit: Annotated[AuditStore, Depends(audit_dep)]) -> ChainReport:
+    """The tamper-evidence verdict for the whole trail (#309).
+
+    Deliberately NOT folded into ``GET /api/audit``, which the Audit view polls:
+    this walks every row and recomputes every HMAC, where that one reads the
+    latest hundred. The store serves a cached result for 30s so the endpoint
+    cannot be turned into a full-table scan per request.
+
+    Same READ scope as the rest of ``/api/*`` (enforced by the app's key
+    middleware, including on the direct-to-backend editor host). Nothing here is
+    narrower than what ``GET /api/audit`` already returns to the same caller —
+    that serves whole entries with their full hashes, this serves counts, ids,
+    kinds and hash prefixes. The HMAC secret is never an input to the response
+    and never appears in it.
+    """
+    return audit.report()
 
 
 @router.get("/api/activity")

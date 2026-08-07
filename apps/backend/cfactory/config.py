@@ -370,6 +370,18 @@ class Settings(BaseSettings):
     # real secret in any hosted/shared deployment.
     audit_hmac_secret: str = Field(default=DEV_AUDIT_HMAC_SECRET, repr=False)
 
+    # Audit-entry ids whose chain FORK this deployment has already explained
+    # (#306, #309) — comma separated, e.g. "2178". A fork is a concurrent append,
+    # not a mutation: every HMAC in it is valid, and relinking the row would be
+    # the one edit the chain exists to detect. So the row is left exactly as
+    # written and named here instead, and `GET /api/audit/chain` counts it
+    # without reddening the verdict. Anything NOT named still does.
+    #
+    # Unset (the default) acknowledges nothing, which is what a fresh database
+    # wants. This only ever forgives a `forked` classification — a mutated,
+    # duplicate or dangling entry is reported whatever is listed here.
+    audit_acknowledged_forks: str = ""
+
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""
 

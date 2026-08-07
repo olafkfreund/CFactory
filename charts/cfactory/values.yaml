@@ -114,6 +114,20 @@ config:
   # boundary). Set it where the realm serves clients whose users must not be
   # able to name themselves in this trail.
   oidcAudience: ""
+  # Audit-entry ids whose chain FORK this deployment has already explained
+  # (#306, #309) — comma separated, e.g. "2178". `GET /api/audit/chain` and the
+  # Audit view count a listed fork and show it, but do not let it colour the
+  # verdict; anything NOT listed still does.
+  #
+  # A fork is two appends that raced on the tail read: both rows are genuine and
+  # every HMAC in them recomputes. Relinking one is the exact edit the chain
+  # exists to detect, so the row is left as written and named here instead.
+  #
+  # Empty (the default, and every fresh database) acknowledges nothing, which is
+  # right: there, any fork at all is news. This ONLY forgives a `forked`
+  # classification — a mutated, duplicate or dangling entry is reported whatever
+  # is listed, so an id here can never buy silence for a later edit to that row.
+  auditAcknowledgedForks: ""
   # Board issue reconciliation (#374). The backend polls each connected repository
   # every importPollSeconds and imports what changed, so the board keeps itself
   # level with the repository instead of drifting until somebody clicks. ON by

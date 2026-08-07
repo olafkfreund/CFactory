@@ -74,12 +74,7 @@ env:
   # like a network fault, not like a bad pin. Every other pin in this repo is
   # full-length for the same reason.
   #
-  # PLACEHOLDER UNTIL Factory#617 MERGES. This currently names the head of that
-  # open hub PR, and the hub squash-merges, so this commit dies with the branch.
-  # RE-POINT IT AT THE SQUASH-MERGE COMMIT BEFORE MERGING THIS PR, or the gate
-  # checks out a revision that no longer exists and fails on a checkout error
-  # rather than on a verdict.
-  HUB_PIN_SHA: "3705bce1927fb98657eae95a247ce3f2939bc7fe"
+  HUB_PIN_SHA: "6eb6fb86d76953cf0cde719dae3a928ffbd31773"
 
 jobs:
   conformance:

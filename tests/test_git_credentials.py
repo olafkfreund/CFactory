@@ -273,10 +273,18 @@ def test_a_key_this_process_does_not_hold_says_so(keyring):
 
 
 def test_a_tampered_record_does_not_decrypt(keyring):
+    """FLIP the last byte, never overwrite it with a constant.
+
+    Overwriting with ``b"\\x00"`` left the record untouched on the 1 run in 256
+    where the ciphertext already ended in a zero byte, so the test asserted that
+    an *unmodified* record fails to decrypt and went red (#305). A flip changes
+    the byte whatever it was, so the mutation this test is named for always
+    happens and the assertion is always about a tampered record.
+    """
     sealed = seal(_SECRET, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)
-    altered = credentials.Sealed(
-        sealed.key_version, sealed.wrapped_key, sealed.ciphertext[:-1] + b"\x00"
-    )
+    tampered = sealed.ciphertext[:-1] + bytes([sealed.ciphertext[-1] ^ 0xFF])
+    assert tampered != sealed.ciphertext, "the mutation must not be a no-op"
+    altered = credentials.Sealed(sealed.key_version, sealed.wrapped_key, tampered)
 
     with pytest.raises(CredentialError, match="did not decrypt"):
         unseal(altered, tenant=_TENANT, connection=_CONNECTION, keyring=keyring)

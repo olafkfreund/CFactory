@@ -18,9 +18,24 @@
 # what the byte-exact drift gate over standards/ exists to prevent, and a
 # loosening here would defeat it just as effectively as editing the vendored copy.
 #
-# There are deliberately NO overrides today. This repo's backend passes the
-# shared baseline as-is, so an override section would be speculative
-# configuration, and the empty case is the honest one. Add carve-outs here with a
-# reason and a ratchet plan (coding-standards.md section 4.6), never in
-# standards/.
+# There are deliberately NO rule overrides. This repo's backend passes the shared
+# baseline as-is, so an override section would be speculative configuration, and
+# the empty case is the honest one. Add carve-outs here with a reason and a
+# ratchet plan (coding-standards.md section 4.6), never in standards/.
 extend = "standards/ruff.toml"
+
+# NOT a rule override: a file this repo does not own. Factory#597 brought
+# scripts/ into the lint and format gates (the ratchet was the one file the
+# ratchet never looked at), and scripts/ratchet_helpers.py sits in that directory
+# as a BYTE-EXACT mirror of the Factory hub canonical, kept identical by the
+# verification-core drift gate.
+#
+# It is clean under this config today, so the widening would have gone green
+# without this entry — which is the reason to add it now rather than later. The
+# first hub edit that disagrees with a local rule would offer `ruff format` as
+# the obvious fix, and that silently breaks byte-exactness and the next
+# re-vendor (Factory#403). The hub owns this file's style; fix it there.
+#
+# The ratchet reads standards/ruff.toml directly, not this file, so it carries
+# the same exclusion separately in VENDORED_SKIP.
+extend-exclude = ["scripts/ratchet_helpers.py"]

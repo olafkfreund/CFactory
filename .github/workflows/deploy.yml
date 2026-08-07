@@ -106,6 +106,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: apps/frontend-web
+          # The app's tsconfig extends the vendored fleet baseline, which lives
+          # outside this context at standards/tsconfig.base.json (Factory#546).
+          build-contexts: |
+            standards=standards
           file: apps/frontend-web/Dockerfile
           platforms: linux/amd64
           push: true

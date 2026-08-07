@@ -33,7 +33,7 @@ import httpx
 
 from .audit import AuditStore
 from .card_intake import dispatch_stage, maybe_dispatch, parse_stage, start_sequence
-from .cards import Card, CardCreate, CardStore, CardUpdate
+from .cards import Card, CardCreate, CardList, CardStore, CardUpdate
 from .config import Settings, get_settings
 from .github_sync import maybe_sync, sync_card
 from .issue_import import import_issues
@@ -215,7 +215,12 @@ def list_cards(
     """The backlog: this tenant's cards, highest priority first, optionally
     narrowed to a board column / release / owner / difficulty tier."""
     cards = store.list(status=status, milestone=milestone, assignee=assignee, tier=tier)
-    return {"count": len(cards), "cards": [c.model_dump(mode="json") for c in cards]}
+    # Built through CardList rather than as a literal dict so the envelope has a
+    # model the hub's conformance gate can compare `$defs.card_list` against
+    # (Factory#554). `model_dump(mode="json")` renders byte-identically to the
+    # per-card dump this replaced, so the wire format is unchanged.
+    envelope: dict[str, object] = CardList(count=len(cards), cards=cards).model_dump(mode="json")
+    return envelope
 
 
 def sync_state(store: CardStore, settings: Settings | None = None) -> dict[str, object]:

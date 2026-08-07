@@ -18,6 +18,11 @@ critical section or concurrent appends fork the chain (#306). See
 and :meth:`AuditStore.check` for how a fork left by the pre-fix code is
 classified — as a structural anomaly, distinct from tamper evidence.
 
+:meth:`AuditStore.report` turns that classification into the one verdict an
+operator reads (#309), served at ``GET /api/audit/chain``. Before it existed,
+seeing the chain's state meant ``kubectl exec`` into the pod — which is how the
+#306 false alarm ran for a week with nobody looking.
+
 Mirrors :mod:`cfactory.store`: an ORM row on the shared ``Base`` plus a thin
 repository with an injectable ``url`` (a temp SQLite file for tests, PostgreSQL
 in real deployments).
@@ -28,7 +33,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-from datetime import UTC, datetime
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
@@ -281,6 +287,57 @@ ChainBreaks = list[ChainBreak]
 EntryModels = list[AuditEntryModel]
 EntryIds = list[int]
 
+# Verdicts, worst first. Strings rather than an enum because they cross into the
+# frontend, which must render a value it has never heard of as itself rather
+# than dropping the row (#431).
+TAMPERED = "tampered"
+FORKED = "forked"
+OK = "ok"
+
+# How long a computed :class:`ChainReport` is served before the table is walked
+# again. Short enough that a real finding surfaces on the operator's next look,
+# long enough that the endpoint cannot be turned into a full-table scan per
+# request.
+_REPORT_TTL = timedelta(seconds=30)
+
+
+class ChainReport(BaseModel):
+    """The whole tamper-evidence verdict, in the shape an operator reads (#309).
+
+    ``findings`` is every anomaly that still wants an answer; ``acknowledged_forks``
+    is the ones that already have one. ``rows`` and ``checked_at`` are there so a
+    reader can tell "the chain is sound" from "the check did not really run" —
+    the distinction #306 lacked.
+    """
+
+    verdict: str
+    rows: int
+    checked_at: datetime
+    findings: ChainBreaks
+    acknowledged_forks: EntryIds
+
+
+def parse_acknowledged_forks(raw: str | None) -> frozenset[int]:
+    """Parse ``CFACTORY_AUDIT_ACKNOWLEDGED_FORKS`` — ids, comma separated.
+
+    An acknowledgement is a DECLARATION, not a repair. The live cockpit's chain
+    forked once at entry 2178 under the pre-#310 write race; every HMAC involved
+    is valid and rewriting the row to relink it is precisely the operation the
+    chain exists to detect. So the row stays exactly as written and the deploy
+    states, in reviewable configuration, which specific ids it has already
+    explained. Anything else stays loud.
+
+    Empty (the default) acknowledges nothing, which is the right posture for a
+    fresh database: there, any fork at all is news.
+
+    Ids are matched exactly rather than as a "everything below N" watermark, so
+    pointing a deployment at a different database cannot silently absolve a
+    different row that happens to carry a lower id.
+    """
+    if not raw:
+        return frozenset()
+    return frozenset(int(part) for part in raw.replace(",", " ").split() if part)
+
 
 def _classify(
     row: AuditEntry,
@@ -310,7 +367,7 @@ def _classify(
     if siblings and parent_exists:
         return ChainBreak(
             id=row.id,
-            kind="forked",
+            kind=FORKED,
             detail=(
                 f"shares parent {_short(row.prev_hash)} with {siblings}; every HMAC "
                 "involved is valid, so this is a concurrent append (#306)"
@@ -340,12 +397,19 @@ class AuditStore:
         *,
         create: bool = True,
         hmac_secret: str | None = None,
+        acknowledged_forks: Iterable[int] | None = None,
     ) -> None:
         self._engine = make_engine(url)
         if self._engine.dialect.name == "sqlite":
             _serialise_sqlite_appends(self._engine)
         self._session = sessionmaker(self._engine, expire_on_commit=False)
         self._secret = hmac_secret if hmac_secret is not None else get_settings().audit_hmac_secret
+        self._acknowledged = (
+            frozenset(acknowledged_forks)
+            if acknowledged_forks is not None
+            else parse_acknowledged_forks(get_settings().audit_acknowledged_forks)
+        )
+        self._report: ChainReport | None = None
         if create:
             Base.metadata.create_all(self._engine)
 
@@ -422,6 +486,16 @@ class AuditStore:
 
         Rows are walked by id; a break does not cascade into the rows after it.
         """
+        return self._scan()[1]
+
+    def _scan(self) -> tuple[int, ChainBreaks]:
+        """One pass over the table: how many rows, and every anomaly in them.
+
+        :meth:`check` and :meth:`report` both need the row count and the
+        classification, and the count must be the count of what was actually
+        walked — a second ``COUNT(*)`` could disagree with it after a concurrent
+        append and quietly make the report describe a table it never read.
+        """
         with self._session() as session:
             rows = list(session.scalars(select(AuditEntry).order_by(AuditEntry.id.asc())))
 
@@ -439,7 +513,66 @@ class AuditStore:
             if anomaly is not None:
                 found.append(anomaly)
             expected_prev = row.entry_hash
-        return found
+        return len(rows), found
+
+    def report(self) -> ChainReport:
+        """The operator-facing verdict: what the chain says about itself (#309).
+
+        Three verdicts, and the middle one is the whole point:
+
+        ``tampered``
+            A ``mutated``, ``duplicate`` or ``dangling`` entry — the kinds
+            :meth:`verify` has always reported. Something happened to the record.
+        ``forked``
+            A concurrent-append fork that this deployment has NOT acknowledged.
+            Not tamper evidence, but after #310 it should be impossible, so an
+            unexplained one means the serialisation regressed and wants a human.
+        ``ok``
+            No anomalies, or only forks that configuration already explains.
+
+        That middle rung is what stops this surface repeating #306's own defect.
+        The live chain carries a permanent fork at entry 2178 and always will,
+        because relinking it is indistinguishable from tampering. Colouring that
+        red forever would produce an alarm that is always on — which is exactly
+        how the real alarm went a week unread. So the known fork is declared
+        (:func:`parse_acknowledged_forks`), counted, shown, and does not raise
+        the verdict; anything undeclared still does.
+
+        Acknowledgement only ever forgives a ``forked`` classification. If entry
+        2178 were later mutated it would classify as ``mutated``, which no
+        configuration suppresses — so listing an id here cannot be used to hide a
+        later edit to that same row.
+
+        No HMAC secret, and no field of any entry, appears in the result: it
+        carries counts, ids, kinds, and hash PREFIXES for the human reading it.
+        """
+        cached = self._report
+        # ponytail: recompute at most every 30s. The scan is O(rows) and takes no
+        # lock, and this is a READ-scoped endpoint the Audit view polls — a cache
+        # is the whole rate limit. If the trail outgrows a sub-second scan, move
+        # the computation to a schedule and serve the last result.
+        if cached is not None and _now() - cached.checked_at < _REPORT_TTL:
+            return cached
+        rows, breaks = self._scan()
+        acknowledged = sorted(
+            b.id for b in breaks if b.kind == FORKED and b.id in self._acknowledged
+        )
+        findings = [b for b in breaks if not (b.kind == FORKED and b.id in self._acknowledged)]
+        if any(b.kind != FORKED for b in findings):
+            verdict = TAMPERED
+        elif findings:
+            verdict = FORKED
+        else:
+            verdict = OK
+        report = ChainReport(
+            verdict=verdict,
+            rows=rows,
+            checked_at=_now(),
+            findings=findings,
+            acknowledged_forks=acknowledged,
+        )
+        self._report = report
+        return report
 
     def verify(self) -> EntryIds:
         """Return the ids of entries carrying tamper evidence — empty means none.
@@ -451,7 +584,7 @@ class AuditStore:
         :meth:`check`, which is where an operator or auditor sees the whole
         picture. Nothing is hidden and no row is rewritten to make this empty.
         """
-        return [b.id for b in self.check() if b.kind != "forked"]
+        return [b.id for b in self.check() if b.kind != FORKED]
 
 
 _audit_store: AuditStore | None = None
@@ -462,7 +595,11 @@ def get_audit_store(settings: Settings | None = None) -> AuditStore:
     global _audit_store
     if _audit_store is None:
         settings = settings or get_settings()
-        _audit_store = AuditStore(settings.database_url, hmac_secret=settings.audit_hmac_secret)
+        _audit_store = AuditStore(
+            settings.database_url,
+            hmac_secret=settings.audit_hmac_secret,
+            acknowledged_forks=parse_acknowledged_forks(settings.audit_acknowledged_forks),
+        )
     return _audit_store
 
 

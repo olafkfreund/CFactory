@@ -34,3 +34,8 @@ data:
   {{- with .Values.config.oidcAudience }}
   CFACTORY_OIDC_AUDIENCE: {{ . | quote }}
   {{- end }}
+  # Chain forks this deployment has already explained (#306, #309). A declaration
+  # about specific rows, not a secret and not a repair — see values.yaml.
+  {{- with .Values.config.auditAcknowledgedForks }}
+  CFACTORY_AUDIT_ACKNOWLEDGED_FORKS: {{ . | quote }}
+  {{- end }}

@@ -103,10 +103,16 @@ jobs:
         # own fix. The CONTRACT above stays pinned, so the comparison stays
         # reproducible; only the comparator's logic floats (Factory#405). Same
         # split as verification-core-drift.yml.
+        #
+        # TEMPORARY, FOR THIS PR ONLY: pointed at the pin instead of main, so
+        # this job can be observed running for real before Factory#617 lands.
+        # The comparator does not exist on hub main yet, and until it does this
+        # step fails with "No such file or directory" - honestly, since the
+        # gate genuinely cannot run. RESTORE `ref: main` BEFORE MERGING.
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
-          ref: main
+          ref: ${{ env.HUB_PIN_SHA }}
           path: factory-hub-main
 
       - uses: actions/setup-python@v5

@@ -14,10 +14,28 @@ name: Code quality (ratchet)
 # never reviewed - section 3.6) and a drift gate confirming the vendored configs
 # still match the pinned hub baseline.
 #
-# SCOPE, stated honestly (#267). Both Python jobs cover PACKAGE_DIR only. They do
-# NOT cover apps/backend/run.py, apps/backend/migrations/**, tests/ or scripts/.
+# SCOPE, stated honestly (#267). Both Python jobs cover PACKAGE_DIR and scripts/.
+# They do NOT cover apps/backend/run.py, apps/backend/migrations/** or tests/.
 # This job used to be named "whole repo", which it never was. Widening it is a
 # separate, costed decision, not a rename:
+#
+# scripts/ was added in Factory#597, and it is the one widening that was not a
+# free choice: scripts/ratchet_lint.py IS this gate. The file that counts ruff
+# findings on every changed backend file was the one file no ruff run looked at,
+# so its own 9 findings (8 T201, 1 S603) and any future ones were invisible to
+# the bar it enforces. Cost, measured before the change: 9 findings in the
+# ratchet (fixed in the same PR, not grandfathered) and 0 elsewhere in scripts/,
+# with `ruff format --check` already clean on both files — so unlike the trees
+# listed below this one carried no reformat bill at all.
+#
+# scripts/ratchet_helpers.py is NOT in that scope and must not be: it is the
+# byte-exact hub canonical, owned by the verification-core drift gate. It happens
+# to be clean under this repo's config today, so widening would not have gone red
+# — which is precisely why it needed an explicit exclude rather than luck. The
+# day a hub edit disagrees with a local rule, the green path would be to reformat
+# the vendored copy, and that silently breaks the next re-vendor (Factory#403).
+# Excluded in ruff.toml (the format gate) and in the ratchet's VENDORED_SKIP (the
+# check gate), because those two read different configs.
 #
 #   - apps/backend/runners/github/** (7 files ruff would reformat) is VENDORED
 #     from the Factory hub and byte-identical drift-gated by
@@ -89,16 +107,16 @@ jobs:
           fi
 
       - name: Ratchet (ruff on changed files; blocks net-new violations)
-        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
+        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package scripts
 
       - name: Ratchet (mypy --strict on changed files; blocks net-new type errors)
         # Per-file base-vs-HEAD error counts (issues #112, #116, hub Factory#260):
         # a touched legacy file keeps its existing mypy debt, but a PR may not add
         # NET-NEW strict-mode type errors to any file it changes.
-        run: python scripts/ratchet_lint.py --tool mypy --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
+        run: python scripts/ratchet_lint.py --tool mypy --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package scripts
 
   format-check:
-    name: ruff format --check (apps/backend/cfactory, blocking)
+    name: ruff format --check (apps/backend/cfactory + scripts, blocking)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -108,7 +126,7 @@ jobs:
       - name: Install ruff (pinned)
         run: pip install "ruff==${RUFF_VERSION}"
       - name: Check formatting
-        run: ruff format --check --config ruff.toml "${PACKAGE_DIR}"
+        run: ruff format --check --config ruff.toml "${PACKAGE_DIR}" scripts
 
   drift:
     name: hub drift gates (shared-baseline configs + factory-contracts)

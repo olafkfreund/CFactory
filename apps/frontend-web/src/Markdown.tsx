@@ -15,6 +15,14 @@ const INLINE =
   /(\[[^\]\n]+\]\([^)\s]+\)|\*\*[^*]+\*\*|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_|https?:\/\/[^\s<>()]+)/g;
 const LINK = /^\[([^\]\n]+)\]\(([^)\s]+)\)$/;
 
+// A capture group the pattern makes mandatory. `noUncheckedIndexedAccess` types
+// every index as possibly-undefined, which for a group that always participates
+// in a successful match it is not; read those through here rather than repeat a
+// `?? ""` at every call-site. Empty string is the only sane floor: a group that
+// somehow did not participate contributes no text, and every consumer below is
+// rendering text.
+const grp = (m: RegExpExecArray, i: number): string => m[i] ?? "";
+
 // A URL we are willing to put in an href. Anything else (javascript:, data:, a
 // protocol-relative //host) stays inert text.
 function safeHref(url: string): string | null {
@@ -39,10 +47,10 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   INLINE.lastIndex = 0;
   while ((m = INLINE.exec(text)) !== null) {
     if (m.index > last) nodes.push(text.slice(last, m.index));
-    const tok = m[0];
+    const tok = grp(m, 0);
     const key = `${keyPrefix}-i${i++}`;
     const md = LINK.exec(tok);
-    if (md) nodes.push(link(md[2], md[1], key));
+    if (md) nodes.push(link(grp(md, 2), grp(md, 1), key));
     else if (tok.startsWith("http")) nodes.push(link(tok, tok, key));
     else if (tok.startsWith("**")) nodes.push(<strong key={key}>{tok.slice(2, -2)}</strong>);
     else if (tok.startsWith("`")) nodes.push(<code key={key}>{tok.slice(1, -1)}</code>);
@@ -91,7 +99,7 @@ function parseBlocks(src: string): Block[] {
     }
     if (fenceMark) {
       flushPara();
-      fence = { kind: "code", lines: [], lang: fenceMark[1].trim() };
+      fence = { kind: "code", lines: [], lang: grp(fenceMark, 1).trim() };
       continue;
     }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -101,17 +109,17 @@ function parseBlocks(src: string): Block[] {
       flushPara();
     } else if (heading) {
       flushPara();
-      blocks.push({ kind: "h", level: heading[1].length, text: heading[2] });
+      blocks.push({ kind: "h", level: grp(heading, 1).length, text: grp(heading, 2) });
     } else if (bullet) {
       flushPara();
-      const prev = blocks[blocks.length - 1];
-      if (prev && prev.kind === "ul") prev.items.push(bullet[1]);
-      else blocks.push({ kind: "ul", items: [bullet[1]] });
+      const prev = blocks.at(-1);
+      if (prev && prev.kind === "ul") prev.items.push(grp(bullet, 1));
+      else blocks.push({ kind: "ul", items: [grp(bullet, 1)] });
     } else if (numbered) {
       flushPara();
-      const prev = blocks[blocks.length - 1];
-      if (prev && prev.kind === "ol") prev.items.push(numbered[1]);
-      else blocks.push({ kind: "ol", items: [numbered[1]] });
+      const prev = blocks.at(-1);
+      if (prev && prev.kind === "ol") prev.items.push(grp(numbered, 1));
+      else blocks.push({ kind: "ol", items: [grp(numbered, 1)] });
     } else {
       para.push(line);
     }
@@ -130,12 +138,12 @@ function Item({ text, keyPrefix }: { text: string; keyPrefix: string }) {
       <input
         type="checkbox"
         className="md-task"
-        checked={task[1].toLowerCase() === "x"}
+        checked={grp(task, 1).toLowerCase() === "x"}
         readOnly
         disabled
-        aria-label={task[2]}
+        aria-label={grp(task, 2)}
       />
-      {renderInline(task[2], keyPrefix)}
+      {renderInline(grp(task, 2), keyPrefix)}
     </>
   );
 }

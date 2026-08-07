@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { at } from "./testHelpers";
+
 import GitConnectionsPanel, {
   AddConnectionCard,
   ConnectionCard,
@@ -119,7 +121,7 @@ describe("git connections wire contract", () => {
     const data = GitConnectionsSchema.parse(PAYLOAD);
     expect(data.connections).toHaveLength(3);
     expect(data.connections.map((c) => c.provider)).toEqual(["github", "gitlab", "azure_devops"]);
-    expect(data.connections[0].repositories.map((r) => r.project)).toEqual([
+    expect(data.connections[0]?.repositories.map((r) => r.project)).toEqual([
       "acme/widgets",
       "acme/gadgets",
     ]);
@@ -145,8 +147,8 @@ describe("git connections wire contract", () => {
         },
       ],
     });
-    expect(data.connections[0].credential.configured).toBe(false);
-    expect(data.connections[0].repositories).toEqual([]);
+    expect(data.connections[0]?.credential.configured).toBe(false);
+    expect(data.connections[0]?.repositories).toEqual([]);
   });
 
   it("parses a failed verify without a repository", () => {
@@ -212,7 +214,7 @@ describe("ConnectionCard", () => {
 
   it("says a connection has no credential rather than showing a green state", () => {
     const html = renderToStaticMarkup(
-      <ConnectionCard connection={parsed()[1]} busy={false} actions={NOOP} />,
+      <ConnectionCard connection={at(parsed(), 1)} busy={false} actions={NOOP} />,
     );
     expect(html).toContain("no credential");
     expect(html).toContain("No credential stored for this connection.");
@@ -221,7 +223,7 @@ describe("ConnectionCard", () => {
 
   it("keeps a long verify failure in the card body, not in the status pill", () => {
     const html = renderToStaticMarkup(
-      <ConnectionCard connection={parsed()[2]} busy={false} actions={NOOP} />,
+      <ConnectionCard connection={at(parsed(), 2)} busy={false} actions={NOOP} />,
     );
     // The pill says the short state word; the sentence is a body note (#211).
     expect(html).toContain('class="status-pill warn"><span class="dot"></span> no credential');
@@ -232,11 +234,11 @@ describe("ConnectionCard", () => {
 
   it("names the AIFactory project a repository builds in, and says when there is none", () => {
     const html = renderToStaticMarkup(
-      <ConnectionCard connection={parsed()[0]} busy={false} actions={NOOP} />,
+      <ConnectionCard connection={at(parsed(), 0)} busy={false} actions={NOOP} />,
     );
     expect(html).toContain("builds in AIFactory project 5d78d4b9-35f9-4445-92c1-78f3ff60a494");
     const noneHtml = renderToStaticMarkup(
-      <ConnectionCard connection={parsed()[1]} busy={false} actions={NOOP} />,
+      <ConnectionCard connection={at(parsed(), 1)} busy={false} actions={NOOP} />,
     );
     expect(noneHtml).toContain("no AIFactory project — cards here cannot be dispatched");
   });
@@ -250,15 +252,18 @@ describe("ConnectionCard", () => {
   });
 
   it("never renders a credential, whatever a backend puts in the payload", () => {
-    const leaky = GitConnectionsSchema.parse({
-      connections: [
-        {
-          ...PAYLOAD.connections[0],
-          token: "ghp_LEAKED",
-          credential: { configured: true, source: "tenant", token: "ghp_LEAKED" },
-        },
-      ],
-    }).connections[0];
+    const leaky = at(
+      GitConnectionsSchema.parse({
+        connections: [
+          {
+            ...at(PAYLOAD.connections, 0),
+            token: "ghp_LEAKED",
+            credential: { configured: true, source: "tenant", token: "ghp_LEAKED" },
+          },
+        ],
+      }).connections,
+      0,
+    );
     const html = renderToStaticMarkup(
       <ConnectionCard connection={leaky} busy={false} actions={NOOP} />,
     );
@@ -271,9 +276,12 @@ describe("ConnectionCard", () => {
 // the flow itself lives on the backend, where it is tested end to end.
 describe("the install block", () => {
   function withInstall(overrides: Record<string, unknown> | null, provider = "github") {
-    return GitConnectionsSchema.parse({
-      connections: [{ ...PAYLOAD.connections[0], provider, install: overrides }],
-    }).connections[0];
+    return at(
+      GitConnectionsSchema.parse({
+        connections: [{ ...at(PAYLOAD.connections, 0), provider, install: overrides }],
+      }).connections,
+      0,
+    );
   }
 
   it("offers to connect an app when the deployment has registered one", () => {
@@ -348,20 +356,23 @@ describe("the install block", () => {
   });
 
   it("carries no credential field, whatever a backend puts in the install block", () => {
-    const leaky = GitConnectionsSchema.parse({
-      connections: [
-        {
-          ...PAYLOAD.connections[0],
-          install: {
-            provider: "github",
-            status: "installed",
-            installation_id: "4242",
-            token: "ghs_LEAKED",
-            private_key: "-----BEGIN RSA PRIVATE KEY-----",
+    const leaky = at(
+      GitConnectionsSchema.parse({
+        connections: [
+          {
+            ...at(PAYLOAD.connections, 0),
+            install: {
+              provider: "github",
+              status: "installed",
+              installation_id: "4242",
+              token: "ghs_LEAKED",
+              private_key: "-----BEGIN RSA PRIVATE KEY-----",
+            },
           },
-        },
-      ],
-    }).connections[0];
+        ],
+      }).connections,
+      0,
+    );
     const html = renderToStaticMarkup(
       <ConnectionCard connection={leaky} busy={false} installAvailable actions={NOOP} />,
     );

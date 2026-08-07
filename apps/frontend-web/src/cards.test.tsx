@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { at } from "./testHelpers";
+
 import {
   CardCommentsSchema,
   CardImportSchema,
@@ -109,14 +111,14 @@ describe("fetchCards", () => {
   it("passes only the set filters as query params", async () => {
     const spy = stubFetch(() => json({ cards: [CARD] }));
     await fetchCards({ status: "ready", assignee: undefined });
-    expect(spy.mock.calls[0][0]).toBe("/api/cards?status=ready");
+    expect(spy.mock.calls[0]?.[0]).toBe("/api/cards?status=ready");
   });
 
   it("accepts both the bare-array and {cards} list envelopes", async () => {
     stubFetch(() => json([CARD]));
     expect(await fetchCards()).toHaveLength(1);
     stubFetch(() => json({ cards: [CARD], count: 1 }));
-    expect((await fetchCards())[0].card_key).toBe("FCT-42");
+    expect((await fetchCards())[0]?.card_key).toBe("FCT-42");
   });
 });
 
@@ -124,8 +126,8 @@ describe("patchCard", () => {
   it("PATCHes the card and validates the response", async () => {
     const spy = stubFetch(() => json({ ...CARD, status: "in_progress" }));
     const saved = await patchCard("FCT-42", { status: "in_progress" });
-    expect(spy.mock.calls[0][1]?.method).toBe("PATCH");
-    expect(spy.mock.calls[0][0]).toBe("/api/cards/FCT-42");
+    expect(spy.mock.calls[0]?.[1]?.method).toBe("PATCH");
+    expect(spy.mock.calls[0]?.[0]).toBe("/api/cards/FCT-42");
     expect(saved.status).toBe("in_progress");
   });
 
@@ -154,7 +156,7 @@ describe("pure helpers", () => {
   it("replaces only the matching card", () => {
     const other = { ...CARD, card_key: "FCT-9" };
     const next = replaceCard([CARD, other], { ...CARD, priority: 9 });
-    expect(next[0].priority).toBe(9);
+    expect(next[0]?.priority).toBe(9);
     expect(next[1]).toBe(other);
   });
 });
@@ -170,8 +172,8 @@ describe("optimisticPatch (move / reprioritise)", () => {
       (n) => states.push(n),
       () => Promise.resolve(saved),
     );
-    expect(states[0][0].status).toBe("done"); // optimistic, before the response
-    expect(states[1][0].updated_at).toBe("later"); // server copy wins
+    expect(states[0]?.[0]?.status).toBe("done"); // optimistic, before the response
+    expect(states[1]?.[0]?.updated_at).toBe("later"); // server copy wins
   });
 
   it("rolls back to the previous list when the PATCH fails", async () => {
@@ -185,8 +187,8 @@ describe("optimisticPatch (move / reprioritise)", () => {
         () => Promise.reject(new Error("HTTP 500")),
       ),
     ).rejects.toThrow("HTTP 500");
-    expect(states[0][0].status).toBe("done"); // shown optimistically…
-    expect(states[states.length - 1][0].status).toBe("ready"); // …then reverted
+    expect(states[0]?.[0]?.status).toBe("done"); // shown optimistically…
+    expect(states.at(-1)?.[0]?.status).toBe("ready"); // …then reverted
   });
 
   it("refuses to patch a card that is not in the list", async () => {
@@ -252,8 +254,8 @@ describe("runCardStage", () => {
   it("POSTs to the named stage action and validates the response", async () => {
     const spy = stubFetch(() => json({ stage: { dispatched: true, stage: "code" }, card: CARD }));
     const result = await runCardStage("FCT-42", "code");
-    expect(spy.mock.calls[0][0]).toBe("/api/cards/FCT-42/actions/code");
-    expect(spy.mock.calls[0][1]?.method).toBe("POST");
+    expect(spy.mock.calls[0]?.[0]).toBe("/api/cards/FCT-42/actions/code");
+    expect(spy.mock.calls[0]?.[1]?.method).toBe("POST");
     expect(result.stage.dispatched).toBe(true);
   });
 
@@ -262,7 +264,7 @@ describe("runCardStage", () => {
       json({ stage: { sequence: ["plan", "code", "test"] }, card: CARD }),
     );
     const result = await runCardStage("FCT-42", "run");
-    expect(spy.mock.calls[0][0]).toBe("/api/cards/FCT-42/actions/run");
+    expect(spy.mock.calls[0]?.[0]).toBe("/api/cards/FCT-42/actions/run");
     expect(result.stage.sequence).toEqual(["plan", "code", "test"]);
   });
 
@@ -647,14 +649,14 @@ describe("sync freshness (#374)", () => {
 
   it("parses the sync-state payload at the HTTP boundary", () => {
     const parsed = CardSyncStateSchema.parse(STATE);
-    expect(parsed.repositories[0].stale).toBe(false);
+    expect(parsed.repositories[0]?.stale).toBe(false);
     expect(parsed.poll.live).toBe(false);
   });
 
   it("fetches it from the literal path, not as a card key", async () => {
     const spy = stubFetch(() => json(STATE));
     await fetchCardSyncState();
-    expect(spy.mock.calls[0][0]).toBe("/api/cards/sync-state");
+    expect(spy.mock.calls[0]?.[0]).toBe("/api/cards/sync-state");
   });
 
   it("renders an age a human can read, not an ISO timestamp", () => {
@@ -676,7 +678,7 @@ describe("sync freshness (#374)", () => {
   it("says STALE when every repository has gone unread — the invisible failure", () => {
     const stale = {
       ...STATE,
-      repositories: [{ ...STATE.repositories[0], last_polled_at: null, stale: true }],
+      repositories: [{ ...at(STATE.repositories, 0), last_polled_at: null, stale: true }],
     };
     const summary = syncSummary(stale, NOW);
     expect(summary).toContain("Synced never");
@@ -687,8 +689,8 @@ describe("sync freshness (#374)", () => {
     const mixed = {
       ...STATE,
       repositories: [
-        STATE.repositories[0],
-        { ...STATE.repositories[0], repository_id: 2, project: "acme/gadgets", stale: true },
+        at(STATE.repositories, 0),
+        { ...at(STATE.repositories, 0), repository_id: 2, project: "acme/gadgets", stale: true },
       ],
     };
     expect(syncSummary(mixed, NOW)).toContain("1 of 2 repositories are stale");
@@ -770,7 +772,7 @@ describe("card comments", () => {
 
   it("parses the pinned comments contract", () => {
     const parsed = CardCommentsSchema.parse(COMMENTS);
-    expect(parsed.comments[0].comment_id).toBe("101");
+    expect(parsed.comments[0]?.comment_id).toBe("101");
     expect(parsed.synced_at).toBe("2026-07-26T12:00:00Z");
   });
 
@@ -791,7 +793,7 @@ describe("card comments", () => {
   it("fetches one card's thread from its own endpoint", async () => {
     const spy = stubFetch(() => json(COMMENTS));
     const thread = await fetchCardComments("FCT-42");
-    expect(spy.mock.calls[0][0]).toBe("/api/cards/FCT-42/comments");
+    expect(spy.mock.calls[0]?.[0]).toBe("/api/cards/FCT-42/comments");
     expect(thread.comments).toHaveLength(2);
   });
 
@@ -808,7 +810,7 @@ describe("card comments", () => {
     // as the visible characters it is, and `safeHref` keeps non-http(s) URLs inert.
     const hostile = [
       {
-        ...COMMENTS.comments[0],
+        ...at(COMMENTS.comments, 0),
         body: "<script>alert(1)</script> and [click](javascript:alert(2))",
       },
     ];

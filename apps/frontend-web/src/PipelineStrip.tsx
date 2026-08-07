@@ -111,7 +111,7 @@ export default function PipelineStrip({
           <Fragment key={n.key}>
             {i > 0 && (
               <span
-                className={`pstrip-link pstrip-link--${NODES[i - 1].cls} ${counts[n.key] > 0 ? "flowing" : ""}`}
+                className={`pstrip-link pstrip-link--${NODES[i - 1]?.cls ?? ""} ${counts[n.key] > 0 ? "flowing" : ""}`}
                 aria-hidden="true"
               />
             )}

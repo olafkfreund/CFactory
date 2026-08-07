@@ -141,6 +141,7 @@ function billingTag(b?: BillingSummary): { label: string; tone: string } | null 
   if (!b || b.modes.length === 0) return null;
   if (b.modes.length > 1) return { label: "mixed", tone: "var(--violet)" };
   const m = b.modes[0];
+  if (m === undefined) return null; // length is exactly 1 here, but prove it
   return { label: MODE_LABEL[m] ?? m, tone: MODE_TONE[m] ?? "var(--faint)" };
 }
 
@@ -262,7 +263,7 @@ function Stat({ label, value, accent }: { label: string; value: number; accent: 
   );
 }
 
-function StatText({ label, text, sub, accent }: { label: string; text: string; sub?: string; accent: string }) {
+function StatText({ label, text, sub, accent }: { label: string; text: string; sub?: string | undefined; accent: string }) {
   return (
     <div className="mc-stat">
       <div className="mc-stat-v" style={{ color: accent }}>{text}</div>

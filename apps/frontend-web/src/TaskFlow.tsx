@@ -165,16 +165,16 @@ export function StageFlow({
   fallback,
   stageDone,
 }: {
-  graphs?: Partial<Record<"plan" | "code" | "test", ProcessGraph>>;
-  fallback?: ProcessGraph | null;
+  graphs?: Partial<Record<"plan" | "code" | "test", ProcessGraph>> | undefined;
+  fallback?: ProcessGraph | null | undefined;
   // Per-stage "the stage itself is complete" flag, keyed by stage. Drives the
   // green frame + "stage complete" cue on the DAG — a signal that lives at the
   // stage level (the work-item status), distinct from the per-node states (which
   // stay honest: a planned-but-unverified AC node is not painted done).
-  stageDone?: Partial<Record<"plan" | "code" | "test", boolean>>;
+  stageDone?: Partial<Record<"plan" | "code" | "test", boolean>> | undefined;
 }) {
   const available = SWITCH_ORDER.filter((s) => graphs?.[s]);
-  const furthest = available.length ? available[available.length - 1] : null;
+  const furthest = available.at(-1) ?? null;
   const [sel, setSel] = useState<"plan" | "code" | "test" | null>(null);
 
   // Default to the furthest stage; keep the selection valid as data streams in.
@@ -216,7 +216,7 @@ export default function TaskFlow({
   stageDone = false,
 }: {
   graph: ProcessGraph | null | undefined;
-  stageDone?: boolean;
+  stageDone?: boolean | undefined;
 }) {
   const reduced = useReducedMotion() ?? false;
 

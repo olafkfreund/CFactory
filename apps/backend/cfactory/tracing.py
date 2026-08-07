@@ -45,6 +45,30 @@ exporter's own logger is rate-limited to one line per
 ``OTEL_EXPORT_ERROR_INTERVAL`` seconds (default 300) plus a
 suppressed-count summary on the next line through.
 
+## The app that is instrumented must be the app that serves
+
+This service is the one of the four that was NOT silent, and it was saved
+by its entry point rather than by this module. PFactory and TFactory ship
+a byte-identical copy of the code below and both exported ZERO spans for
+weeks while logging "startup export accepted" and "instrumentation
+installed: FastAPI" on every boot. Their entry point is
+``python -m server.main``, which imports the module twice — once as
+``__main__``, once as ``server.main`` when uvicorn resolves the
+"server.main:app" target — so ``create_app()`` runs twice and uvicorn
+serves the SECOND app. A single ``_initialized`` flag covering both the
+process-wide half (provider, exporter, httpx) and the per-app half
+(FastAPI middleware) made the second call a no-op, so the only app that
+ever saw a request was the only app without instrumentation.
+
+CFactory survives that because it runs ``python -m uvicorn
+cfactory.app:app``, which imports the module once. That is luck, not
+design: one entry-point change away from the same silent failure. The
+flag now covers the process-wide half only, matching AIFactory, which
+keeps the two halves in separate functions (``init_tracing`` and
+``instrument_fastapi_app``) and is the reason it never had this bug.
+
+Refs Factory#516.
+
 ## What is instrumented
 
 FastAPI (server spans, and W3C ``traceparent`` EXTRACTION from inbound
@@ -76,8 +100,8 @@ PROTOCOL = "http/protobuf"
 # How long a rejected exporter stays quiet between log lines, seconds.
 _EXPORT_ERROR_INTERVAL = float(os.environ.get("OTEL_EXPORT_ERROR_INTERVAL", "300"))
 
-# Set on the first init_tracing() call; later calls no-op so tests can
-# re-enter cheaply.
+# Set once the PROCESS-WIDE half is done (provider, exporter, httpx). The
+# per-app half is NOT covered by this flag — see init_tracing().
 _initialized = False
 _tracer_provider: Any = None
 
@@ -94,45 +118,52 @@ def init_tracing(app: Any = None) -> None:
     - ``OTEL_EXPORTER_OTLP_HEADERS`` — read by the exporter package itself
     - ``OTEL_SERVICE_NAME`` — defaults to ``DEFAULT_SERVICE_NAME``
 
-    Pass ``app`` to instrument that FastAPI application.
+    Pass ``app`` to instrument that FastAPI application. EVERY call
+    instruments the app it is handed, including calls after the first —
+    see the module docstring.
     """
     # PLW0603: the provider is a process-wide singleton by construction —
     # OTel's own trace.set_tracer_provider() is global too.
     global _initialized, _tracer_provider  # noqa: PLW0603
-    if _initialized:
-        return
 
     try:
-        from opentelemetry import trace  # noqa: PLC0415
-        from opentelemetry.sdk.resources import Resource  # noqa: PLC0415
-        from opentelemetry.sdk.trace import TracerProvider  # noqa: PLC0415
+        if not _initialized:
+            from opentelemetry import trace  # noqa: PLC0415
+            from opentelemetry.sdk.resources import Resource  # noqa: PLC0415
+            from opentelemetry.sdk.trace import TracerProvider  # noqa: PLC0415
 
-        service_name = os.environ.get("OTEL_SERVICE_NAME", DEFAULT_SERVICE_NAME)
+            service_name = os.environ.get("OTEL_SERVICE_NAME", DEFAULT_SERVICE_NAME)
 
-        # A test fixture may already have installed a provider with an
-        # in-memory exporter. Respect it rather than clobbering it.
-        current = trace.get_tracer_provider()
-        if isinstance(current, TracerProvider):
-            _tracer_provider = current
-        else:
-            _tracer_provider = TracerProvider(
-                resource=Resource.create({"service.name": service_name})
-            )
-            trace.set_tracer_provider(_tracer_provider)
+            # A test fixture may already have installed a provider with an
+            # in-memory exporter. Respect it rather than clobbering it.
+            current = trace.get_tracer_provider()
+            if isinstance(current, TracerProvider):
+                _tracer_provider = current
+            else:
+                _tracer_provider = TracerProvider(
+                    resource=Resource.create({"service.name": service_name})
+                )
+                trace.set_tracer_provider(_tracer_provider)
 
-        endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
-        if endpoint:
-            _install_exporter(endpoint, service_name)
-        else:
-            logger.info(
-                "OTel tracing initialised without an exporter "
-                "(OTEL_EXPORTER_OTLP_ENDPOINT unset) — spans build in memory "
-                "and drop. service=%s",
-                service_name,
-            )
+            endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+            if endpoint:
+                _install_exporter(endpoint, service_name)
+            else:
+                logger.info(
+                    "OTel tracing initialised without an exporter "
+                    "(OTEL_EXPORTER_OTLP_ENDPOINT unset) — spans build in memory "
+                    "and drop. service=%s",
+                    service_name,
+                )
 
-        _instrument(app)
-        _initialized = True
+            # Patches the httpx library itself, so it is process-wide and
+            # belongs with the provider rather than with an app.
+            _instrument_one("httpx", _instrument_httpx)
+            _initialized = True
+
+        # Per-APP, on EVERY call — deliberately outside the guard above.
+        if app is not None:
+            _instrument_one("FastAPI", lambda: _instrument_fastapi(app))
     # BLE001 x5 in this module: tracing must never be able to stop the
     # service starting, so every failure path here is deliberately broad.
     except Exception:  # noqa: BLE001
@@ -289,17 +320,6 @@ def rate_limit_exporter_log(exporter: Any) -> None:
         )
     except Exception:  # noqa: BLE001
         logger.debug("could not rate-limit the OTLP exporter log", exc_info=True)
-
-
-def _instrument(app: Any) -> None:
-    """FastAPI + httpx instrumentation, each independently best-effort.
-
-    FastAPI extracts an inbound W3C ``traceparent``; httpx injects one on
-    the way out. Together they are what makes one trace span a handoff.
-    """
-    if app is not None:
-        _instrument_one("FastAPI", lambda: _instrument_fastapi(app))
-    _instrument_one("httpx", _instrument_httpx)
 
 
 def _instrument_one(name: str, fn: Any) -> None:

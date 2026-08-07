@@ -46,7 +46,7 @@ from pathlib import Path
 # Canonical shared ratchet rules, vendored byte-exact from the Factory hub
 # and byte-exact drift-gated (Factory#403). scripts/ is sys.path[0] when this
 # runs as a script, so the sibling import resolves without packaging.
-from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, ruff_stdin_argv
+from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, require_tool_ran, ruff_stdin_argv
 
 # The VENDORED baseline, not the repo-wide config at the root (Factory#513).
 # The ratchet holds new and touched code to the full shared bar; the root
@@ -121,14 +121,12 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
     real tree exempts it from.
     """
     res = _run(ruff_stdin_argv(RUFF_CONFIG, filename), stdin=source)
-    # ruff exits 0 clean, 1 with violations, and >=2 on its OWN failure: binary
-    # missing, config parse error, bad argv. Those write nothing to stdout, so
-    # without this the empty-stdout branch below reads "ruff is broken" as "no
-    # violations" and the ratchet passes green on an unrunnable linter. A clean
-    # run prints "[]", never nothing (PFactory#455, TFactory#951).
-    if res.returncode not in (0, 1):
-        sys.stderr.write(res.stdout + res.stderr)
-        sys.exit(2)
+    # The shared "did the tool actually run" rule (Factory#590). This used to be
+    # four lines restated here, and in the mypy counter below, and in both halves
+    # of the four sibling ratchets -- nine copies of one rule, which is why fixing
+    # it once cost five PRs (PFactory#455, TFactory#951). It now lives in the
+    # drift-gated canonical, so the next correction reaches every consumer.
+    require_tool_ran("ruff", res)
     if not res.stdout.strip():
         return Counter()
     try:
@@ -173,16 +171,10 @@ def mypy_count(source: str, filename: str) -> int:
     with materialized(source, filename) as tmp:
         res = _run(mypy_command(tmp, filename), env={**os.environ, "MYPYPATH": "apps/backend"})
         count = sum(1 for line in res.stdout.splitlines() if _MYPY_ERROR_RE.match(line))
-        # Same defect as the ruff branch above, in the other half of the gate.
-        # mypy exits 0 clean, 1 with errors, and 2 both for its OWN failure
-        # (missing config, bad argv) and for a blocking error. A blocking error
-        # still emits an error LINE, so it lands in `count`; mypy failing to run
-        # emits none. Zero errors out of a failed run is "did not run", not
-        # "clean", and returning it makes the base-vs-head comparison pass green
-        # having measured nothing (PFactory#455, TFactory#951).
-        if res.returncode not in (0, 1) and count == 0:
-            sys.stderr.write(res.stdout + res.stderr)
-            sys.exit(2)
+        # Same shared rule as the ruff counter, with `measured` passed: mypy's exit 2
+        # also covers a BLOCKING error, which still names a file and so belongs in the
+        # count rather than aborting the run.
+        require_tool_ran("mypy", res, measured=count)
         return count
 
 

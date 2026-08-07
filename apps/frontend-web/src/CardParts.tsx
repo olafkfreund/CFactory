@@ -320,11 +320,14 @@ export function CardBody({
 }: {
   card: Card;
   busy: boolean;
-  issueHref?: string | null;
+  // `| undefined` throughout: callers forward these from optional state and
+  // hand over an explicit undefined, which exactOptionalPropertyTypes treats as
+  // distinct from omitting the prop.
+  issueHref?: string | null | undefined;
   onMutate: (patch: CardPatch) => void;
-  onStage?: (action: StageAction) => void;
-  onEdit?: () => void;
-  onDelete?: () => void;
+  onStage?: ((action: StageAction) => void) | undefined;
+  onEdit?: (() => void) | undefined;
+  onDelete?: (() => void) | undefined;
 }) {
   return (
     <article className={`card-pl ${busy ? "card-pl--busy" : ""}`}>

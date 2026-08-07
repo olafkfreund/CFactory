@@ -26,3 +26,16 @@ data:
   {{- with .Values.config.publicApiUrl }}
   CFACTORY_PUBLIC_API_URL: {{ . | quote }}
   {{- end }}
+  # Audit actor = the named human (#251). Both unset → the actor stays the
+  # unattributed key reference; neither is a secret.
+  {{- with .Values.config.oidcIssuer }}
+  CFACTORY_OIDC_ISSUER: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.oidcAudience }}
+  CFACTORY_OIDC_AUDIENCE: {{ . | quote }}
+  {{- end }}
+  # Chain forks this deployment has already explained (#306, #309). A declaration
+  # about specific rows, not a secret and not a repair — see values.yaml.
+  {{- with .Values.config.auditAcknowledgedForks }}
+  CFACTORY_AUDIT_ACKNOWLEDGED_FORKS: {{ . | quote }}
+  {{- end }}

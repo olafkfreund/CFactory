@@ -411,6 +411,26 @@ class CardUpdate(BaseModel):
     repository_id: int | None = None
 
 
+class CardList(BaseModel):
+    """``GET /api/cards``: the backlog envelope.
+
+    A model rather than the bare dict this used to build, because the envelope
+    is the one part of the card contract nothing could check. The hub schema
+    said ``total`` while this endpoint has always returned ``count``, and that
+    disagreement survived months and a hand reconciliation (Factory#371).
+    ``scripts/check_planning_card_conformance.py`` compares ``$defs.card_list``
+    against this class on every PR, and it can only do that if there is a class
+    (Factory#554).
+
+    An envelope and not a bare array so pagination and echoed filters can be
+    added additively; ``count`` is the length of ``cards`` in THIS response, not
+    a total across pages, which is why it is not called ``total``.
+    """
+
+    count: int
+    cards: list[Card]
+
+
 class ImportStateRow(Base):
     """The poll watermark for one (tenant, project) — RFC-0020 §3.6.
 

@@ -745,6 +745,58 @@ paths:
                   count: { type: integer }
                   entries: { type: array, items: { type: object } }
 
+  /api/audit/chain:
+    get:
+      tags: [Audit]
+      summary: Tamper-evidence verdict for the whole audit chain
+      description: >-
+        Walks every audit entry and recomputes every HMAC (#309). Separate from
+        `GET /api/audit`, which the Audit view polls and which reads only the
+        latest hundred. The result is cached for 30s, so this cannot be turned
+        into a full-table scan per request. Same `read` scope as the rest of
+        `/api/*`; carries counts, ids, kinds and hash prefixes — never a field of
+        an entry, and never the HMAC secret.
+      responses:
+        "200":
+          description: The verdict, with everything it was derived from.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verdict:
+                    type: string
+                    description: >-
+                      `ok` (no anomalies, or only acknowledged forks), `forked`
+                      (an unexplained concurrent append — not tamper evidence,
+                      but after the #310 fix it should be impossible), or
+                      `tampered` (an entry was mutated, replayed or removed).
+                      Read an unrecognised value as un-green, not as health.
+                  rows: { type: integer, description: Entries walked. }
+                  checked_at: { type: string, format: date-time }
+                  findings:
+                    type: array
+                    description: Anomalies still wanting an answer.
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        kind:
+                          type: string
+                          description: >-
+                            `mutated`, `duplicate`, `dangling` (all tamper
+                            evidence) or `forked` (a concurrent append, #306).
+                        detail: { type: string }
+                  acknowledged_forks:
+                    type: array
+                    description: >-
+                      Fork ids this deployment has declared via
+                      `CFACTORY_AUDIT_ACKNOWLEDGED_FORKS` — counted and shown,
+                      but not raising the verdict. Nothing is rewritten to make
+                      the chain agree: relinking a forked row is precisely the
+                      edit the chain exists to detect.
+                    items: { type: integer }
+
 components:
   securitySchemes:
     bearerApiKey:

@@ -1425,16 +1425,23 @@ def _tool_context(request: Request) -> ToolContext:
     """Resolve the caller and the stores a board tool operates on.
 
     Reuses the REST seams as plain functions rather than re-deriving any of
-    them: ``identity_dep`` for the audit actor (the presented key, else
-    "local"), ``cards_store_dep`` for the tenant-scoped card store — so an MCP
-    write lands in the same partition an ``X-Tenant-Id``-bearing REST write
-    would — and ``action_transport_dep`` for the intake dispatch's transport,
-    the same seam ``/api/cards`` and ``/api/actions/execute`` go out over.
+    them: ``identity_dep`` for the audit actor (a verified ID token's subject,
+    else a reference to the presented key, else "local"), ``cards_store_dep``
+    for the tenant-scoped card store — so an MCP write lands in the same
+    partition an ``X-Tenant-Id``-bearing REST write would — and
+    ``action_transport_dep`` for the intake dispatch's transport, the same seam
+    ``/api/cards`` and ``/api/actions/execute`` go out over.
+
+    BY KEYWORD, deliberately. This is the one caller that invokes the seam as a
+    plain function instead of via ``Depends``, so a parameter added in the
+    middle of its signature silently rebinds the arguments here — which is
+    exactly what happened when the ID-token header was threaded through (#251).
     """
     actor = identity_dep(
-        request.headers.get("authorization"),
-        request.headers.get("x-api-key"),
-        get_keystore(),
+        authorization=request.headers.get("authorization"),
+        x_api_key=request.headers.get("x-api-key"),
+        x_forwarded_id_token=request.headers.get("x-forwarded-id-token"),
+        keystore=get_keystore(),
     )
     return ToolContext(
         cards=cards_store_dep(request.headers.get("X-Tenant-Id")),

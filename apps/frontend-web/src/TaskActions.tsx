@@ -33,7 +33,7 @@ export default function TaskActions({
   onReasonDirty,
 }: {
   wi: WorkItem;
-  onActed?: () => void;
+  onActed?: (() => void) | undefined;
   /** Fires with true while the reject-reason textarea has text — the parent
    *  modal uses it to refuse destructive overlay-click dismissal. */
   onReasonDirty?: (dirty: boolean) => void;

@@ -14,6 +14,12 @@ psycopg[binary]>=3.2
 # encrypt a credential with authentication — and an unauthenticated mode, or a
 # hand-rolled construction, is precisely what must not be here.
 cryptography>=44.0
+# Verifies the OIDC ID token that names the human in the audit trail (#251).
+# [crypto] pulls the RSA/EC backend `jwt.decode` needs for RS256/ES256 — without
+# it every verification fails closed and the actor silently stays unattributed.
+# Already present transitively; declared because a security check must not rest
+# on another package's dependency graph.
+pyjwt[crypto]>=2.10
 sqlalchemy>=2.0
 alembic>=1.14
 claude-agent-sdk>=0.1.16

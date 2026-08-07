@@ -95,6 +95,43 @@ helm upgrade --install cfactory charts/cfactory --namespace cfactory \
   --set database.enabled=true
 ```
 
+### Database schema and migrations
+
+**User story:** as an operator, I upgrade CFactory and want the database schema
+to match the release I just deployed, without running anything by hand.
+
+The backend applies migrations itself. At startup, before it opens a single
+store, it runs `db.bootstrap_schema()` against the configured database and logs
+what it did:
+
+| Starting state | What runs | Log line |
+|---|---|---|
+| No tables | `alembic upgrade head` — the whole history | `schema bootstrap: created` |
+| Tables, no `alembic_version` | `alembic stamp head` — the schema is adopted, no revision is replayed | `schema bootstrap: adopted` |
+| Already under Alembic | `alembic upgrade head` — pending revisions only, a no-op when there are none | `schema bootstrap: upgraded` |
+
+The middle row is a **one-time** event per database, and it is why upgrading a
+CFactory that predates this behaviour is safe. Before it, nothing ran Alembic at
+all: the schema was whatever `Base.metadata.create_all` produced at store init,
+and there was no `alembic_version` row to upgrade from, so a plain
+`alembic upgrade head` would have died on the first `CREATE TABLE`. Stamping
+adopts that schema instead of rebuilding it.
+
+Stamping at `head` is only correct because `alembic upgrade head` and
+`create_all` produce the same schema; `tests/test_schema_bootstrap.py` asserts
+that, so the two cannot drift apart unnoticed.
+
+**Options, and what happens when they are unset.** There is no flag. The step is
+unconditional and idempotent, and it is left that way on purpose — a
+`CFACTORY_SKIP_MIGRATIONS` escape hatch is how a schema silently stops tracking
+its migrations, which is the defect this replaced. To inspect or drive the same
+thing by hand, `just db-upgrade` (`alembic upgrade head`) and
+`just db-revision "message"` still work against `CFACTORY_DATABASE_URL`.
+
+**Multi-replica.** The step assumes one process. `replicaCount` is 1 (see
+"Scaling note" below); running more than one replica needs an advisory lock or a
+pre-install Job before this is safe.
+
 ### Probes and exposure
 
 Liveness and readiness probes hit `/health`. The Service is `ClusterIP` on port

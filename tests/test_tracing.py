@@ -15,16 +15,16 @@ import logging
 from contextlib import contextmanager
 
 import pytest
+from cfactory import tracing
 from cfactory.tracing import (
     _install_exporter,
     _RateLimitFilter,
     auth_scheme,
+    logger as tracing_logger,
     rate_limit_exporter_log,
     verify_export_auth,
 )
-from cfactory.tracing import (
-    logger as tracing_logger,
-)
+from fastapi import FastAPI
 from opentelemetry.sdk.trace.export import SpanExportResult
 
 
@@ -167,3 +167,37 @@ def test_unsupported_protocol_installs_nothing_and_says_so(monkeypatch):
         _install_exporter("http://collector", "svc")
     assert "NO SPANS WILL LAND" in text(records)
     assert "http/protobuf" in text(records)
+
+
+def test_every_app_gets_instrumented_not_just_the_first(monkeypatch):
+    """A second app must be instrumented too (Factory#516).
+
+    CFactory serves via `python -m uvicorn cfactory.app:app`, so the module
+    is imported once and only one app is ever built — which is the ONLY
+    reason this service was not silent. PFactory and TFactory ship the same
+    module behind `python -m server.main`, which builds the app twice and
+    serves the second one; a single `_initialized` flag over both the
+    process-wide setup and the per-app FastAPI middleware made the second
+    `init_tracing()` a no-op, so the serving app created no spans at all
+    while the logs still said "OTel tracing enabled".
+
+    This locks the property rather than the entry point, so a future change
+    to how CFactory boots cannot reintroduce the silence.
+
+    Mutation-checked: restore the early `if _initialized: return` at the top
+    of init_tracing() and this test fails on app_b while every other test in
+    this file still passes.
+    """
+    # No endpoint: this asserts instrumentation, not delivery, and must not
+    # open a socket.
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.setattr(tracing, "_initialized", False)
+
+    app_a, app_b = FastAPI(), FastAPI()
+    tracing.init_tracing(app_a)
+    tracing.init_tracing(app_b)
+
+    assert getattr(app_a, "_is_instrumented_by_opentelemetry", False)
+    assert getattr(app_b, "_is_instrumented_by_opentelemetry", False), (
+        "the second app was not instrumented, so it would create no spans"
+    )

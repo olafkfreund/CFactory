@@ -1362,6 +1362,34 @@ export async function executeAction(action: PreparedAction): Promise<ExecuteResu
   return ExecuteResultSchema.parse(await resp.json());
 }
 
+// One anomaly in the HMAC chain: `mutated` / `duplicate` / `dangling` are tamper
+// evidence, `forked` is a concurrent append (#306). Kept as a plain string, not a
+// union — an unrecognised kind must render as itself, not drop the finding (#431).
+export const ChainBreakSchema = z.object({
+  id: z.number(),
+  kind: z.string(),
+  detail: z.string(),
+});
+export type ChainBreak = z.infer<typeof ChainBreakSchema>;
+
+// The tamper-evidence verdict for the WHOLE trail (#309): `ok`, `forked`
+// (an unexplained write race), or `tampered`. `findings` are the anomalies still
+// wanting an answer; `acknowledged_forks` are the ones the deploy has declared.
+export const ChainReportSchema = z.object({
+  verdict: z.string(),
+  rows: z.number(),
+  checked_at: z.string(),
+  findings: z.array(ChainBreakSchema),
+  acknowledged_forks: z.array(z.number()),
+});
+export type ChainReport = z.infer<typeof ChainReportSchema>;
+
+// Separate from fetchAudit on purpose: this walks every row and recomputes every
+// HMAC, where /api/audit reads the latest hundred.
+export async function fetchAuditChain(): Promise<ChainReport> {
+  return getJson("/api/audit/chain", ChainReportSchema, "audit chain");
+}
+
 export async function fetchAudit(): Promise<AuditEntry[]> {
   const data = await getJson(
     "/api/audit",
@@ -1515,7 +1543,12 @@ const CardListSchema = z.union([
   z.object({ cards: z.array(CardSchema) }).passthrough(),
 ]);
 
-export type CardFilters = Partial<Record<"status" | "milestone" | "assignee" | "tier", string>>;
+// `| undefined` is the honest type: the filter bar holds unset filters as an
+// explicit `undefined` rather than deleting the key, and `fetchCards` already
+// drops falsy values before building the query string.
+export type CardFilters = Partial<
+  Record<"status" | "milestone" | "assignee" | "tier", string | undefined>
+>;
 
 // Fields a human (or an agent) may change on an existing card. `status` +
 // `priority` are the move/reprioritise pair the planning board drives.

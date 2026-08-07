@@ -6,7 +6,16 @@
 # the nginx template at container start).
 
 FROM node:26-alpine AS build
-WORKDIR /app
+# tsconfig.json extends ../../standards/tsconfig.base.json (Factory#546), so the
+# vendored baseline must sit two levels above the app INSIDE the image as well.
+# WORKDIR mirrors the repo layout so that relative path means the same thing here
+# as it does in git, rather than resolving somewhere by accident. `standards` is a
+# NAMED BUILD CONTEXT (build-contexts: in image-build.yml / deploy.yml) because
+# the build context proper is apps/frontend-web and the baseline lives outside it.
+# Without this the extends silently misses, tsc falls back to its ES5 defaults,
+# and the build dies on "Cannot find name 'Map'" a long way from the cause.
+WORKDIR /app/apps/frontend-web
+COPY --from=standards tsconfig.base.json /app/standards/tsconfig.base.json
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
@@ -28,6 +37,6 @@ ENV CFACTORY_API_KEY=""
 # The official entrypoint renders /etc/nginx/templates/*.template via envsubst
 # (only listed env vars are substituted, so nginx's own $vars are preserved).
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /app/apps/frontend-web/dist /usr/share/nginx/html
 
 EXPOSE 8080

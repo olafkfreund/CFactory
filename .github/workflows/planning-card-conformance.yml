@@ -1,0 +1,147 @@
+name: planning-card conformance gate
+
+# Blocking gate: do this repo's card models still say what the hub contract
+# says? (Factory#554, CFactory#322/#323/#324)
+#
+# `apis/planning-card.schema.json` in the Factory hub is the SOURCE OF TRUTH for
+# the RFC-0019 planning card. `apps/backend/cfactory/cards.py` is the running
+# implementation. Until this job existed the two were kept in step by hand, and
+# they did not stay in step:
+#
+#   * The schema landed with RFC-0019 phase 1 and contradicted these models in
+#     six places within a day (Factory#371). Reconciling it took 247 lines.
+#   * That reconciliation did not hold. Measured against this tree the day
+#     Factory#554 was worked, the reconciled schema disagreed in 33 places --
+#     five fields these models mark REQUIRED and the schema had optional, five
+#     `CardCreate` accepts and the schema rejected outright, three more on
+#     `CardUpdate`, a create default of 100 against this repo's 0, and bounds
+#     the schema asserted on a response model that enforces none.
+#
+# Nothing detected any of it, because the hub's own suite validates the
+# committed EXAMPLES against the schema: the examples and the schema agreed with
+# each other while both disagreed with this service. This job is the thing
+# outside that loop, and it is the only place the comparison can run -- the
+# contract is in the hub and the models are here.
+#
+# NOT byte-exact, unlike verification-core-drift.yml. The two sides are a
+# hand-written JSON Schema carrying paragraphs of prose and a set of pydantic
+# models; they can never be byte-equal. The gate reduces both to the same
+# per-field facet set (required, types incl. null, enum, format, array items,
+# default, pattern, bounds) and compares those. Descriptions are deliberately
+# not compared, which is what keeps the contract's reasoning hand-written.
+#
+# TO CHANGE THE CARD SHAPE: land the change in the hub contract FIRST, in a
+# CODEOWNERS-reviewed PR that carries the reasoning in the field's description.
+# Then change the model here and bump HUB_PIN_SHA below to the hub commit that
+# carries it, in the same PR. Between those two this gate is red, which is
+# correct. Never edit whichever side is easier to reach: editing only the schema
+# gives every consumer a promise nothing keeps, and editing only the model puts
+# a field on the wire nobody was told about. Both happened.
+
+on:
+  pull_request:
+    branches: [dev, main]
+    # NO paths: FILTER, deliberately, for the same reason
+    # verification-core-drift.yml carries none (Factory#525).
+    #
+    # The obvious filter here would be `apps/backend/cfactory/cards.py`, and it
+    # would switch the gate off in one of the two cases it exists for. Drift is
+    # symmetric: the hub contract can move while this file does not, and the
+    # pin bump that brings that change in touches only this workflow. A filter
+    # on the model path skips exactly that PR.
+    #
+    # It is also a few seconds of Python against a checkout. Running it on every
+    # PR removes a whole class of "the check did not run", which on a green PR
+    # page is indistinguishable from "the check passed" (Factory#471).
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: planning-card-conformance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned Factory hub commit carrying apis/planning-card.schema.json. Bump
+  # deliberately, together with the model change it describes (see header).
+  #
+  # FULL 40-CHARACTER SHA, not an abbreviation. actions/checkout resolves `ref`
+  # by fetching `+refs/heads/<ref>*:...` and `+refs/tags/<ref>*:...`, so a short
+  # sha matches no branch and no tag and the step dies with "The process
+  # '/usr/bin/git' failed with exit code 1" after three retries - which reads
+  # like a network fault, not like a bad pin. Every other pin in this repo is
+  # full-length for the same reason.
+  #
+  HUB_PIN_SHA: "6eb6fb86d76953cf0cde719dae3a928ffbd31773"
+
+jobs:
+  conformance:
+    name: card models match the hub contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this service
+        uses: actions/checkout@v4
+        with:
+          path: service
+
+      - name: Check out the Factory hub CONTRACT at the pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: ${{ env.HUB_PIN_SHA }}
+          path: factory-hub
+
+      - name: Check out the hub COMPARATOR at main
+        # Not at HUB_PIN_SHA: a gate fetched from its own pin cannot ship its
+        # own fix. The CONTRACT above stays pinned, so the comparison stays
+        # reproducible; only the comparator's logic floats (Factory#405). Same
+        # split as verification-core-drift.yml.
+        #
+        # UNTIL Factory#617 LANDS, this step fails with "No such file or
+        # directory": the comparator does not exist on hub main yet. That is
+        # honestly red - the gate genuinely cannot run - and it resolves itself
+        # the moment #617 merges. It was observed running GREEN once, from the
+        # pin, in CFactory run 31187440916; see the PR body.
+        uses: actions/checkout@v4
+        with:
+          repository: olafkfreund/Factory
+          ref: main
+          path: factory-hub-main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install backend deps
+        # The comparator IMPORTS cfactory.cards and asks pydantic what the
+        # models render to, rather than parsing the file: an AST reading would
+        # have to re-implement pydantic's type resolution, and what is worth
+        # comparing is what FastAPI actually serves. So the backend's real
+        # dependency set has to be present. If it is not, the gate exits 2 with
+        # "could not load cfactory.cards" -- never a silent pass, because a
+        # check that cannot see its subject has to say so (Factory#500).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r service/apps/backend/requirements.txt
+
+      - name: Prove the comparator itself is not always-green
+        # Run BEFORE the real comparison, and blocking. The comparator lives in
+        # the hub and floats at main (see above), so this repo pulls a fresh
+        # copy of its logic on every run and has no other way to know it still
+        # works. Its --self-test builds synthetic pydantic models and PERFORMS
+        # twenty mutations rather than describing them -- including a str
+        # narrowed to a Literal, which is the drift that breaks consumers and
+        # the one a field-name comparison passes -- plus the four anti-always-
+        # green cases: an empty contract, a contract with no $defs, a role
+        # deleted from the contract, and a role deleted from the comparator's
+        # own map. A comparator with a bug reports "no drift" forever, in the
+        # one repo that serves this API, and running the gate cannot reveal it.
+        run: python factory-hub-main/scripts/check_planning_card_conformance.py --self-test
+
+      - name: Compare the card models against the pinned hub contract (blocking)
+        run: |
+          python factory-hub-main/scripts/check_planning_card_conformance.py \
+            --schema factory-hub/apis/planning-card.schema.json \
+            --root service

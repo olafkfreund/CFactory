@@ -29,13 +29,20 @@ Usage:
 Exit code 0 if no changed file regressed; 1 otherwise.
 """
 
+# T201 (no print) targets SERVICE code, where stdout is not an output channel.
+# This is a CI command-line tool whose entire product is what it prints: the
+# gated file list, the per-rule regression lines and the verdict all go to the
+# CI log, and the workflow has no other way to show them. Scoped to the one
+# rule: the code-less blanket form is what PGH004 forbids, and it would hide the
+# next real finding in this file. Same carve-out PFactory's fork already carries.
+# ruff: noqa: T201
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,29 +54,56 @@ from pathlib import Path
 # Canonical shared ratchet rules, vendored byte-exact from the Factory hub
 # and byte-exact drift-gated (Factory#403). scripts/ is sys.path[0] when this
 # runs as a script, so the sibling import resolves without packaging.
-from ratchet_helpers import MYPY_TEST_RELAX, is_test_file
+from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, require_tool_ran, ruff_stdin_argv
+
+# The VENDORED baseline, not the repo-wide config at the root (Factory#513).
+# The ratchet holds new and touched code to the full shared bar; the root
+# ruff.toml is this repo's own config, which extends the same baseline today but
+# is the file that would carry a documented carve-out. Pointing the ratchet at
+# the root would let such a carve-out quietly lower the bar the ratchet exists
+# to hold — the same shape as gating against a stale canonical.
+RUFF_CONFIG = "standards/ruff.toml"
+MYPY_CONFIG = "standards/mypy.ini"
 
 PACKAGE_DEFAULT = "apps/backend/cfactory"
+
+# Byte-exact vendored copies of Factory-hub canonicals. These are NOT governed by
+# this repo's strict bar: they must stay identical to the hub and are policed by
+# the verification-core drift gate instead, so "fixing" one here to satisfy the
+# ratchet is what breaks the next re-vendor (Factory#403). ruff.toml excludes the
+# same path for the format gate; this ratchet reads standards/ruff.toml directly
+# and so cannot see that exclusion. Paths are repo-relative.
+VENDORED_SKIP = frozenset({"scripts/ratchet_helpers.py"})
 
 # mypy text output lines look like:  path/to/file.py:12: error: <msg>  [code]
 _MYPY_ERROR_RE = re.compile(r"^.+?:\d+: error:")
 
 
-def _run(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+def _run(
+    cmd: list[str], env: dict[str, str] | None = None, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    # S603: every argv reaching here is assembled in this file from repo-relative
+    # config paths and `git`/`ruff`/`mypy` literals — no shell, and no caller-
+    # supplied string ever becomes a command word. This is a CI developer tool,
+    # not a request-handling surface.
+    return subprocess.run(  # noqa: S603
+        cmd, capture_output=True, text=True, check=False, env=env, input=stdin
+    )
 
 
-def changed_python_files(base: str, package: str) -> list[str]:
-    """Python files under *package* changed (added/modified) vs *base*."""
+def changed_python_files(base: str, packages: list[str]) -> list[str]:
+    """Python files under any of *packages* changed (added/modified) vs *base*."""
     res = _run(["git", "diff", "--name-only", "--diff-filter=AM", f"{base}...HEAD"])
     if res.returncode != 0:
         sys.stderr.write(res.stderr)
         sys.exit(2)
-    pkg = Path(package)
+    pkgs = [Path(p) for p in packages]
     out: list[str] = []
     for line in res.stdout.splitlines():
         path = Path(line)
-        if path.suffix == ".py" and pkg in path.parents and path.exists():
+        if line in VENDORED_SKIP:
+            continue
+        if path.suffix == ".py" and any(p in path.parents for p in pkgs) and path.exists():
             out.append(str(path))
     return out
 
@@ -98,41 +132,33 @@ def materialized(source: str, filename: str) -> Iterator[str]:
         Path(tmp).unlink(missing_ok=True)
 
 
-@contextmanager
-def ruff_materialized(source: str, filename: str) -> Iterator[str]:
-    """Materialise *source* for RUFF under its REAL basename in a fresh temp dir.
-
-    Deliberately NOT ``materialized()`` above. That one writes beside the target
-    because mypy needs the real package location or relative imports break
-    (issue #193) - but it uses a random prefix, which defeats ruff
-    per-file-ignores like ``**/test_*.py``. A net-new test file was therefore
-    held to the non-test bar and tripped S101 while clean under its real path.
-
-    The two tools want different things and cannot share one strategy: mypy
-    needs the LOCATION, ruff needs the BASENAME. ruff resolves no imports, so a
-    fresh directory costs it nothing. Factory#403.
-    """
-    tmpdir = tempfile.mkdtemp()
-    try:
-        tmp = Path(tmpdir) / Path(filename).name
-        tmp.write_text(source)
-        yield str(tmp)
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
-
 def ruff_counts(source: str, filename: str) -> Counter[str]:
-    """Per-rule ruff violation counts for *source* checked as *filename*."""
-    with ruff_materialized(source, filename) as tmp:
-        res = _run(["ruff", "check", "--config", "ruff.toml", "--output-format", "json", tmp])
-        if not res.stdout.strip():
-            return Counter()
-        try:
-            items = json.loads(res.stdout)
-        except json.JSONDecodeError:
-            sys.stderr.write(res.stdout + res.stderr)
-            sys.exit(2)
-        return Counter(item["code"] for item in items)
+    """Per-rule ruff violation counts for *source* checked as *filename*.
+
+    Fed on stdin under the file's REAL path so ruff's per-file-ignores see the
+    same path ``ruff check`` would (Factory#510). The temp copy this used to
+    write could not: ruff relativises a path against the project root before
+    matching the globs, and a path OUTSIDE that root falls back to the BASENAME
+    only. ``**/test_*.py`` and ``**/*_test.py`` therefore matched a copy but
+    ``**/tests/**`` never could, so a helper under ``tests/`` named neither way
+    (``tests/cards_harness.py`` here) was held to the production assert bar the
+    real tree exempts it from.
+    """
+    res = _run(ruff_stdin_argv(RUFF_CONFIG, filename), stdin=source)
+    # The shared "did the tool actually run" rule (Factory#590). This used to be
+    # four lines restated here, and in the mypy counter below, and in both halves
+    # of the four sibling ratchets -- nine copies of one rule, which is why fixing
+    # it once cost five PRs (PFactory#455, TFactory#951). It now lives in the
+    # drift-gated canonical, so the next correction reaches every consumer.
+    require_tool_ran("ruff", res)
+    if not res.stdout.strip():
+        return Counter()
+    try:
+        items = json.loads(res.stdout)
+    except json.JSONDecodeError:
+        sys.stderr.write(res.stdout + res.stderr)
+        sys.exit(2)
+    return Counter(item["code"] for item in items)
 
 
 def mypy_command(target: str, original: str | None = None) -> list[str]:
@@ -147,7 +173,7 @@ def mypy_command(target: str, original: str | None = None) -> list[str]:
     return [
         "mypy",
         "--config-file",
-        "mypy.ini",
+        MYPY_CONFIG,
         "--ignore-missing-imports",
         "--follow-imports=silent",
         "--no-error-summary",
@@ -168,7 +194,12 @@ def mypy_count(source: str, filename: str) -> int:
     """
     with materialized(source, filename) as tmp:
         res = _run(mypy_command(tmp, filename), env={**os.environ, "MYPYPATH": "apps/backend"})
-        return sum(1 for line in res.stdout.splitlines() if _MYPY_ERROR_RE.match(line))
+        count = sum(1 for line in res.stdout.splitlines() if _MYPY_ERROR_RE.match(line))
+        # Same shared rule as the ruff counter, with `measured` passed: mypy's exit 2
+        # also covers a BLOCKING error, which still names a file and so belongs in the
+        # count rather than aborting the run.
+        require_tool_ran("mypy", res, measured=count)
+        return count
 
 
 def file_at_base(base: str, path: str) -> str | None:
@@ -233,18 +264,26 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="git ref to diff against")
     parser.add_argument("--tool", choices=["ruff", "mypy"], default="ruff")
-    parser.add_argument("--package", default=PACKAGE_DEFAULT)
+    # Repeatable (Factory#597), matching PFactory's and TFactory's forks of this
+    # file: the ratchet has to reach scripts/ as well as the backend package, and
+    # the alternative — invoking the whole ratchet twice from the workflow —
+    # doubles the run and prints two verdicts for one question.
+    parser.add_argument("--package", action="append", dest="packages", default=None)
     parser.add_argument("--self-test", action="store_true", help="check the ratchet itself")
     args = parser.parse_args()
+    packages = args.packages or [PACKAGE_DEFAULT]
 
     if args.self_test:
-        return self_test(args.package)
+        # The probes are relative-import ones, so they only make sense inside the
+        # backend package; the first --package is that package by convention.
+        return self_test(packages[0])
     if not args.base:
         parser.error("--base is required (unless --self-test)")
 
-    files = changed_python_files(args.base, args.package)
+    files = changed_python_files(args.base, packages)
     if not files:
-        print(f"ratchet ({args.tool}): no changed Python files in {args.package}; nothing to gate.")
+        joined = ", ".join(packages)
+        print(f"ratchet ({args.tool}): no changed Python files in {joined}; nothing to gate.")
         return 0
 
     print(f"ratchet ({args.tool}): gating changed files:\n  " + "\n  ".join(files))

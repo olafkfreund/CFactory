@@ -10,9 +10,47 @@ name: Code quality (ratchet)
 # strict gate is intentionally NOT blocking (127 legacy ruff violations and a
 # ~90-error mypy --strict backlog would make it instantly red).
 #
-# Also runs a whole-repo `ruff format --check` (formatting is auto-applied, never
-# reviewed - section 3.6) and a drift gate confirming the vendored configs still
-# match the pinned hub baseline.
+# Also runs `ruff format --check` over PACKAGE_DIR (formatting is auto-applied,
+# never reviewed - section 3.6) and a drift gate confirming the vendored configs
+# still match the pinned hub baseline.
+#
+# SCOPE, stated honestly (#267). Both Python jobs cover PACKAGE_DIR and scripts/.
+# They do NOT cover apps/backend/run.py, apps/backend/migrations/** or tests/.
+# This job used to be named "whole repo", which it never was. Widening it is a
+# separate, costed decision, not a rename:
+#
+# scripts/ was added in Factory#597, and it is the one widening that was not a
+# free choice: scripts/ratchet_lint.py IS this gate. The file that counts ruff
+# findings on every changed backend file was the one file no ruff run looked at,
+# so its own 9 findings (8 T201, 1 S603) and any future ones were invisible to
+# the bar it enforces. Cost, measured before the change: 9 findings in the
+# ratchet (fixed in the same PR, not grandfathered) and 0 elsewhere in scripts/,
+# with `ruff format --check` already clean on both files — so unlike the trees
+# listed below this one carried no reformat bill at all.
+#
+# scripts/ratchet_helpers.py is NOT in that scope and must not be: it is the
+# byte-exact hub canonical, owned by the verification-core drift gate. It happens
+# to be clean under this repo's config today, so widening would not have gone red
+# — which is precisely why it needed an explicit exclude rather than luck. The
+# day a hub edit disagrees with a local rule, the green path would be to reformat
+# the vendored copy, and that silently breaks the next re-vendor (Factory#403).
+# Excluded in ruff.toml (the format gate) and in the ratchet's VENDORED_SKIP (the
+# check gate), because those two read different configs.
+#
+#   - apps/backend/runners/github/** (7 files ruff would reformat) is VENDORED
+#     from the Factory hub and byte-identical drift-gated by
+#     factory-github-drift.yml. Reformatting it locally would BREAK that gate, so
+#     a literal "whole repo" format check is unreachable by construction and the
+#     name could never have been made true as written.
+#   - Of the rest, measured at ruff 0.15.17 on this tree: 7 first-party files
+#     under apps/backend (run.py + 6 alembic revisions) and 27 under tests/ would
+#     be reformatted - 41 files repo-wide, 34 of them legitimately widenable.
+#
+# So widening means a 34-file blame-churning reformat commit plus a permanent
+# explicit exclude for the vendored tree. That is a deliberate choice to make on
+# its own, and burying it in a gate-honesty fix would hide it. Until then the
+# name states the scope the gate actually has. Same call, same reasoning, as
+# PFactory#417 / PFactory PR#428.
 #
 # The Python backend gate (ratchet + format + drift) plus the React/Vite
 # frontend gate (#112): ESLint 9 flat config (typescript-eslint strictTypeChecked
@@ -69,16 +107,16 @@ jobs:
           fi
 
       - name: Ratchet (ruff on changed files; blocks net-new violations)
-        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
+        run: python scripts/ratchet_lint.py --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package scripts
 
       - name: Ratchet (mypy --strict on changed files; blocks net-new type errors)
         # Per-file base-vs-HEAD error counts (issues #112, #116, hub Factory#260):
         # a touched legacy file keeps its existing mypy debt, but a PR may not add
         # NET-NEW strict-mode type errors to any file it changes.
-        run: python scripts/ratchet_lint.py --tool mypy --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}"
+        run: python scripts/ratchet_lint.py --tool mypy --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package scripts
 
   format-check:
-    name: ruff format --check (whole repo, blocking)
+    name: ruff format --check (apps/backend/cfactory + scripts, blocking)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,13 +126,30 @@ jobs:
       - name: Install ruff (pinned)
         run: pip install "ruff==${RUFF_VERSION}"
       - name: Check formatting
-        run: ruff format --check --config ruff.toml "${PACKAGE_DIR}"
+        run: ruff format --check --config ruff.toml "${PACKAGE_DIR}" scripts
 
   drift:
     name: hub drift gates (shared-baseline configs + factory-contracts)
     runs-on: ubuntu-latest
+    env:
+      # NAMED, not inlined into the `ref:` below (Factory#547). The standards
+      # half of this job reads its pin from standards/.hub-sha, which any tool
+      # can `cat`. This one gates a single FILE, so it has no directory for a
+      # pin file to sit beside and pins in the workflow - which Factory#514's
+      # rule 5.2 permits ONLY while the hub can read the pin without opening
+      # this workflow. A bare `ref: <sha>` is indistinguishable from any other
+      # checkout ref to anything scanning from outside; a named variable is not.
+      # scripts/check_pin_freshness.py in the hub reads exactly this name.
+      CONTRACTS_PIN_SHA: "48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9"
     # Two drift checks against the pinned hub, each at its own SHA:
-    #   1. Vendored standards (ruff.toml/mypy.ini/.editorconfig) vs the baseline.
+    #   1. Vendored standards/ (ruff.toml, mypy.ini, .editorconfig,
+    #      coding-standards.md and tsconfig.base.json) vs the baseline. The
+    #      standards SHA is read from
+    #      standards/.hub-sha rather than hardcoded here (Factory#513/#514): a
+    #      SHA that lives only inside this workflow is not a pin, because nothing
+    #      outside the workflow can find it. coding-standards.md was not vendored
+    #      at all before #513, so a hub rule could say one thing while this
+    #      service did another and no gate noticed (Factory#434).
     #   2. The byte-identical factory-contracts single source of truth (Factory#160)
     #      at apps/backend/cfactory/_contracts/factory_contracts/__init__.py.
     # To update either: re-vendor from the hub and bump the corresponding SHA
@@ -111,17 +166,28 @@ jobs:
       # the comparison and report SUCCESS from a blocking gate. If Factory
       # becomes private, add a read token here - do not restore the soft-skip.
       # Factory#434; same removal AIFactory#1092 / #1095 made in that repo.
+      - name: Read the pinned hub SHA
+        id: pin
+        run: |
+          set -euo pipefail
+          sha="$(cat cfactory/standards/.hub-sha)"
+          # An empty or missing pin must fail here rather than resolve to the
+          # default branch, which would compare against a MOVING target and call
+          # it a match (standards rule 4.7).
+          [ -n "$sha" ] || { echo "standards/.hub-sha is empty" >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Check out hub standards at the pinned SHA
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
-          ref: 93c3bb49ed5f3f3d3d46aae5f8a13ff601550702
+          ref: ${{ steps.pin.outputs.sha }}
           path: factory-hub-standards
       - name: Check out hub at the pinned contracts SHA
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
-          ref: 48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9
+          ref: ${{ env.CONTRACTS_PIN_SHA }}
           path: factory-hub-contracts
       - name: Diff vendored configs against the pinned hub baseline
         run: |
@@ -130,13 +196,29 @@ jobs:
           # only by stripping leading comment lines from both sides.
           strip() { grep -vE '^[[:space:]]*([#;]|$)' "$1"; }
           for f in ruff.toml mypy.ini .editorconfig; do
-            if ! diff <(strip "cfactory/$f") <(strip "factory-hub-standards/standards/$f"); then
-              echo "DRIFT: cfactory/$f diverged from the pinned hub baseline (standards/$f)."
-              echo "Re-vendor from the hub and bump the pinned SHA, or justify a tighten-only override."
+            if ! diff <(strip "cfactory/standards/$f") <(strip "factory-hub-standards/standards/$f"); then
+              echo "DRIFT: cfactory/standards/$f diverged from the pinned hub baseline (standards/$f)."
+              echo "Re-vendor from the hub and bump standards/.hub-sha, or justify a tighten-only override in the root ruff.toml."
               exit 1
             fi
           done
-          echo "No drift: vendored configs match the pinned hub baseline."
+          # coding-standards.md is compared BYTE-EXACT and carries no header:
+          # strip() drops lines starting with '#', which in Markdown is every
+          # heading, so a stripped compare would be blind to every section title.
+          # Hub standards rule 5.1.
+          # tsconfig.base.json is compared BYTE-EXACT for the same reason it is a
+          # plain `cp` from the hub: it carries no provenance header, and JSON has
+          # no comment syntax for strip() to key on. A stripped compare would also
+          # be blind to a re-opened hole, which is the one thing this file exists
+          # to forbid (Factory#546). apps/frontend-web/tsconfig.json `extends` it.
+          for f in coding-standards.md tsconfig.base.json; do
+            if ! diff "cfactory/standards/$f" "factory-hub-standards/standards/$f"; then
+              echo "DRIFT: cfactory/standards/$f diverged from the pinned hub baseline."
+              echo "The standard is vendored, not editable here. Change it in the hub, then re-vendor and bump standards/.hub-sha."
+              exit 1
+            fi
+          done
+          echo "No drift: vendored standards match the pinned hub baseline."
       - name: Diff vendored module against the pinned hub source
         run: |
           set -euo pipefail

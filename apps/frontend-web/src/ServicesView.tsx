@@ -17,7 +17,11 @@ type Backend =
 
 type IconCmp = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 
-const ROLE: Record<string, { role: string; cls: string; Icon: IconCmp; label?: string }> = {
+type RoleMeta = { role: string; cls: string; Icon: IconCmp; label?: string | undefined };
+// Named so the unknown-upstream fallback below shares this exact shape: an
+// inline object literal without `label` narrows the union and hides the field.
+const ROLE_FALLBACK: RoleMeta = { role: "—", cls: "plan", Icon: IconDocument };
+const ROLE: Record<string, RoleMeta> = {
   pfactory: { role: "Plan", cls: "plan", Icon: IconDocument },
   aifactory: { role: "Code", cls: "code", Icon: IconRobot },
   tfactory: { role: "Test", cls: "test", Icon: IconFlask },
@@ -41,18 +45,23 @@ const OBSERVE_URL =
 
 // Map the upstream probe status to a pill style + label. A reachable-but-
 // rejecting upstream (401/403) is amber "auth error", not a green "online".
+const PILL_ERROR = { cls: "fail", label: "error" };
 const PILL: Record<string, { cls: string; label: string }> = {
   online: { cls: "ok", label: "online" },
   unauthorized: { cls: "warn", label: "auth error" },
   offline: { cls: "fail", label: "offline" },
-  error: { cls: "fail", label: "error" },
+  error: PILL_ERROR,
 };
 
-function pillFor(s: ServiceStatus | undefined): { cls: string; label: string; detail?: string | null } {
+function pillFor(s: ServiceStatus | undefined): {
+  cls: string;
+  label: string;
+  detail?: string | null | undefined;
+} {
   if (!s) return { cls: "fail", label: "offline" };
   // Fall back to the legacy `online` boolean if an older backend omits `status`.
   const key = s.status ?? (s.online ? "online" : "offline");
-  return { ...(PILL[key] ?? PILL.error), detail: s.detail };
+  return { ...(PILL[key] ?? PILL_ERROR), detail: s.detail };
 }
 
 export default function ServicesView({ backend, reloadSignal }: { backend: Backend; reloadSignal: number }) {
@@ -139,7 +148,7 @@ export default function ServicesView({ backend, reloadSignal }: { backend: Backe
 
         {health &&
           Object.entries(health.upstreams).map(([name, url]) => {
-            const meta = ROLE[name] ?? { role: "—", cls: "plan", Icon: IconDocument };
+            const meta = ROLE[name] ?? ROLE_FALLBACK;
             const Icon = meta.Icon;
             const pending = statuses === null;
             const pill = pillFor(statuses?.[name]);

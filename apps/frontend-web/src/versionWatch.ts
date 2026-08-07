@@ -9,7 +9,7 @@
 function currentBundle(): string | null {
   for (const s of Array.from(document.scripts)) {
     const m = s.src.match(/assets\/(index-[A-Za-z0-9_-]+\.js)/);
-    if (m) return m[1];
+    if (m?.[1] !== undefined) return m[1];
   }
   return null;
 }
@@ -17,7 +17,7 @@ function currentBundle(): string | null {
 async function deployedBundle(): Promise<string | null> {
   const html = await fetch("/", { cache: "no-store" }).then((r) => r.text());
   const m = html.match(/assets\/(index-[A-Za-z0-9_-]+\.js)/);
-  return m ? m[1] : null;
+  return m?.[1] ?? null;
 }
 
 export function startVersionWatch(intervalMs = 60_000): void {

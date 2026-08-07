@@ -51,11 +51,25 @@ apps/
 │       ├── audit.py          # HMAC-anchored, tamper-evident action audit chain
 │       ├── auth.py           # scoped API keys (read/write); OPEN in local mode
 │       ├── enterprise.py     # identity + multi-tenant resolution seams (deferred)
-│       ├── db.py             # SQLAlchemy Base + engine factory
-│       └── migrations/       # Alembic migrations (work items, audit, HMAC chain)
+│       ├── db.py             # SQLAlchemy Base + engine factory + schema bootstrap
+│       └── migrations/       # Alembic migrations, applied at startup (see below)
 └── frontend-web/            # React 19 + Vite cockpit UI (:3110)
     └── src/                  # MissionControl · CopilotPanel · AuditView · TokensView
 ```
+
+## Schema ownership
+
+The app owns its schema end to end: `db.bootstrap_schema()` runs at the top of
+the FastAPI lifespan, before the first store is constructed, so a revision lands
+before the code that depends on it reads the table. A database with tables but
+no `alembic_version` — which is every one this service created before that
+existed — is **stamped** at head rather than upgraded, because its tables are
+already there. See `guides/deployment.md` for the three cases and their log
+lines.
+
+The stores still call `Base.metadata.create_all` at init; on a database
+bootstrap_schema created that is a no-op, and it remains the path a hermetic
+test takes when it builds a store against a temp file directly.
 
 ## The data plane
 
@@ -108,6 +122,18 @@ A Claude Agent SDK layer whose tools are CFactory's *own* functions:
 - **Audit chain** — every confirmed action is recorded with an HMAC-SHA256 hash
   chained to the prior entry (`audit.py`), making after-the-fact mutation, reordering
   or deletion detectable (`AuditStore.verify`).
+  - Appending is serialised: the tail read and the insert are one critical section
+    (`BEGIN IMMEDIATE` on SQLite, a transaction advisory lock on PostgreSQL).
+    Without it, two concurrent confirms both chain to the same predecessor and the
+    chain forks — which is what happened live on 2026-07-30 (#306).
+  - `AuditStore.check()` classifies what it finds: `mutated` (a field or hash was
+    edited), `duplicate` (a row was replayed), `dangling` (a row was deleted or
+    reordered), and `forked` (two valid entries share a predecessor — the write
+    race above). `AuditStore.verify()` is the alarm and reports the first three;
+    a fork is reported by `check()` only, so a race this store used to permit
+    cannot mask a real tamper by keeping the alarm permanently on. Read the chain
+    on a running deployment with
+    `AuditStore(url, create=False).check()`.
 - **Scoped keys** — `auth.py` enforces `read`/`write` scopes when `CFACTORY_API_KEYS`
   is set; local single-user mode is OPEN by default.
 - **Multi-tenant** — `enterprise.py` ships the identity + tenant-resolution seams;

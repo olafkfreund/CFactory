@@ -274,6 +274,28 @@ class Settings(BaseSettings):
     # reads/writes are scoped to the resolved tenant via store_dep (#172).
     multi_tenant: bool = False
 
+    # ── Who the audit trail names (#251 part b) ──────────────────────────────
+    #
+    # Issuer of the OIDC ID token that oauth2-proxy already injects in front of
+    # the cockpit (e.g. https://keycloak.example/realms/factory). SET IT and a
+    # confirmed HITL action is attributed to the PERSON who confirmed it
+    # (``user:<email>``); UNSET (the local/dev default, and any deployment with
+    # no IdP) and the actor stays the honest ``unattributed:key-<digest>``
+    # reference to the API key that acted.
+    #
+    # Not a secret and not a credential: it is the public issuer URL, used to
+    # fetch the JWKS (via OIDC discovery) and to check the token's ``iss``. It
+    # grants nothing — authorization remains the keystore's job — so the worst
+    # a wrong value does is drop back to the unattributed actor.
+    oidc_issuer: str | None = None
+
+    # Expected ``aud`` on that ID token — the OIDC client id the cockpit's
+    # oauth2-proxy is registered as. UNSET MEANS: accept any token the issuer
+    # signed, which is right for a single-realm deployment where the issuer is
+    # the trust boundary. Set it where the realm also serves clients whose users
+    # must not be able to name themselves in this trail.
+    oidc_audience: str | None = None
+
     # Key-encryption key (KEK) for the per-tenant git credential store (RFC-0020
     # §3.4, phase 3). It wraps a per-record data key; the credential itself is
     # sealed with that data key (AES-GCM). Format:
@@ -347,6 +369,18 @@ class Settings(BaseSettings):
     # below is a CLEARLY-LABELLED dev secret: set CFACTORY_AUDIT_HMAC_SECRET to a
     # real secret in any hosted/shared deployment.
     audit_hmac_secret: str = Field(default=DEV_AUDIT_HMAC_SECRET, repr=False)
+
+    # Audit-entry ids whose chain FORK this deployment has already explained
+    # (#306, #309) — comma separated, e.g. "2178". A fork is a concurrent append,
+    # not a mutation: every HMAC in it is valid, and relinking the row would be
+    # the one edit the chain exists to detect. So the row is left exactly as
+    # written and named here instead, and `GET /api/audit/chain` counts it
+    # without reddening the verdict. Anything NOT named still does.
+    #
+    # Unset (the default) acknowledges nothing, which is what a fresh database
+    # wants. This only ever forgives a `forked` classification — a mutated,
+    # duplicate or dangling entry is reported whatever is listed here.
+    audit_acknowledged_forks: str = ""
 
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""

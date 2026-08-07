@@ -216,8 +216,16 @@ export function Board({
   );
 }
 
-function Card({ wi, lp, onOpen }: { wi: WorkItem; lp?: LiveProgress; onOpen: () => void }) {
-  const last = wi.timeline.length ? wi.timeline[wi.timeline.length - 1].updated_at : null;
+function Card({
+  wi,
+  lp,
+  onOpen,
+}: {
+  wi: WorkItem;
+  lp?: LiveProgress | undefined;
+  onOpen: () => void;
+}) {
+  const last = wi.timeline.at(-1)?.updated_at ?? null;
   const state = itemState(wi);
   return (
     <article

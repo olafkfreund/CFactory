@@ -42,7 +42,7 @@ export default function ArtifactsPanel({ artifacts }: { artifacts: Artifacts | n
 
   // The active tab might point at an artifact that isn't present (e.g. it was
   // removed between renders); fall back to the first present one.
-  const current = present.some((t) => t.key === active) ? active : present[0].key;
+  const current = present.some((t) => t.key === active) ? active : (present[0]?.key ?? "spec");
   const body = artifacts?.[current] ?? "";
 
   return (

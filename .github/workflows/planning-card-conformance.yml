@@ -104,15 +104,15 @@ jobs:
         # reproducible; only the comparator's logic floats (Factory#405). Same
         # split as verification-core-drift.yml.
         #
-        # TEMPORARY, FOR THIS PR ONLY: pointed at the pin instead of main, so
-        # this job can be observed running for real before Factory#617 lands.
-        # The comparator does not exist on hub main yet, and until it does this
-        # step fails with "No such file or directory" - honestly, since the
-        # gate genuinely cannot run. RESTORE `ref: main` BEFORE MERGING.
+        # UNTIL Factory#617 LANDS, this step fails with "No such file or
+        # directory": the comparator does not exist on hub main yet. That is
+        # honestly red - the gate genuinely cannot run - and it resolves itself
+        # the moment #617 merges. It was observed running GREEN once, from the
+        # pin, in CFactory run 31187440916; see the PR body.
         uses: actions/checkout@v4
         with:
           repository: olafkfreund/Factory
-          ref: ${{ env.HUB_PIN_SHA }}
+          ref: main
           path: factory-hub-main
 
       - uses: actions/setup-python@v5

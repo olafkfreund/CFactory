@@ -363,6 +363,24 @@ class CardCreate(BaseModel):
     """POST body. ``card_key`` is optional — omit it and the store assigns the
     next ``FCT-<n>`` for the tenant."""
 
+    # An unknown key is REJECTED, not dropped (#322). The hub contract sets
+    # `additionalProperties: false` on `$defs.card_create` and says why: a body
+    # that appears to be accepted while part of it is discarded is how a caller
+    # comes to believe something it did was applied. Until this line, pydantic's
+    # default `extra="ignore"` applied, and `{"title": "x", "tenant_id":
+    # "someone-else"}` was accepted with the second key on the floor.
+    #
+    # There was never an escalation here — `tenant_id` is derived from the
+    # calling credential and has never been read from the body — which is
+    # exactly what made it survive: nothing broke, so nothing said anything.
+    #
+    # This also puts the object-level keyword back within the conformance gate's
+    # reach. `extra="forbid"` is the one `extra` policy pydantic RENDERS, as
+    # `"additionalProperties": false` in `model_json_schema()`, so the hub
+    # comparator can now compare it against the contract instead of recording it
+    # as an unreachable limit (Factory#554).
+    model_config = ConfigDict(extra="forbid")
+
     card_key: str | None = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=512)
     # Free-form markdown (RFC-0020 §3.6). An imported issue's body lands here.
@@ -394,6 +412,11 @@ class CardUpdate(BaseModel):
     stable human id other systems quote.
     """
 
+    # See CardCreate. The same rule, and it bites harder here: on a PATCH the
+    # whole point is that only what you sent is applied, so a caller that
+    # mistypes a field name and is answered 200 has been told its edit landed.
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(default=None, min_length=1, max_length=512)
     description: str | None = None
     acceptance_criteria: list[str] | None = None
@@ -409,6 +432,47 @@ class CardUpdate(BaseModel):
     # Move the card to another of the tenant's repositories, or send ``null`` to
     # put it back on the tenant default (RFC-0020 §3.3, phase 8).
     repository_id: int | None = None
+
+    def model_post_init(self, _context: Any, /) -> None:
+        """The contract's ``minProperties: 1``, enforced (#322).
+
+        An empty ``PATCH`` used to be accepted and then do nothing, because the
+        route applies ``exclude_unset``. "Accepted" and "did nothing" is the same
+        pair of facts as the extras above, and the same answer: say so.
+
+        On the MODEL rather than in the route, because the route is not the only
+        caller — ``mcp._tool_update_card`` builds a ``CardUpdate`` directly from
+        the tool arguments, so a route-level guard would leave the MCP path
+        exactly as it was. One guard where both paths already converge.
+
+        ``model_fields_set`` and not ``model_dump()``: every field here defaults
+        to ``None``, so a dump cannot tell "sent ``null`` deliberately" (clearing
+        a ``tier``) from "not sent". The set of fields the caller actually
+        supplied is the only thing that can, and it is the same thing
+        ``exclude_unset`` reads to decide what to apply.
+
+        NOT visible to the conformance gate: pydantic renders no ``minProperties``
+        for this, unlike ``extra="forbid"`` above. So the contract keeps asserting
+        it and this is the thing that makes the assertion true; the gate's report
+        says out loud that it does not compare it, and
+        ``tests/test_cards_api.py`` covers it over the wire instead.
+
+        ``model_post_init`` and not ``@model_validator(mode="after")``, which is
+        the idiom and reads better. mypy runs each changed file in isolation
+        under the ratchet, so ``BaseModel`` resolves to ``Any`` there and
+        ``@model_validator`` is an untyped decorator -- a net-new
+        ``untyped-decorator`` error on a file carrying 19 legacy ones, which the
+        ratchet blocks and rightly. A plain override needs no decorator and
+        pydantic wraps a raise from it into a ``ValidationError`` exactly the
+        same way. Suppressing with a ``type: ignore`` was the other option and is
+        worse: ``warn_unused_ignores`` is on, so the same comment is an error in
+        a run where pydantic DOES resolve.
+        """
+        if not self.model_fields_set:
+            raise ValueError(
+                "a PATCH body must set at least one field; an empty body would be "
+                "accepted and change nothing"
+            )
 
 
 class CardList(BaseModel):

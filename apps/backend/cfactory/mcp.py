@@ -1386,8 +1386,18 @@ _TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...
     # sentence here. Its message never names a state, a token or a private key.
     (InstallError, lambda exc: {"error": str(exc)}),
     (
+        # include_context=False, and it is load-bearing rather than tidy. For a
+        # validator that raises (as CardUpdate's minProperties guard does, #322)
+        # pydantic puts the raised EXCEPTION OBJECT in the error's `ctx`, and
+        # FastAPI's JSON encoder cannot serialise one -- so rendering the error
+        # raised a TypeError out of the handler and the agent got a 500 where it
+        # should have got a sentence. The sentence itself survives in `msg`;
+        # `ctx` never carried anything an agent could read anyway.
         ValidationError,
-        lambda exc: {"error": "invalid arguments", "details": exc.errors(include_url=False)},
+        lambda exc: {
+            "error": "invalid arguments",
+            "details": exc.errors(include_url=False, include_context=False),
+        },
     ),
 )
 

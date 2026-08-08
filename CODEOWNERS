@@ -1,0 +1,29 @@
+# CFactory code owners
+#
+# Owners are auto-requested as reviewers on PRs touching matching paths.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+#
+# CFactory currently has one collaborator, verified via
+# `gh api repos/olafkfreund/CFactory/collaborators` before writing this file
+# (see the PR that added it for the exact command and output). Every rule
+# below names that collaborator on purpose — do not add a login here without
+# checking it first: a CODEOWNERS entry naming someone who isn't a
+# collaborator is silently ignored by GitHub (see Factory#611).
+#
+# `require_code_owner_reviews` is currently false on both `dev` and `main`
+# branch protection, so this file documents intent rather than gating
+# anything yet — it becomes enforced the day that setting flips.
+#
+# Order matters — later patterns override earlier ones.
+
+# Default — all files
+*                            @olafkfreund
+
+# Release and supply-chain surface
+/.github/workflows/deploy.yml  @olafkfreund
+/charts/                       @olafkfreund
+/Dockerfile                    @olafkfreund
+
+# Governance files themselves
+/CODEOWNERS                    @olafkfreund
+/SECURITY.md                   @olafkfreund

@@ -231,6 +231,39 @@ def test_reads_and_failed_mutations_are_not_audited(client, audit):
     assert audit.list() == []
 
 
+def test_an_unknown_argument_is_refused_over_mcp_too(client):
+    """#322 reaches the agent surface, not only REST.
+
+    ``_tool_create_card`` builds a ``CardCreate`` straight from the tool
+    arguments and nothing validates them against the tool's own ``inputSchema``
+    first, so ``extra="forbid"`` is what stands between an agent's typo and a
+    write it is told succeeded.
+    """
+    body = payload(client, WRITER, "cfactory_create_card", {"title": "t", "tenant_id": "other"})
+
+    assert body["error"] == "invalid arguments"
+    assert any(e["loc"] == ["tenant_id"] for e in body["details"]), body
+    assert payload(client, WRITER, "cfactory_list_cards")["count"] == 0
+
+
+def test_a_tool_call_that_would_change_nothing_says_so_and_does_not_500(client):
+    """``cfactory_move_card`` with no ``status`` reduces to an empty CardUpdate.
+
+    The assertion that matters is the FIRST one: rendering this used to raise
+    ``TypeError: Object of type ValueError is not JSON serializable`` out of the
+    handler, because pydantic puts the raised exception object in the error's
+    ``ctx`` and ``_TOOL_ERRORS`` passed ``ctx`` to the JSON encoder. An agent got
+    a 500 where it should have got a sentence, and that is true of every
+    raising validator, not only this one.
+    """
+    resp = call(client, WRITER, "cfactory_move_card", {"card_key": "FCT-1"})
+
+    assert resp.status_code == 200, resp.text
+    body = json.loads(resp.json()["result"]["content"][0]["text"])
+    assert body["error"] == "invalid arguments"
+    assert "at least one field" in json.dumps(body["details"])
+
+
 # ── programmatic equivalence: REST <-> MCP ───────────────────────────────────
 
 

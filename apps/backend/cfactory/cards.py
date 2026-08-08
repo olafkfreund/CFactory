@@ -52,7 +52,7 @@ from .credentials import (
     seal,
     unseal,
 )
-from .db import Base, make_engine
+from .db import Base, add_column_ddl, make_engine
 from .git_config import (
     GitConfig,
     GitConfigError,
@@ -381,6 +381,24 @@ class CardCreate(BaseModel):
     """POST body. ``card_key`` is optional — omit it and the store assigns the
     next ``FCT-<n>`` for the tenant."""
 
+    # An unknown key is REJECTED, not dropped (#322). The hub contract sets
+    # `additionalProperties: false` on `$defs.card_create` and says why: a body
+    # that appears to be accepted while part of it is discarded is how a caller
+    # comes to believe something it did was applied. Until this line, pydantic's
+    # default `extra="ignore"` applied, and `{"title": "x", "tenant_id":
+    # "someone-else"}` was accepted with the second key on the floor.
+    #
+    # There was never an escalation here — `tenant_id` is derived from the
+    # calling credential and has never been read from the body — which is
+    # exactly what made it survive: nothing broke, so nothing said anything.
+    #
+    # This also puts the object-level keyword back within the conformance gate's
+    # reach. `extra="forbid"` is the one `extra` policy pydantic RENDERS, as
+    # `"additionalProperties": false` in `model_json_schema()`, so the hub
+    # comparator can now compare it against the contract instead of recording it
+    # as an unreachable limit (Factory#554).
+    model_config = ConfigDict(extra="forbid")
+
     card_key: str | None = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=512)
     # Free-form markdown (RFC-0020 §3.6). An imported issue's body lands here.
@@ -412,6 +430,11 @@ class CardUpdate(BaseModel):
     stable human id other systems quote.
     """
 
+    # See CardCreate. The same rule, and it bites harder here: on a PATCH the
+    # whole point is that only what you sent is applied, so a caller that
+    # mistypes a field name and is answered 200 has been told its edit landed.
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(default=None, min_length=1, max_length=512)
     description: str | None = None
     acceptance_criteria: list[Criterion] | None = None
@@ -427,6 +450,47 @@ class CardUpdate(BaseModel):
     # Move the card to another of the tenant's repositories, or send ``null`` to
     # put it back on the tenant default (RFC-0020 §3.3, phase 8).
     repository_id: int | None = None
+
+    def model_post_init(self, _context: Any, /) -> None:
+        """The contract's ``minProperties: 1``, enforced (#322).
+
+        An empty ``PATCH`` used to be accepted and then do nothing, because the
+        route applies ``exclude_unset``. "Accepted" and "did nothing" is the same
+        pair of facts as the extras above, and the same answer: say so.
+
+        On the MODEL rather than in the route, because the route is not the only
+        caller — ``mcp._tool_update_card`` builds a ``CardUpdate`` directly from
+        the tool arguments, so a route-level guard would leave the MCP path
+        exactly as it was. One guard where both paths already converge.
+
+        ``model_fields_set`` and not ``model_dump()``: every field here defaults
+        to ``None``, so a dump cannot tell "sent ``null`` deliberately" (clearing
+        a ``tier``) from "not sent". The set of fields the caller actually
+        supplied is the only thing that can, and it is the same thing
+        ``exclude_unset`` reads to decide what to apply.
+
+        NOT visible to the conformance gate: pydantic renders no ``minProperties``
+        for this, unlike ``extra="forbid"`` above. So the contract keeps asserting
+        it and this is the thing that makes the assertion true; the gate's report
+        says out loud that it does not compare it, and
+        ``tests/test_cards_api.py`` covers it over the wire instead.
+
+        ``model_post_init`` and not ``@model_validator(mode="after")``, which is
+        the idiom and reads better. mypy runs each changed file in isolation
+        under the ratchet, so ``BaseModel`` resolves to ``Any`` there and
+        ``@model_validator`` is an untyped decorator -- a net-new
+        ``untyped-decorator`` error on a file carrying 19 legacy ones, which the
+        ratchet blocks and rightly. A plain override needs no decorator and
+        pydantic wraps a raise from it into a ``ValidationError`` exactly the
+        same way. Suppressing with a ``type: ignore`` was the other option and is
+        worse: ``warn_unused_ignores`` is on, so the same comment is an error in
+        a run where pydantic DOES resolve.
+        """
+        if not self.model_fields_set:
+            raise ValueError(
+                "a PATCH body must set at least one field; an empty body would be "
+                "accepted and change nothing"
+            )
 
 
 class CardList(BaseModel):
@@ -537,45 +601,51 @@ class DuplicateIssueRefError(Exception):
     """
 
 
-# Columns added to ``cards`` after Phase 1, and the DDL that adds each to a live
-# table: the Phase 6 GitHub mirror, the §3.6 import columns, and the Phase 7
-# per-stage dispatch record. Every one is nullable or defaulted, so backfilling
-# an existing board is a no-op: a pre-Phase-6 card simply has no issue and no
-# body, a pre-Phase-7 one no stage runs.
+# Columns added to ``cards`` after Phase 1: the Phase 6 GitHub mirror, the §3.6
+# import columns, and the Phase 7 per-stage dispatch record. Every one is
+# nullable or defaulted, so backfilling an existing board is a no-op: a
+# pre-Phase-6 card simply has no issue and no body, a pre-Phase-7 one no stage
+# runs.
+#
+# The value is the clause AFTER the type, and ONLY that. The type itself is
+# rendered from the model column by ``db.add_column_ddl`` rather than restated
+# here, because when it was restated it disagreed -- four datetime columns said
+# TIMESTAMP where the models say DateTime (#316). What is left is what the model
+# does not carry: the nullability and backfill DEFAULT that exist purely because
+# this is an ALTER against a table that already has rows, and that ``create_all``
+# has no use for. Empty string = nothing beyond the type, which is most of them.
 _LATE_COLUMNS = {
-    "issue_ref": "VARCHAR(256)",
-    "issue_state": "VARCHAR(16)",
-    "labels": "JSON NOT NULL DEFAULT '[]'",
-    "github_sync_error": "VARCHAR(512)",
-    "stage_runs": "JSON NOT NULL DEFAULT '{}'",
-    "description": "TEXT",
-    # TIMESTAMP, not DATETIME: PostgreSQL has no DATETIME, and SQLite accepts
-    # any type name.
-    "deleted_at": "TIMESTAMP",
+    "issue_ref": "",
+    "issue_state": "",
+    "labels": "NOT NULL DEFAULT '[]'",
+    "github_sync_error": "",
+    "stage_runs": "NOT NULL DEFAULT '{}'",
+    "description": "",
+    "deleted_at": "",
     # Phase 8: which repository this card targets. NULL = the tenant default, so
     # every existing card keeps behaving exactly as it did.
-    "repository_id": "INTEGER",
+    "repository_id": "",
     # Factory#375: when this card's comment thread was last read in full. NULL on
     # every existing card, which is exactly what it means — never read — so the
     # next poll backfills rather than claiming an empty thread is complete.
-    "comments_synced_at": "TIMESTAMP",
+    "comments_synced_at": "",
 }
 
 # The same guard for ``tenant_git_config``, which RFC-0020 phase 2 shipped and
 # phase 3 gave one more column. A live board created by phase 2 already HAS the
 # table, so ``create_all`` will not add it and every config read would fail.
-_LATE_CONFIG_COLUMNS = {"credential_rejected": "BOOLEAN"}
+_LATE_CONFIG_COLUMNS = {"credential_rejected": ""}
 
 # And for ``card_import_state``, which #374 gives the poll lease. A board created
 # by §3.6 already HAS the table, so ``create_all`` will not add the column and
 # every watermark read would fail.
-_LATE_IMPORT_STATE_COLUMNS = {"poll_leased_until": "TIMESTAMP", "last_polled_at": "TIMESTAMP"}
+_LATE_IMPORT_STATE_COLUMNS = {"poll_leased_until": "", "last_polled_at": ""}
 
 # And for ``tenant_git_credential``, which phase 8 moves from per-tenant to
 # per-connection. Both columns are added UNSET, which is exactly what a legacy
 # record is: no connection yet, and the pre-phase-8 tenant-only crypto binding.
 # ``adopt_legacy_git_config`` fills them in at boot.
-_LATE_CREDENTIAL_COLUMNS = {"connection_id": "INTEGER", "aad_version": "INTEGER DEFAULT 1"}
+_LATE_CREDENTIAL_COLUMNS = {"connection_id": "", "aad_version": "DEFAULT 1"}
 
 # The per-tenant unique index phase 8 replaces: one credential per tenant is
 # exactly the limitation being removed, so it has to GO on a live database and
@@ -610,18 +680,20 @@ def _ensure_late_columns(engine: Engine) -> None:
     from sqlalchemy import inspect, text  # noqa: PLC0415 — init-time only
 
     inspector = inspect(engine)
-    for table, columns in (
-        (GitConfigRow.__tablename__, _LATE_CONFIG_COLUMNS),
-        (GitCredentialRow.__tablename__, _LATE_CREDENTIAL_COLUMNS),
-        (ImportStateRow.__tablename__, _LATE_IMPORT_STATE_COLUMNS),
+    for model, columns in (
+        (GitConfigRow, _LATE_CONFIG_COLUMNS),
+        (GitCredentialRow, _LATE_CREDENTIAL_COLUMNS),
+        (ImportStateRow, _LATE_IMPORT_STATE_COLUMNS),
     ):
+        table = model.__tablename__
         if not inspector.has_table(table):
             continue
         present = {c["name"] for c in inspector.get_columns(table)}
         with engine.begin() as conn:
-            for name, ddl in columns.items():
+            for name, tail in columns.items():
                 if name not in present:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                    ddl = add_column_ddl(model, name, tail, engine.dialect)
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {ddl}"))
     for index in _DROPPED_INDEXES:
         # Its own transaction, and survivable: a database that never had the index
         # (a fresh create_all) must not fail boot because a DROP found nothing.
@@ -633,12 +705,13 @@ def _ensure_late_columns(engine: Engine) -> None:
     if not inspector.has_table(CardRow.__tablename__):
         return
     existing = {c["name"] for c in inspector.get_columns(CardRow.__tablename__)}
-    missing = {name: ddl for name, ddl in _LATE_COLUMNS.items() if name not in existing}
+    missing = {name: tail for name, tail in _LATE_COLUMNS.items() if name not in existing}
     # No early return when nothing is missing: the indexes below still have to be
     # ensured on a board whose columns were added by an earlier release.
     with engine.begin() as conn:
-        for name, ddl in missing.items():
-            conn.execute(text(f"ALTER TABLE cards ADD COLUMN {name} {ddl}"))
+        for name, tail in missing.items():
+            ddl = add_column_ddl(CardRow, name, tail, engine.dialect)
+            conn.execute(text(f"ALTER TABLE cards ADD COLUMN {ddl}"))
     for statement in _LATE_INDEXES:
         # Each in its own transaction: a board that already holds two cards
         # pointing at ONE issue (nothing forbade it before this index) cannot

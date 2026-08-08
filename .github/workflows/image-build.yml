@@ -27,6 +27,23 @@
 #     image was actually produced (`docker image inspect`) and actually runs. The
 #     frontend smoke asserts the Vite bundle is non-empty inside the image, which
 #     is precisely what a bad Node major bump would break.
+#
+# CFactory#329 — this gate built both Dockerfiles and never scanned them. The
+# repo's only Trivy gate was in deploy.yml, on `push: branches: [main]`, i.e.
+# AFTER merge. Deploy run 31193027802 duly failed on two fixable HIGHs and left
+# `main` merged-but-undeployed until someone fixed it forward (#328), with every
+# PR check on the offending commit green because none of them looked. This is
+# the class tests/test_deploy_trigger_covers_baked_files.py already ruled on:
+# Factory#525 settled that post-merge is a strictly worse place to find it.
+#
+# Defence in depth, NOT a replacement. deploy.yml keeps its gate exactly as it
+# is, and must: it scans the PUSHED image by digest, which is the artifact that
+# actually ships, and it catches drift between merge and deploy that no PR-time
+# scan can see. What this adds is the common case — a dependency or base-image
+# bump that introduces a fixable HIGH — caught in the PR that proposes it, by
+# the person who can most cheaply fix it. The flags are copied from deploy.yml
+# character for character so the two gates cannot drift into disagreeing about
+# what "clean" means; tests/test_trivy_gates.py asserts that they have not.
 
 name: Image build (PR gate)
 
@@ -102,6 +119,21 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Install Trivy (PR-time CVE gate)
+        uses: aquasecurity/setup-trivy@v0.2.6
+        with:
+          version: latest
+
+      # The lockfile scan, run here as well as in deploy.yml. It needs no image,
+      # so it costs a few seconds and fails before either build. `.trivyignore`
+      # at the repo root is auto-read by both, so an audited exception is
+      # honoured identically in the PR gate and at deploy.
+      - name: Trivy scan frontend lockfile (bundled JS deps, incl. dev)
+        run: |
+          trivy fs --scanners vuln --include-dev-deps \
+            --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 apps/frontend-web/package-lock.json
+
       # amd64 only, matching deploy.yml — the p510 k3d cluster is amd64.
       - name: Build backend Dockerfile (no push)
         uses: docker/build-push-action@v6
@@ -121,6 +153,11 @@ jobs:
           docker image inspect "${BACKEND_TAG}" > /dev/null
           docker run --rm "${BACKEND_TAG}" \
             python -c 'import cfactory.app; print("cfactory backend image ok")'
+
+      - name: Trivy scan backend image (fixable HIGH/CRITICAL)
+        run: |
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "${BACKEND_TAG}"
 
       - name: Build cockpit frontend Dockerfile (no push)
         uses: docker/build-push-action@v6
@@ -148,3 +185,8 @@ jobs:
             test -d /usr/share/nginx/html/assets
             echo "cfactory frontend image ok"
           '
+
+      - name: Trivy scan frontend image (fixable HIGH/CRITICAL)
+        run: |
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "${FRONTEND_TAG}"

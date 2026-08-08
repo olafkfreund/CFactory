@@ -84,6 +84,11 @@ class AdapterError(RuntimeError):
     """Raised when an upstream service is unreachable or returns an error."""
 
 
+# The one status code that means "the upstream answered, and there is no such
+# object". Every other failure means we could not tell — see _get_detail (#249).
+_HTTP_NOT_FOUND = 404
+
+
 class BaseHTTPAdapter:
     """Thin synchronous HTTP client over one service's REST API.
 
@@ -119,15 +124,29 @@ class BaseHTTPAdapter:
             raise AdapterError(f"{self.service.value}: GET {path} failed: {exc}") from exc
 
     def _get_detail(self, path: str) -> dict[str, Any] | None:
-        """Best-effort GET returning the JSON object, or ``None`` on error / non-dict.
+        """GET one object, telling "not there" apart from "could not tell" (#249).
 
-        Shared by the per-service detail wrappers (session/task/test) so the
-        cockpit's detail drawer degrades rather than errors.
+        ``None`` means the upstream *answered* and there is no such object (404),
+        or answered with something that is not an object. Every other failure —
+        transport error, timeout, 5xx, auth reject — raises :class:`AdapterError`.
+
+        The distinction is the whole point: this is shared by the per-service
+        detail wrappers (session/task/test), and the cockpit picks the furthest
+        stage that "exists". Returning ``None`` for an unreachable upstream made a
+        network blip indistinguishable from a stage that never ran, so the
+        task-detail DAG silently downgraded to an earlier stage and latched there.
+        Callers that want the old degrade-don't-error behaviour catch
+        ``AdapterError`` themselves — and must render the stage as *unknown*, not
+        as absent.
         """
         try:
-            data = self._get_json(path)
-        except AdapterError:
-            return None
+            resp = self._client.get(path)
+            if resp.status_code == _HTTP_NOT_FOUND:
+                return None
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPError as exc:
+            raise AdapterError(f"{self.service.value}: GET {path} failed: {exc}") from exc
         return data if isinstance(data, dict) else None
 
     @staticmethod

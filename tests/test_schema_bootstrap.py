@@ -121,6 +121,75 @@ def test_the_migrations_and_the_models_agree(tmp_path):
     assert _schema(migrated) == _schema(created)
 
 
+def test_a_database_the_late_column_guards_built_agrees_too(tmp_path):
+    """The THIRD schema shape: the one an ALTER made, not a CREATE TABLE (#316).
+
+    ``test_the_migrations_and_the_models_agree`` above compares two shapes, and
+    on a fresh database the late-column guards never fire -- ``create_all`` has
+    already made every column, so the guards find nothing missing and their DDL
+    is never executed. Every real deployment is the other case: the table was
+    created by an older release and the guards ALTERed the columns in one at a
+    time.
+
+    That third shape used to match neither of the other two. The guards restated
+    each column's type as a literal, and for the four datetime columns the
+    literal said ``TIMESTAMP`` where the models say ``DateTime`` -- which renders
+    as ``DATETIME``. Inert on SQLite (both names carry NUMERIC affinity) and not
+    inert on PostgreSQL, which has no ``DATETIME`` type at all. It also put a
+    hole in the equality #308 stamps the live database on the strength of.
+
+    So this rewinds a created database to before the late columns existed, lets
+    the guards put them back, and asserts the result is the schema ``create_all``
+    would have produced. Delete ``add_column_ddl``'s rendering and restate
+    ``deleted_at`` as ``"TIMESTAMP"`` and this test says
+    ``live=TIMESTAMP head=DATETIME`` -- which is #316, reproduced.
+    """
+    from cfactory import cards as cards_mod
+
+    guarded = f"sqlite:///{tmp_path / 'guarded.db'}"
+    created = f"sqlite:///{tmp_path / 'created.db'}"
+    _bootstrap_with_create_all(created)
+    _bootstrap_with_create_all(guarded)
+
+    late = {
+        "cards": cards_mod._LATE_COLUMNS,
+        "tenant_git_config": cards_mod._LATE_CONFIG_COLUMNS,
+        "tenant_git_credential": cards_mod._LATE_CREDENTIAL_COLUMNS,
+        "card_import_state": cards_mod._LATE_IMPORT_STATE_COLUMNS,
+        "work_items": {"tenant_id": ""},
+    }
+    engine = create_engine(guarded)
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, columns in late.items():
+            # An index over a column being dropped blocks the drop on SQLite, and
+            # every one of them is in the guards' own re-create list.
+            for index in inspector.get_indexes(table):
+                if set(index["column_names"]) & set(columns):
+                    conn.execute(text(f"DROP INDEX IF EXISTS {index['name']}"))
+            for name in columns:
+                conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {name}"))  # noqa: S608 — module constants
+    engine.dispose()
+    assert "deleted_at" not in _schema(guarded)["cards"]["columns"], "the rewind must bite"
+
+    _bootstrap_with_create_all(guarded)  # the guards run here, and only here
+
+    # Reported per column rather than as two whole schemas: the failure this
+    # exists to describe is one column's declared type, and a diff of two
+    # 30-table dicts buries it. #316's own report was `cards.deleted_at
+    # live=TIMESTAMP head=DATETIME`, so that is the line it prints.
+    got, want = _schema(guarded), _schema(created)
+    drift = [
+        f"{table}.{column} guard-built={got[table]['columns'].get(column)!r} "
+        f"create_all={declared!r}"
+        for table, shape in want.items()
+        for column, declared in shape["columns"].items()
+        if got[table]["columns"].get(column) != declared
+    ]
+    assert not drift, "\n".join(drift)
+    assert got == want, "the guards also have to leave the indexes where create_all puts them"
+
+
 def test_adopting_leaves_no_revision_pending(url):
     """After adoption the database is AT head, not merely labelled with it: a
     following upgrade has nothing to do and must not touch the schema."""

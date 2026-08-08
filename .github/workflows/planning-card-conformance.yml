@@ -30,6 +30,25 @@ name: planning-card conformance gate
 # default, pattern, bounds) and compares those. Descriptions are deliberately
 # not compared, which is what keeps the contract's reasoning hand-written.
 #
+# FOUR SUBJECTS, NOT ONE (#323). The pydantic models are the deep comparison
+# above. This repo states the same shape THREE more times by hand, and all three
+# had drifted by the time the models stopped drifting:
+#
+#   openapi.yaml         `components.schemas.Card` declared 15 of 22 fields, and
+#                        both write bodies `$ref`'d the RESOURCE -- telling a
+#                        client to POST `tenant_id`, which #322 now rejects.
+#   api.ts `CardSchema`  no `deleted_at`, no `github_sync_error`. `.passthrough()`
+#                        meant nothing broke: the fields arrived and were binned.
+#   mcp.py BOARD_TOOLS   a fourth statement of which fields are writable.
+#
+# Those three are compared on FIELD NAMES in both directions, plus `required` on
+# openapi.yaml where the keyword means the same thing. Not on facets: three
+# languages with three vocabularies for nullability, and re-implementing three
+# type systems inside a gate buys nothing over catching the drift that actually
+# happens, which is a field that is simply not there. The MCP tools are
+# one-directional -- offering FEWER fields than the model accepts is a deliberate
+# tool split, offering MORE is a 422 at runtime.
+#
 # TO CHANGE THE CARD SHAPE: land the change in the hub contract FIRST, in a
 # CODEOWNERS-reviewed PR that carries the reasoning in the field's description.
 # Then change the model here and bump HUB_PIN_SHA below to the hub commit that
@@ -115,16 +134,22 @@ jobs:
           python-version: "3.13"
 
       - name: Install backend deps
-        # The comparator IMPORTS cfactory.cards and asks pydantic what the
-        # models render to, rather than parsing the file: an AST reading would
-        # have to re-implement pydantic's type resolution, and what is worth
-        # comparing is what FastAPI actually serves. So the backend's real
-        # dependency set has to be present. If it is not, the gate exits 2 with
-        # "could not load cfactory.cards" -- never a silent pass, because a
-        # check that cannot see its subject has to say so (Factory#500).
+        # The comparator IMPORTS cfactory.cards and cfactory.mcp and asks
+        # pydantic what the models render to, rather than parsing the files: an
+        # AST reading would have to re-implement pydantic's type resolution, and
+        # what is worth comparing is what FastAPI actually serves. So the
+        # backend's real dependency set has to be present. If it is not, the gate
+        # exits 2 with "could not load cfactory.cards" -- never a silent pass,
+        # because a check that cannot see its subject has to say so
+        # (Factory#500).
+        #
+        # PyYAML explicitly, for openapi.yaml (#323). It is present transitively
+        # today, and a gate that depends on a transitive dependency is one
+        # unrelated bump away from exiting 2 for a reason nobody will connect to
+        # this file. Naming it costs a line.
         run: |
           python -m pip install --upgrade pip
-          pip install -r service/apps/backend/requirements.txt
+          pip install -r service/apps/backend/requirements.txt PyYAML
 
       - name: Prove the comparator itself is not always-green
         # Run BEFORE the real comparison, and blocking. The comparator lives in

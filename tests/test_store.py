@@ -56,6 +56,116 @@ def test_repeated_snapshot_same_status_preserves_updated_at(store):
     assert store.get("hung").tfactory.status == "triaged"
 
 
+# --- #257: a poll must not erase what only an event can carry -----------------
+
+
+def _usage_event(key: str = "451") -> CompletionEvent:
+    """A real AIFactory terminal completion: status + token accounting together."""
+    return CompletionEvent(
+        correlation_key=key,
+        service=Service.AIFACTORY,
+        task_id="proj:spec-1",
+        status="in_progress",
+        phase="coding",
+        updated_at=datetime(2026, 6, 4, 12, 0, tzinfo=UTC),
+        usage={
+            "input_tokens": 8580964,
+            "output_tokens": 53013,
+            "total_tokens": 8633977,
+            "cost_usd": 1.661583,
+            "model": "claude-haiku-4-5-20251001",
+        },
+    )
+
+
+def test_poll_does_not_erase_usage(store):
+    """THE DEFECT (#257): `upsert_snapshot` replaced the whole slice, and a polled
+    snapshot is structurally blind to token accounting — it always carries
+    usage=None. So within one 3-second poll of real usage landing, it was gone, and
+    Mission Control's cost widgets read empty on a busy cluster."""
+    store.upsert_from_event(_usage_event())
+    assert store.get("451").aifactory.usage.total_tokens == 8633977
+
+    # The very next poll of the same task: same status, no usage (it cannot know).
+    store.upsert_snapshot(
+        "451", Service.AIFACTORY, ServiceState(task_id="proj:spec-1", status="in_progress")
+    )
+    usage = store.get("451").aifactory.usage
+    assert usage is not None, "a poll erased usage it could not have known"
+    assert usage.total_tokens == 8633977
+    assert usage.cost_usd == 1.661583
+
+
+def test_poll_with_a_real_status_change_still_keeps_usage(store):
+    """The carry-forward must survive a poll that DOES write (status changed) —
+    that is the path that actually did the erasing."""
+    store.upsert_from_event(_usage_event())
+    store.upsert_snapshot(
+        "451", Service.AIFACTORY, ServiceState(task_id="proj:spec-1", status="done")
+    )
+    wi = store.get("451")
+    assert wi.aifactory.status == "done"  # the poll's real news still applies
+    assert wi.aifactory.usage.total_tokens == 8633977
+
+
+def test_poll_preserves_the_per_worker_rollups(store):
+    """`workers` / `by_provider` / `by_model` are event-only too, and feed the
+    billing-mode split in the Usage-by-task panel."""
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="452",
+            service=Service.AIFACTORY,
+            task_id="proj:spec-2",
+            status="in_progress",
+            phase="worker",
+            updated_at=datetime(2026, 6, 4, 12, 0, tzinfo=UTC),
+            worker={
+                "worker_id": "main",
+                "provider": "anthropic",
+                "model": "claude-haiku-4-5-20251001",
+                "total_tokens": 1000,
+                "cost_usd": 0.5,
+                "billing_mode": "api",
+            },
+        )
+    )
+    assert store.get("452").aifactory.workers  # sanity: the event landed
+    store.upsert_snapshot(
+        "452", Service.AIFACTORY, ServiceState(task_id="proj:spec-2", status="in_progress")
+    )
+    slice_ = store.get("452").aifactory
+    assert slice_.workers, "a poll erased the per-worker map"
+    assert slice_.by_provider, "a poll erased the provider rollup"
+
+
+def test_poll_still_writes_status_and_phase(store):
+    """Mutation check, other direction: carrying accounting forward must not turn
+    the poll into a no-op. A poll's whole job is to report the current status."""
+    store.upsert_from_event(_usage_event())
+    store.upsert_snapshot(
+        "451", Service.AIFACTORY, ServiceState(task_id="proj:spec-1", status="failed", phase="pr")
+    )
+    slice_ = store.get("451").aifactory
+    assert slice_.status == "failed"
+    assert slice_.phase == "pr"
+
+
+def test_poll_usage_wins_when_the_poll_actually_has_some(store):
+    """Mutation check: the carry-forward is a fallback for a BLANK field, not a
+    freeze. If a snapshot ever does carry usage, it must take precedence."""
+    store.upsert_from_event(_usage_event())
+    store.upsert_snapshot(
+        "451",
+        Service.AIFACTORY,
+        ServiceState(
+            task_id="proj:spec-1",
+            status="in_progress",
+            usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, "cost_usd": 0.01},
+        ),
+    )
+    assert store.get("451").aifactory.usage.total_tokens == 3
+
+
 def test_events_across_services_thread_one_workitem(store):
     store.upsert_from_event(_event(Service.PFACTORY, "planned"))
     store.upsert_from_event(_event(Service.AIFACTORY, "coding"))

@@ -92,10 +92,36 @@ async def execute_prepared_action(
 
 @router.get("/api/audit")
 def list_audit(audit: Annotated[AuditStore, Depends(audit_dep)]) -> dict[str, object]:
-    """Recent confirmed actions, newest first — the human-in-the-loop trail."""
+    """Recent confirmed actions, newest first — the human-in-the-loop trail.
+
+    ``attribution`` says what this trail is CAPABLE of naming, and it exists
+    because the actor column alone cannot say (#251 part b). Every row here
+    reads ``unattributed:key-<digest>`` in two very different situations: no IdP
+    is configured, so no row will EVER name a person; or one is, and the tokens
+    are silently failing to verify. A compliance reader asking "who approved
+    this" must be able to tell those apart — the trail is sold as EU AI Act
+    Article 14 human oversight, whose whole point is a named human, and a
+    surface that stays quiet about naming nobody is the same defect
+    :func:`ChainLine` was written for: it reads healthy while it knows nothing.
+
+    ``oidc``
+        An issuer is configured, so a confirmed action CAN be attributed to the
+        person who confirmed it. Rows still fall back to the key reference for
+        any request that arrived without a verifiable ID token.
+    ``unattributed``
+        No issuer. Every actor is a shared client, never a person. "Who
+        approved this" is unanswerable here and must not be presented as
+        satisfied.
+
+    Deliberately configuration, not a live probe: answering "are tokens
+    verifying right now" would mean a JWKS round-trip on a polled read. The
+    residual — issuer set but verification failing — is visible anyway, because
+    the reader has been told to expect ``user:`` actors and sees none.
+    """
     entries = audit.list()
     return {
         "count": len(entries),
+        "attribution": "oidc" if get_settings().oidc_issuer else "unattributed",
         "entries": [e.model_dump(mode="json") for e in entries],
     }
 

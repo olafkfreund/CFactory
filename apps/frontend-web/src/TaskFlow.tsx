@@ -30,17 +30,30 @@ import {
 import { useNow } from "./motion";
 import { IconRobot } from "./icons";
 
-const STAGE_ACCENT: Record<ProcessGraph["stage"], string> = {
+// Keyed by `Stage`, NOT by `ProcessGraph["stage"]`, which is now an open
+// `string` on the wire (#339). These maps say what this build knows how to
+// paint; `stageLabel` / `stageAccent` below are how anything holding a raw
+// stage name asks them, and they answer for names that are not in here.
+const STAGE_ACCENT: Record<Stage, string> = {
   plan: "var(--plan)",
   code: "var(--code)",
   test: "var(--test)",
 };
 
-const STAGE_LABEL: Record<ProcessGraph["stage"], string> = {
+const STAGE_LABEL: Record<Stage, string> = {
   plan: "Plan",
   code: "Code",
   test: "Test",
 };
+
+// A stage name straight off the wire may be one this build predates. Show the
+// raw name rather than a blank, and a neutral accent rather than a colour that
+// would claim it is one of the three we know (Factory#431: "unknown" beats a
+// plausible token). The DAG itself is entirely renderable either way — nothing
+// about drawing nodes and edges depends on which stage produced them.
+const stageLabel = (stage: string): string => (isStage(stage) ? STAGE_LABEL[stage] : stage);
+const stageAccent = (stage: string): string =>
+  isStage(stage) ? STAGE_ACCENT[stage] : "var(--border)";
 
 // A cubic bezier from the right edge of the source card to the left edge of the
 // target card — a gentle S-curve that reads cleanly even when columns stack.
@@ -159,46 +172,98 @@ function Legend({ counts }: { counts: Record<FlowStatus, number> }) {
 // test). The modal shows the furthest stage by default but lets you flip to any
 // available stage — so the plan DAG stays viewable after coding begins.
 const SWITCH_ORDER: Array<"plan" | "code" | "test"> = ["plan", "code", "test"];
+type Stage = (typeof SWITCH_ORDER)[number];
+
+const isStage = (s: string): s is Stage => (SWITCH_ORDER as string[]).includes(s);
+
+// A stage the backend could not fetch (#249). Rendered INSTEAD of the diagram, and
+// never in place of it: the old behaviour dropped the unreachable stage entirely,
+// which promoted an earlier stage to "furthest" and showed a finished plan while a
+// build was in flight — a wrong answer wearing a right answer's clothes. "We could
+// not tell" is the only honest thing to draw here (Factory#431).
+function StageUnknown({ stage }: { stage: Stage }) {
+  return (
+    <section className="td-section tf" data-testid={`tf-unknown-${stage}`}>
+      <div className="tf-head">
+        <h3>
+          <span className="tf-stage-dot" style={{ background: "var(--border)" }} />
+          {STAGE_LABEL[stage]} flow
+          <span className="tf-progress">unknown</span>
+        </h3>
+      </div>
+      <div className="td-empty">
+        <b>{STAGE_LABEL[stage]} stage unknown</b> — {stage} did not answer, so its
+        progress cannot be read right now. This is not &ldquo;no work&rdquo; and not
+        &ldquo;finished&rdquo;; retry shortly.
+      </div>
+    </section>
+  );
+}
 
 export function StageFlow({
   graphs,
   fallback,
   stageDone,
+  unreachable,
 }: {
-  graphs?: Partial<Record<"plan" | "code" | "test", ProcessGraph>> | undefined;
+  // Raw stage-keyed map from the API. The KEY type is open (#339), matching
+  // `unreachable` below and for the same reason: a stage name this build has
+  // never heard of must not be able to reject the payload it arrived in. The
+  // narrowing happens two lines into the body — `SWITCH_ORDER.filter` only ever
+  // looks up the three stages this build can draw, so an unfamiliar key is
+  // simply never asked for.
+  graphs?: Record<string, ProcessGraph> | undefined;
   fallback?: ProcessGraph | null | undefined;
   // Per-stage "the stage itself is complete" flag, keyed by stage. Drives the
   // green frame + "stage complete" cue on the DAG — a signal that lives at the
   // stage level (the work-item status), distinct from the per-node states (which
   // stay honest: a planned-but-unverified AC node is not painted done).
-  stageDone?: Partial<Record<"plan" | "code" | "test", boolean>> | undefined;
+  stageDone?: Partial<Record<Stage, boolean>> | undefined;
+  // Stage names whose upstream fetch failed. Raw strings from the API (the wire
+  // type is open on purpose — see ProcessDetailSchema); unknown names are dropped
+  // here rather than rejected at parse time.
+  unreachable?: string[] | undefined;
 }) {
-  const available = SWITCH_ORDER.filter((s) => graphs?.[s]);
-  const furthest = available.at(-1) ?? null;
-  const [sel, setSel] = useState<"plan" | "code" | "test" | null>(null);
+  const unknown = new Set((unreachable ?? []).filter(isStage));
+  // Tabs = every stage we have a graph for, PLUS every stage we could not reach.
+  // Keeping the unreachable stage as a tab is the fix for the latch in #249: the
+  // selection can no longer be silently invalidated by a transient fetch failure,
+  // so it never resets to an earlier stage, and the user keeps a way back.
+  const tabs = SWITCH_ORDER.filter((s) => graphs?.[s] || unknown.has(s));
+  const furthest = tabs.at(-1) ?? null;
+  const tabKey = tabs.join(",");
+  const [sel, setSel] = useState<Stage | null>(null);
 
   // Default to the furthest stage; keep the selection valid as data streams in.
   useEffect(() => {
-    setSel((cur) => (cur && graphs?.[cur] ? cur : furthest));
-  }, [furthest, graphs]);
+    const valid = tabKey ? tabKey.split(",") : [];
+    setSel((cur) => (cur && valid.includes(cur) ? cur : furthest));
+  }, [tabKey, furthest]);
 
-  // No multi-stage map → render the single furthest graph (back-compat).
-  if (!available.length)
+  // Nothing to switch between → render the single furthest graph (back-compat).
+  if (!tabs.length)
     return fallback ? (
-      <TaskFlow graph={fallback} stageDone={stageDone?.[fallback.stage]} />
+      // `fallback.stage` is a raw wire string, so it may name a stage this
+      // build predates — in which case there is no completion flag to look up
+      // and the diagram simply renders without one. It still renders (#339).
+      <TaskFlow
+        graph={fallback}
+        stageDone={isStage(fallback.stage) ? stageDone?.[fallback.stage] : false}
+      />
     ) : null;
 
-  const cur = sel && graphs?.[sel] ? sel : furthest!;
+  const cur = sel && tabs.includes(sel) ? sel : furthest!;
+  const curGraph = graphs?.[cur];
   return (
     <div className="tf-stack">
-      {available.length > 1 && (
+      {tabs.length > 1 && (
         <div className="tf-switch" role="tablist" aria-label="Stage">
-          {available.map((s) => (
+          {tabs.map((s) => (
             <button
               key={s}
               role="tab"
               aria-selected={cur === s}
-              className={`tf-switch-tab tf-switch-tab--${s}${cur === s ? " on" : ""}`}
+              className={`tf-switch-tab tf-switch-tab--${s}${cur === s ? " on" : ""}${unknown.has(s) && !graphs?.[s] ? " tf-switch-tab--unknown" : ""}`}
               onClick={() => setSel(s)}
             >
               {STAGE_LABEL[s]}
@@ -206,7 +271,11 @@ export function StageFlow({
           ))}
         </div>
       )}
-      <TaskFlow graph={graphs![cur]} stageDone={stageDone?.[cur]} />
+      {curGraph ? (
+        <TaskFlow graph={curGraph} stageDone={stageDone?.[cur]} />
+      ) : (
+        <StageUnknown stage={cur} />
+      )}
     </div>
   );
 }
@@ -298,7 +367,7 @@ export default function TaskFlow({
 
   if (!graph || !layout || layout.placed.length === 0) return null;
 
-  const accent = STAGE_ACCENT[graph.stage];
+  const accent = stageAccent(graph.stage);
   const total = layout.placed.length;
   const done = counts.done;
   const hasLive = counts.active > 0 || counts.stalled > 0;
@@ -308,7 +377,7 @@ export default function TaskFlow({
       <div className="tf-head">
         <h3>
           <span className="tf-stage-dot" style={{ background: accent }} />
-          {STAGE_LABEL[graph.stage]} flow
+          {stageLabel(graph.stage)} flow
           <span className="tf-progress">
             {done}/{total}
           </span>

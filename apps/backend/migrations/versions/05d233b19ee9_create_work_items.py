@@ -1,7 +1,7 @@
 """create work_items
 
 Revision ID: 05d233b19ee9
-Revises: 
+Revises:
 Create Date: 2026-06-04 16:36:47.067843
 
 """

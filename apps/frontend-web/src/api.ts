@@ -1138,10 +1138,15 @@ export const FlowNodeSchema = z.object({
 });
 export type FlowNode = z.infer<typeof FlowNodeSchema>;
 
-const StageSchema = z.enum(["plan", "code", "test"]);
-
 export const ProcessGraphSchema = z.object({
-  stage: StageSchema,
+  // OPEN, deliberately — not the closed plan|code|test enum this used to be
+  // (#339, Factory#431). `fetchProcess` runs through `getJson`, which calls
+  // `schema.parse` and throws, so the first producer to emit a fourth stage
+  // would have taken the ENTIRE process detail down: not just its own graph,
+  // but the plan and code DAGs beside it that parse perfectly well. The stages
+  // this build understands are narrowed once at the render site (`isStage` in
+  // TaskFlow.tsx), which is the only place the distinction means anything.
+  stage: z.string(),
   nodes: z.array(FlowNodeSchema),
   title: z.string().nullable().optional(),
 });
@@ -1199,7 +1204,19 @@ export const ProcessDetailSchema = z.object({
   // `graph` is the furthest stage (default view); `graphs` carries every available
   // stage so the modal can switch between plan / code / test.
   graph: ProcessGraphSchema.nullable().optional(),
-  graphs: z.record(StageSchema, ProcessGraphSchema).optional(),
+  // Open KEY type for the same reason as `stage` above (#339). Opening one
+  // without the other fixes nothing: a `{"deploy": {...}}` entry fails on the
+  // key AND on the graph's own `stage` field, so a closed enum in either
+  // position is the same outage at a different line number.
+  graphs: z.record(z.string(), ProcessGraphSchema).optional(),
+  // Stages whose upstream did NOT answer (#249). Absent from `graphs` means "no
+  // such stage"; named here means "we could not tell" — the cockpit must render
+  // those as unknown, never fall back to an earlier stage that happens to still
+  // be fetchable. Deliberately `z.string()` and not the closed StageSchema enum:
+  // `getJson` throws on a parse failure, so a stage name this build has never
+  // heard of would take the whole process detail down with it (Factory#431).
+  // Unknown names are filtered out at the render site instead.
+  unreachable: z.array(z.string()).optional(),
   branch: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
   // Browser-lane test evidence captured by TFactory: screenshot + recording file
@@ -1390,13 +1407,30 @@ export async function fetchAuditChain(): Promise<ChainReport> {
   return getJson("/api/audit/chain", ChainReportSchema, "audit chain");
 }
 
-export async function fetchAudit(): Promise<AuditEntry[]> {
+// `| undefined` spelled out: the repo runs `exactOptionalPropertyTypes`, under
+// which `attribution?: string` forbids explicitly assigning undefined — and an
+// older backend omitting the field is exactly that case.
+export type AuditPage = { entries: AuditEntry[]; attribution?: string | undefined };
+
+export async function fetchAudit(): Promise<AuditPage> {
   const data = await getJson(
     "/api/audit",
-    z.object({ count: z.number(), entries: z.array(AuditEntrySchema) }),
+    z.object({
+      count: z.number(),
+      entries: z.array(AuditEntrySchema),
+      // What the trail can NAME (#251 part b). Optional because the frontend
+      // and backend images roll separately — an older backend simply omits it,
+      // and an absent field must not render as either reassurance or alarm.
+      //
+      // Deliberately `string`, not a closed enum: a stricter attribution mode
+      // added later must not make this response fail to parse and blank the
+      // whole Audit view (#431). Anything unrecognised says nothing, which is
+      // the honest answer to a value this build does not understand.
+      attribution: z.string().optional(),
+    }),
     "audit",
   );
-  return data.entries;
+  return { entries: data.entries, attribution: data.attribution };
 }
 
 export const ConnectTokenSchema = z.object({
@@ -1519,6 +1553,17 @@ export const CardSchema = z
     repository_id: z.number().nullish(),
     issue_state: z.string().nullish(),
     labels: z.array(z.string()).default([]),
+    // Why the last sync with the git host failed, or null when it succeeded.
+    // The board could not show this before because it did not model it (#323):
+    // `.passthrough()` meant the field arrived and was thrown away, so a card
+    // whose mirror is stale looked exactly like one that is current. Modelling
+    // it is what makes rendering it possible; nothing renders it yet.
+    // Always null on anything a read hands back - a soft-deleted card is off the
+    // board. Modelled because the field is on the wire and this schema is the
+    // board's statement of what a card IS; a reader should not have to open
+    // openapi.yaml to find out that a card has a tombstone.
+    github_sync_error: z.string().nullish(),
+    deleted_at: z.string().nullish(),
     // Per-stage dispatch records, keyed by stage name. Optional so a card served
     // by a pre-Phase-7 backend still parses.
     stage_runs: z.record(CardStageSchema, StageRunSchema).default({}),

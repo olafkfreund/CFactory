@@ -78,8 +78,34 @@ export function ChainLine({ chain, err }: { chain: ChainReport | null; err: stri
   );
 }
 
+/** What this trail can NAME, stated rather than left to be inferred (#251 part b).
+ *
+ * Every ACTOR cell reads `unattributed:key-<digest>` in two situations a
+ * compliance reader must not confuse: no IdP is configured, so no row will ever
+ * name a person; or one is, and tokens are quietly failing to verify. The
+ * column looks identical either way. This flow is sold as EU AI Act Article 14
+ * human oversight, whose whole point is a NAMED human, so staying silent about
+ * naming nobody is the same defect `ChainLine` exists for — reading healthy
+ * while knowing nothing.
+ *
+ * Renders only on an explicit `unattributed`. An absent field (older backend)
+ * or an unrecognised value says nothing: a build that does not understand the
+ * answer must not invent either a reassurance or an alarm. */
+export function AttributionLine({ attribution }: { attribution?: string | undefined }) {
+  if (attribution !== "unattributed") return null;
+  return (
+    <p className="mc-note">
+      <span className="status-pill warn"><span className="dot" /> names a client, not a person</span>{" "}
+      No identity provider is configured, so every actor below is the shared API client that
+      acted. This trail cannot answer &ldquo;who approved this&rdquo; — do not present it as
+      human oversight until an OIDC issuer is set.
+    </p>
+  );
+}
+
 export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [attribution, setAttribution] = useState<string | undefined>(undefined);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [chain, setChain] = useState<ChainReport | null>(null);
   const [chainErr, setChainErr] = useState<string | null>(null);
@@ -90,7 +116,7 @@ export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
       .then(setActivity)
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
     fetchAudit()
-      .then((e) => { setEntries(e); setErr(null); })
+      .then((p) => { setEntries(p.entries); setAttribution(p.attribution); setErr(null); })
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
     // Its own state: a failed chain check must not blank the trail, and a failed
     // trail read must not leave the verdict looking answered.
@@ -134,6 +160,7 @@ export default function AuditView({ reloadSignal }: { reloadSignal: number }) {
       <h2 className="panel-title audit-actions-title">Confirmed actions</h2>
       <p className="mc-note">Human-in-the-loop write actions executed against an upstream.</p>
       <ChainLine chain={chain} err={chainErr} />
+      <AttributionLine attribution={attribution} />
       <div className="table">
         <div className="table-head">
           <span>ACTION</span><span>TARGET</span><span>RESULT</span><span>ACTOR</span><span className="ta-r">TIME</span>

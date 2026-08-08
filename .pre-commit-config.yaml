@@ -1,0 +1,196 @@
+# CFactory pre-commit hooks (#345).
+#
+# WHAT THIS IS FOR: catching, before you push, the things `code-quality.yml`
+# would have failed you for after. Nothing here is a NEW rule. Every hook runs
+# the same command the corresponding CI job runs, so a green pre-commit means
+# the same tool at the same version reached the same verdict locally.
+#
+# NOT PORTED FROM A SIBLING. TFactory's and PFactory's configs were the starting
+# point per the issue, and almost none of either survived contact:
+#
+#   * their `version-sync` hook rewrites package.json, __init__.py and README
+#     badges and `git add`s the result mid-commit. CFactory has no root
+#     package.json and no release-badge scheme, so the hook has nothing to sync
+#     and a hook that mutates the tree behind the author is not something to
+#     adopt speculatively.
+#   * their `pytest` hook carries ~40 `--ignore` lines of tests it cannot run.
+#     A gate with a forty-line exclusion list is not telling you much.
+#   * both reference `apps/frontend`; this repo's frontend is
+#     `apps/frontend-web`.
+#
+# So this mirrors CFactory's own CI instead, which is the only definition of
+# "green" that means anything here.
+#
+# EVERYTHING IS PINNED, and that is the point (AIFactory#1162, PFactory#452,
+# which both found hooks resolving their formatter from venv-or-PATH - pinned to
+# nothing, so the gate's verdict depended on whatever the author happened to
+# have installed). Ruff comes from its own pre-commit repo at a `rev` that MUST
+# equal `RUFF_VERSION` in code-quality.yml; the frontend hooks run npm scripts,
+# whose tools resolve out of `node_modules` and are therefore pinned by
+# `apps/frontend-web/package-lock.json`, the same file CI installs from.
+#
+# `core.hooksPath` IS NOT SET on this repo and there is no `.husky/` directory -
+# checked before writing this file. That matters because in PFactory it WAS set,
+# pointing at `.husky`, which meant pre-commit's installed hook never ran and the
+# carefully pinned config sat dormant. If you ever add husky here, this file
+# stops running silently.
+#
+#     pip install pre-commit && pre-commit install
+#     pre-commit run --all-files      # first run over the existing tree
+#
+# WHAT IS DELIBERATELY ABSENT:
+#
+#   mypy      CI ratchets it (`ratchet_lint.py --tool mypy`), and doing that
+#             locally needs mypy AT CI's VERSION plus the backend's whole
+#             dependency set - `mypy --strict` cannot resolve imports without it,
+#             and a run that cannot resolve imports reports different errors.
+#             Measured on this machine: `mypy --version` is 2.1.0 while
+#             code-quality.yml pins 1.20.1. A hook that answers from whatever
+#             mypy is on PATH is pinned to nothing (AIFactory#1162,
+#             PFactory#452), and a gate that disagrees with the blocking job is
+#             worse than no gate - it teaches people to ignore it. CI runs this
+#             one; it is blocking; leave it there.
+#   pytest    `Backend pytest` is a required check already and the suite is too
+#             slow to sit in front of every commit. The frontend suite is ~2s, so
+#             that one IS here.
+#   prettier --write
+#             NEVER. `apps/frontend-web/src/index.css` is hand-authored and
+#             outside prettier's scope (CLAUDE.md, CONTRIBUTING.md). The
+#             `format:check` hook below runs `npm run format:check`, which
+#             checks prettier's four declared files and writes nothing at all.
+#             Do not "improve" this into a formatting hook.
+
+repos:
+  # Ruff. `rev` MUST match RUFF_VERSION in .github/workflows/code-quality.yml -
+  # a local ruff on a different version can disagree with the blocking job, which
+  # is the exact failure a pre-commit gate exists to prevent.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      # `ruff format --check` over these two trees is already a blocking CI job
+      # and already green, so this only ever fires on something you just wrote.
+      #
+      # NO `--fix` ANYWHERE in this file. The siblings pass it to `ruff`; it
+      # rewrites your staged files mid-commit, and an auto-fix you did not read
+      # is a change you did not make. Run `ruff check --fix` yourself.
+      - id: ruff-format
+        args: [--config, ruff.toml]
+        files: ^(apps/backend/cfactory|scripts)/.*\.py$
+
+  # `ruff check`, ratcheted - NOT whole-file. This is the hook the issue said
+  # would fail its first run, and it does: a plain `ruff check` over
+  # `apps/backend/cfactory` reports 66 violations spread across 26 files, which
+  # is very nearly every backend module. Those are legacy, they are catalogued in
+  # #356, and `code-quality.yml` tolerates them ON PURPOSE - its gate is
+  # `ratchet_lint.py`, which blocks NET-NEW violations in a changed file and
+  # leaves the existing backlog alone. A whole-file hook here would be a HARSHER
+  # bar than the blocking CI job, failing you for debt someone else wrote in a
+  # file you merely touched. That is not a stricter gate, it is a gate people
+  # start passing with `--no-verify`.
+  #
+  # So it runs the repo's OWN ratchet - the same script, the same arguments CI
+  # uses - rather than a second, different opinion about the same code.
+  #
+  # AT pre-push, NOT pre-commit, and that distinction is load-bearing: the
+  # ratchet diffs `{base}...HEAD` with `git diff`, so it reads COMMITTED content.
+  # Run at commit time it would score the commit BEFORE the one you are making
+  # and cheerfully pass a commit that adds violations. At push time HEAD is
+  # exactly what you are about to send, which is what CI will score.
+  #
+  #     pre-commit install --hook-type pre-push     # needed for this one
+  #
+  # `additional_dependencies` pins ruff INSIDE pre-commit's own venv, so this
+  # hook does not care what `ruff` is on your PATH. It must equal RUFF_VERSION in
+  # code-quality.yml and the `rev` above.
+  - repo: local
+    hooks:
+      - id: ruff-ratchet
+        name: ruff ratchet vs origin/dev (net-new violations only)
+        entry: python scripts/ratchet_lint.py --base origin/dev --package apps/backend/cfactory --package scripts
+        language: python
+        additional_dependencies: ["ruff==0.15.17"]
+        files: ^(apps/backend/cfactory|scripts)/.*\.py$
+        pass_filenames: false
+        stages: [pre-push]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # THE TWO WHITESPACE FIXERS MUST NOT TOUCH THE VENDORED TREES, and this is
+      # not a style preference - it is the difference between this config being
+      # safe to install and it turning a green repo red.
+      #
+      # `apps/backend/runners/github/**`, `scripts/`, `standards/` and
+      # `_contracts/factory_contracts` are BYTE-EXACT copies of Factory hub
+      # canonicals, each guarded by a blocking drift gate
+      # (factory-github-drift.yml, verification-core-drift.yml, and the `drift`
+      # job in code-quality.yml). `end-of-file-fixer` on the first run wanted to
+      # strip three trailing blank lines from
+      # `runners/github/providers/http_github_provider.py`; the hub canonical at
+      # the pinned SHA 084b167d ends `...issue_number)\n\n\n\n`, verified by
+      # byte dump, so that "fix" is a drift failure with a tidy diff.
+      #
+      # verification-core-drift.yml states the rule outright: "Never edit a
+      # vendored copy to satisfy a local style bar - the copies are governed by
+      # this byte-exact gate, not the repo style bar." A formatter that has not
+      # been told about the vendored trees will do exactly that, silently, on
+      # someone's unrelated commit. This is the recorded fleet gotcha
+      # (pre-commit fights byte-identical vendoring), pre-empted.
+      - id: trailing-whitespace
+        # Markdown uses two trailing spaces as a hard line break.
+        args: [--markdown-linebreak-ext=md]
+        exclude: &vendored ^(apps/backend/runners/github/|scripts/|standards/|apps/backend/cfactory/_contracts/)
+      - id: end-of-file-fixer
+        exclude: *vendored
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-yaml
+        # `catalog-info.yaml` is a FOUR-document stream (`---` at lines 4, 46 and
+        # 71) and Backstage reads it that way. Without this flag the hook reports
+        # "expected a single document in the stream" on a file that is valid YAML
+        # and valid Backstage - a false positive, so this is the hook being
+        # configured correctly rather than being let off.
+        args: [--allow-multiple-documents]
+        # Helm templates are Go templates, not YAML - `{{ .Values.x }}` at the
+        # start of a value is a parse error, so a YAML parser cannot read them
+        # and failing them here would say nothing about whether they are correct.
+        exclude: ^charts/
+      - id: check-json
+        # tsconfig files are JSONC (the baseline carries a `"//"` key and block
+        # comments); a strict JSON parser rejects them.
+        exclude: ^(standards/tsconfig\.base\.json|apps/frontend-web/tsconfig.*\.json)$
+
+  # Frontend. `language: system` running the repo's own npm scripts, so the
+  # versions are whatever `package-lock.json` pins - the same install CI does.
+  # Requires `just ui-install` (or `npm ci`) to have been run; if node_modules is
+  # missing these fail loudly rather than skipping, which is the correct way
+  # round for a gate.
+  - repo: local
+    hooks:
+      - id: frontend-lint
+        name: ESLint (apps/frontend-web)
+        entry: bash -c 'cd apps/frontend-web && npm run lint'
+        language: system
+        files: ^apps/frontend-web/.*\.(ts|tsx|js|jsx)$
+        pass_filenames: false
+
+      - id: frontend-format-check
+        name: Prettier --check (apps/frontend-web, CHECK only - never --write)
+        entry: bash -c 'cd apps/frontend-web && npm run format:check'
+        language: system
+        files: ^apps/frontend-web/.*\.(ts|tsx|js|json)$
+        pass_filenames: false
+
+      - id: frontend-typecheck
+        name: TypeScript --noEmit (apps/frontend-web)
+        entry: bash -c 'cd apps/frontend-web && npm run typecheck'
+        language: system
+        files: ^apps/frontend-web/.*\.(ts|tsx)$
+        pass_filenames: false
+
+      - id: frontend-test
+        name: Vitest (apps/frontend-web)
+        entry: bash -c 'cd apps/frontend-web && npm test'
+        language: system
+        files: ^apps/frontend-web/.*\.(ts|tsx)$
+        pass_filenames: false

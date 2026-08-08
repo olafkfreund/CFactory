@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import httpx
 from fastapi.testclient import TestClient
@@ -254,41 +254,73 @@ def test_plan_nodes_stay_pending_while_plan_in_review(store):
     assert all(n["status"] is None for n in out["graph"]["nodes"])
 
 
-_TEST_DETAIL = {
-    "id": "tspec-1",
-    "spec_id": "tspec-1",
-    "title": "Verify /status endpoint",
+# TFactory's real test-plan shape (#260): the lane-tagged subtasks are nested under
+# `phases[].subtasks[]` and served from /api/tfactory/tasks/{spec}/test-plan.json.
+# `chunks` is TFactory's back-compat duplicate of `subtasks` and is included here on
+# purpose — the flattener must ignore it or every lane's count doubles.
+_TEST_PLAN = {
+    "feature": "Verify /status endpoint",
     "status": "in_progress",
-    "phase": "browser",
-    "subtasks": [
+    "updated_at": "2026-06-05T12:04:00Z",
+    "phases": [
         {
-            "id": "u1",
-            "lane": "unit",
-            "status": "completed",
-            "started_at": "2026-06-05T12:00:00Z",
-            "completed_at": "2026-06-05T12:02:00Z",
+            "phase": 1,
+            "name": "core",
+            "subtasks": [
+                {
+                    "id": "u1",
+                    "lane": "unit",
+                    "status": "completed",
+                    "started_at": "2026-06-05T12:00:00Z",
+                    "completed_at": "2026-06-05T12:02:00Z",
+                },
+                {
+                    "id": "u2",
+                    "lane": "unit",
+                    "status": "completed",
+                    "started_at": "2026-06-05T12:01:00Z",
+                    "completed_at": "2026-06-05T12:03:00Z",
+                },
+            ],
+            "chunks": [
+                {
+                    "id": "u1",
+                    "lane": "unit",
+                    "status": "completed",
+                    "started_at": "2026-06-05T12:00:00Z",
+                    "completed_at": "2026-06-05T12:02:00Z",
+                },
+                {
+                    "id": "u2",
+                    "lane": "unit",
+                    "status": "completed",
+                    "started_at": "2026-06-05T12:01:00Z",
+                    "completed_at": "2026-06-05T12:03:00Z",
+                },
+            ],
         },
         {
-            "id": "u2",
-            "lane": "unit",
-            "status": "completed",
-            "started_at": "2026-06-05T12:01:00Z",
-            "completed_at": "2026-06-05T12:03:00Z",
+            "phase": 2,
+            "name": "surface",
+            "subtasks": [
+                {
+                    "id": "b1",
+                    "lane": "browser",
+                    "status": "in_progress",
+                    "started_at": "2026-06-05T12:03:30Z",
+                },
+                {"id": "m1", "lane": "mutation", "status": "stuck"},
+            ],
         },
-        {
-            "id": "b1",
-            "lane": "browser",
-            "status": "in_progress",
-            "started_at": "2026-06-05T12:03:30Z",
-        },
-        {"id": "m1", "lane": "mutation", "status": "stuck"},
     ],
 }
 
 
-def _test_transport(payload=_TEST_DETAIL, status=200):
+def _test_transport(payload=_TEST_PLAN, status=200):
+    """TFactory answering the test-plan route the lane graph is actually built from."""
+
     def handle(request: httpx.Request) -> httpx.Response:
-        if request.url.path.startswith("/api/tasks/"):
+        if request.url.path == "/api/tfactory/tasks/tspec-1/test-plan.json":
             return httpx.Response(status, json=payload)
         return httpx.Response(404, json={})
 
@@ -330,6 +362,53 @@ def test_build_process_emits_test_lane_graph(store):
     assert by_id["mutation"]["status"] == "stalled"  # stuck → stalled
 
 
+def test_test_graph_is_built_from_the_test_plan_route(store):
+    """THE DEFECT (#260): the lane graph was fetched from `/api/tasks/{spec}` — the
+    generic agent-task store, which requires a `project:spec` key and answers 400 to
+    the bare spec id CFactory holds. Measured live: 400 for all 8 specs on the
+    cluster, at every status. So no work item ever exposed `graphs.test`.
+
+    Here the ONLY route answered is the test-plan one. A graph coming back proves
+    the fetch goes where the lane data actually lives."""
+    _seed_test(store)
+
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/api/tfactory/tasks/tspec-1/test-plan.json":
+            return httpx.Response(200, json=_TEST_PLAN)
+        # Everything else behaves like the real TFactory: the old path 400s.
+        return httpx.Response(400, json={"detail": "Invalid task ID format"})
+
+    tf = TFactoryAdapter("http://tf", transport=httpx.MockTransport(handle))
+    out = build_process_detail(store, [tf], "11")
+    assert out["graphs"]["test"]["stage"] == "test"
+    assert "/api/tfactory/tasks/tspec-1/test-plan.json" in seen
+    assert "/api/tasks/tspec-1" not in seen  # the endpoint that could never answer
+
+
+def test_test_graph_ignores_the_chunks_duplicate(store):
+    """TFactory emits `phases[].chunks` as a byte-identical duplicate of
+    `phases[].subtasks`. Reading both would double every lane's membership, so the
+    unit lane must count 2 members, not 4 — the count is user-visible in the label."""
+    _seed_test(store)
+    tf = TFactoryAdapter("http://tf", transport=_test_transport())
+    out = build_process_detail(store, [tf], "11")
+    by_id = {n["id"]: n for n in out["graph"]["nodes"]}
+    assert by_id["unit"]["label"] == "Unit (2/2)"
+
+
+def test_test_stage_absent_when_the_spec_has_no_plan(store):
+    """Mutation check, other direction: a spec with no test plan (404 — e.g.
+    `planner_failed`, measured live) must yield no test stage at all rather than an
+    empty diagram. Absent is the honest answer when the upstream says "not there"."""
+    _seed_test(store)
+    tf = TFactoryAdapter("http://tf", transport=_test_transport(status=404))
+    out = build_process_detail(store, [tf], "11")
+    assert "graphs" not in out or "test" not in out.get("graphs", {})
+
+
 def _evidence_transport():
     """Mock that also answers the evidence manifest GET with screenshots + videos."""
 
@@ -345,8 +424,8 @@ def _evidence_transport():
                     }
                 },
             )
-        if path.startswith("/api/tasks/"):
-            return httpx.Response(200, json=_TEST_DETAIL)
+        if path == "/api/tfactory/tasks/tspec-1/test-plan.json":
+            return httpx.Response(200, json=_TEST_PLAN)
         return httpx.Response(404, json={})
 
     return httpx.MockTransport(handle)
@@ -425,6 +504,96 @@ def test_build_process_emits_all_stage_graphs(store):
     assert out["graph"]["stage"] == "code"  # furthest stage is the default view
 
 
+# --- #249: unreachable is not absent ----------------------------------------
+
+
+def _seed_plan_and_code(store, key="21"):
+    """One work item mid-build: PFactory plan emitted, AIFactory still coding."""
+    for service, task_id, status in (
+        (Service.PFACTORY, "sess-1", "emitted"),
+        (Service.AIFACTORY, "proj:spec-1", "in_progress"),
+    ):
+        store.upsert_from_event(
+            CompletionEvent(
+                correlation_key=key,
+                service=service,
+                task_id=task_id,
+                status=status,
+                phase="coding",
+                updated_at=datetime.now(UTC),
+            )
+        )
+
+
+def _down_transport():
+    """AIFactory unreachable at the transport layer — the #249 reproduction."""
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    return httpx.MockTransport(handle)
+
+
+def test_unreachable_code_stage_is_named_not_dropped(store):
+    """THE DEFECT (#249): with AIFactory unreachable mid-build, the code stage used
+    to vanish from `graphs`, which promoted plan to "furthest present" — the cockpit
+    then showed a completed plan for the whole duration of a running build. The
+    stage is now named in `unreachable`, so the UI can say unknown."""
+    _seed_plan_and_code(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    ai = AIFactoryAdapter("http://ai", transport=_down_transport())
+    out = build_process_detail(store, [pf, ai], "21")
+    # The downgrade still happens to the legacy top-level fields (back-compat)...
+    assert set(out["graphs"].keys()) == {"plan"}
+    # ...but it is no longer silent: the consumer is told which stage it can't see.
+    assert out["unreachable"] == ["code"]
+
+
+def test_absent_stage_is_not_reported_unreachable(store):
+    """Mutation check, the other direction: a 404 means the task genuinely is not
+    there. That must NOT be reported as unreachable, or every plan-only item would
+    claim a phantom code stage it never had."""
+    _seed_plan_and_code(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    # _detail_transport answers non-/api/tasks/ paths with 404; point it at a 404
+    # for the task itself by using the plan transport's base behaviour.
+    ai = AIFactoryAdapter("http://ai", transport=_plan_transport())  # 404s /api/tasks/*
+    out = build_process_detail(store, [pf, ai], "21")
+    assert set(out["graphs"].keys()) == {"plan"}
+    assert "unreachable" not in out
+
+
+def test_upstream_5xx_is_unreachable_not_absent(store):
+    """A 5xx is the upstream failing to answer, not answering "no such task"."""
+    _seed_plan_and_code(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    ai = AIFactoryAdapter("http://ai", transport=_detail_transport(status=500))
+    out = build_process_detail(store, [pf, ai], "21")
+    assert out["unreachable"] == ["code"]
+
+
+def test_all_stages_reachable_carries_no_unreachable_key(store):
+    """Mutation check: the key is absent entirely on a healthy fetch, so a consumer
+    can't be nudged into rendering doubt where there is none."""
+    _seed_plan_and_code(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    ai = AIFactoryAdapter("http://ai", transport=_detail_transport())
+    out = build_process_detail(store, [pf, ai], "21")
+    assert set(out["graphs"].keys()) == {"code", "plan"}
+    assert "unreachable" not in out
+
+
+def test_fallback_says_unreachable_not_detail_unavailable(store):
+    """With nothing fetchable at all, the reason distinguishes "the upstream did not
+    answer" from "there was nothing to show" (#249)."""
+    _seed(store)
+    ai = AIFactoryAdapter("http://ai", transport=_down_transport())
+    out = build_process_detail(store, [ai], "7")
+    assert out["available"] is False
+    assert out["reason"] == "unreachable"
+    assert out["unreachable"] == ["code"]
+
+
 def test_build_process_no_work_item(store):
     out = build_process_detail(store, [], "nope")
     assert out["available"] is False
@@ -436,7 +605,9 @@ def test_build_process_service_down_falls_back_to_slice(store):
     ai = AIFactoryAdapter("http://ai", transport=_detail_transport(status=500))
     out = build_process_detail(store, [ai], "7")
     assert out["available"] is False
-    assert out["reason"] == "detail_unavailable"
+    # A 500 is the upstream failing to answer, so the reason names that rather
+    # than the vaguer "detail_unavailable", which also covers "nothing to show".
+    assert out["reason"] == "unreachable"  # was detail_unavailable before #249
     assert out["status"] == "coding"  # slice state still surfaced
 
 

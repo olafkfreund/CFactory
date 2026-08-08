@@ -126,6 +126,127 @@ def test_invalid_status_is_rejected(client):
     assert resp.status_code == 422
 
 
+# ── a blank acceptance criterion is not a criterion (#324) ───────────────────
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_acceptance_criterion_is_refused_on_create(client, blank):
+    """When a `ready` card dispatches these become the RFC-0002 task contract's
+    acceptance criteria, and a blank one is satisfied by anything - a green
+    verdict against nothing, which reads like a check that ran."""
+    resp = client.post("/api/cards", json={"title": "t", "acceptance_criteria": ["real", blank]})
+
+    assert resp.status_code == 422
+    assert "acceptance_criteria" in resp.text
+    assert client.get("/api/cards").json()["count"] == 0
+
+
+def test_a_blank_acceptance_criterion_is_refused_on_patch(client):
+    client.post("/api/cards", json={"card_key": "FCT-1", "title": "t"})
+
+    resp = client.patch("/api/cards/FCT-1", json={"acceptance_criteria": [""]})
+
+    assert resp.status_code == 422
+    assert client.get("/api/cards/FCT-1").json()["acceptance_criteria"] == []
+
+
+def test_real_criteria_still_round_trip_and_an_empty_list_is_still_legal(client):
+    """The other direction, and the two shapes the rule must NOT refuse: an
+    empty list (legal while planning - the contract says so) and entries with
+    ordinary internal whitespace."""
+    created = client.post(
+        "/api/cards",
+        json={"card_key": "FCT-3", "title": "t", "acceptance_criteria": ["  the board loads  "]},
+    )
+    assert created.status_code == 201
+    # Trimmed, not rejected: `strip_whitespace` runs before the length bound.
+    assert created.json()["acceptance_criteria"] == ["the board loads"]
+
+    assert client.post("/api/cards", json={"title": "planning"}).status_code == 201
+    empty = client.post(
+        "/api/cards", json={"card_key": "FCT-5", "title": "t", "acceptance_criteria": []}
+    )
+    assert empty.status_code == 201
+    assert empty.json()["acceptance_criteria"] == []
+# ── unknown fields are rejected, not dropped (#322) ──────────────────────────
+
+
+def test_a_server_owned_field_in_a_create_body_is_refused(client):
+    """`tenant_id` is derived from the credential and appears in no request
+    schema. Sending it used to be accepted with the key silently discarded, so
+    the caller was told a write it did not get had landed."""
+    resp = client.post("/api/cards", json={"title": "t", "tenant_id": "someone-else"})
+
+    assert resp.status_code == 422
+    assert "tenant_id" in resp.text
+    # And the write did not half-happen: nothing was created from the rest.
+    assert client.get("/api/cards").json()["count"] == 0
+
+
+def test_a_misspelled_field_in_a_patch_body_is_refused(client):
+    """The case that costs a human an afternoon: `assignees` for `assignee`,
+    answered 200 with nothing changed.
+
+    The body carries a VALID field beside the typo on purpose. `{"assignees":
+    "olaf"}` alone would also be refused with `extra="ignore"` restored -- the
+    minProperties guard below would catch the resulting empty patch -- so a
+    single-key body cannot tell the two rules apart, and this test would pass
+    while the rule it names was gone.
+    """
+    client.post("/api/cards", json={"card_key": "FCT-1", "title": "t"})
+
+    resp = client.patch("/api/cards/FCT-1", json={"milestone": "v1", "assignees": "olaf"})
+
+    assert resp.status_code == 422
+    assert "assignees" in resp.text
+    # Not half-applied either: the valid field beside the typo did not land.
+    body = client.get("/api/cards/FCT-1").json()
+    assert body["assignee"] is None
+    assert body["milestone"] is None
+
+
+def test_a_body_of_only_known_fields_still_works(client):
+    """The other direction. `extra="forbid"` must reject the unknown key and
+    nothing else -- every field the model declares still round-trips, including
+    the two POST accepts that read like server-owned ones and are not."""
+    resp = client.post(
+        "/api/cards",
+        json={
+            "card_key": "FCT-7",
+            "title": "t",
+            "description": "body",
+            "acceptance_criteria": ["a"],
+            # `backlog`, not `ready`: creating straight into `ready` with a tier
+            # IS the dispatch trigger, and this test is about the body shape.
+            "status": "backlog",
+            "priority": 3,
+            "tier": "low",
+            "assignee": "olaf",
+            "milestone": "m1",
+            "correlation_key": "corr-1",
+            "issue_ref": "o/r#1",
+            "repository_id": None,
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["correlation_key"] == "corr-1"
+    assert client.patch("/api/cards/FCT-7", json={"status": "done"}).status_code == 200
+
+
+def test_an_empty_patch_body_is_refused(client):
+    """The contract's `minProperties: 1`. An empty PATCH used to be accepted and
+    then apply nothing, because the route uses `exclude_unset`."""
+    client.post("/api/cards", json={"card_key": "FCT-2", "title": "t"})
+
+    resp = client.patch("/api/cards/FCT-2", json={})
+
+    assert resp.status_code == 422
+    assert "at least one field" in resp.text
+    # A one-field PATCH is still a PATCH.
+    assert client.patch("/api/cards/FCT-2", json={"priority": 9}).status_code == 200
+
+
 # ── PATCH: move + reprioritise ───────────────────────────────────────────────
 
 

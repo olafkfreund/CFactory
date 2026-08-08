@@ -257,7 +257,11 @@ def test_chain_is_not_folded_into_the_polled_audit_list(db_url):
     app = create_app()
     app.dependency_overrides[audit_dep] = lambda: _store(db_url)
     body = TestClient(app).get("/api/audit").json()
-    assert set(body) == {"count", "entries"}
+    # Named rather than a whole-key-set equality: the point is that the EXPENSIVE
+    # full-table verdict is absent, not that no cheap field may ever be added
+    # (`attribution` is one, and it costs a settings read).
+    assert not {"verdict", "findings", "rows", "acknowledged_forks"} & set(body)
+    assert set(body) == {"count", "entries", "attribution"}
 
 
 def test_chain_never_serves_the_hmac_secret(db_url):

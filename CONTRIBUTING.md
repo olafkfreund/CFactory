@@ -11,9 +11,11 @@ of glass across PFactory, AIFactory and TFactory.
 
 ## How to ask for help
 
-- **Questions / discussion** → [GitHub Discussions](https://github.com/olafkfreund/CFactory/discussions) (or open a `question` issue)
+[SUPPORT.md](SUPPORT.md) is the full map. The short version:
+
+- **Questions / discussion** → [open an issue](https://github.com/olafkfreund/CFactory/issues/new). This repo does **not** have GitHub Discussions enabled, so there is no discussion forum to point you at.
 - **Bugs** → [open an issue](https://github.com/olafkfreund/CFactory/issues/new)
-- **Security issues** → email the maintainer directly; do **not** open a public issue
+- **Security issues** → follow [SECURITY.md](SECURITY.md); do **not** open a public issue. There is no security email address for this project — do not send a report to an address you found elsewhere and assume it arrives.
 
 ## Development setup
 
@@ -104,6 +106,32 @@ file may not gain violations against the PR base), a whole-repo
 `apps/frontend-web/src/index.css` is hand-authored and deliberately outside the
 prettier scope. Never run `prettier --write` over it.
 
+### pre-commit
+
+`.pre-commit-config.yaml` runs those same gates locally, at the same pinned tool
+versions, so you find out before you push rather than after. It adds no rules of
+its own — a green pre-commit is the same tools reaching the same verdict CI will.
+
+```bash
+pip install pre-commit
+pre-commit install                      # commit-stage hooks
+pre-commit install --hook-type pre-push # the ruff ratchet (needs both)
+pre-commit run --all-files              # optional: whole tree, ~20s
+```
+
+Both `install` commands are needed. The ruff ratchet compares `origin/dev...HEAD`
+with `git diff`, so it reads committed content and only means anything at push
+time; the rest run per commit on the files you staged.
+
+Frontend hooks call this repo's own npm scripts, so `just ui-install` must have
+been run — otherwise they fail rather than skip, which is the correct way round.
+
+Read the comments in that file before changing it. Two of the exclusions are
+load-bearing rather than cosmetic: the vendored trees (`apps/backend/runners/
+github/`, `scripts/`, `standards/`, `_contracts/`) are byte-exact hub copies
+under blocking drift gates, and a whitespace fixer let loose on them turns a
+green repo red with a tidy-looking diff.
+
 ## Maintainers
 
 Branch protection on `main` and `dev` is declared as code in the Factory hub, in
@@ -123,14 +151,21 @@ the repo, because reading branch protection is an admin-only endpoint. A schedul
 job in the hub runs check mode across the fleet daily, so drift surfaces without
 anyone having to remember to look.
 
-What is protected:
+What is protected — but read [#351](https://github.com/olafkfreund/CFactory/issues/351)
+first. Three rows of this table do not match what the two branches carry today:
+a third check (`vendored copies match the hub canonical (byte-exact)`) is
+required on both, and `main` has no `required_pull_request_reviews` block at
+all, so neither the approving review nor conversation resolution is in force.
+Reconciling that means deciding what the protection *should* be and re-applying
+it with an admin token, which is why it is a separate issue rather than a
+correction here.
 
 | | `main` | `dev` |
 | --- | --- | --- |
 | Required CI checks | `Backend pytest`, `Frontend typecheck + build` | same |
 | Branch must be up to date | yes | no |
 | Approving reviews | 1 | none |
-| Code-owner review | no (no `CODEOWNERS` file yet) | no |
+| Code-owner review | no (a `CODEOWNERS` file exists; the setting that would enforce it is off) | no |
 | Conversation resolution | yes | no |
 | Force-push / deletion | blocked | blocked |
 

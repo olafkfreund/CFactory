@@ -2,13 +2,31 @@
 #
 # This is a HAND-MAINTAINED subset registered in the Backstage software catalog.
 # The live, authoritative contract is the FastAPI app's own GET /openapi.json
-# (served by apps/backend/cfactory/app.py). Keep the two in rough sync; prefer
-# the live spec when they disagree.
+# (served by apps/backend/cfactory/app.py). Prefer the live spec when they
+# disagree.
+#
+# "Keep the two in ROUGH sync" is what this line used to say, and rough sync is
+# what it got: the Card schema below described 15 of the 22 fields the service
+# serves, five of them ones the model marks required, and both the POST and the
+# PATCH body pointed at the RESOURCE - telling a client to send `tenant_id`,
+# `created_at` and `updated_at`, which the service now rejects (#322). So the
+# CARD half of this document is no longer kept in rough sync by hand: the
+# planning-card conformance gate compares `Card`, `CardCreate`, `CardUpdate` and
+# the `GET /api/cards` 200 body against the hub contract on every pull request
+# (#323). Field names and `required`, in both directions. Everything else here
+# is still hand-maintained and still only as accurate as the last person to
+# touch it.
 openapi: 3.0.3
 info:
   title: CFactory API
   version: 0.1.0
-  summary: Agentic control-tower cockpit over the PARR pipeline.
+  # NO `summary:` HERE. It is a 3.1 key and this document declares 3.0.3, where
+  # `info` is `additionalProperties: false` with a `^x-` escape hatch, so the
+  # key was simply invalid (#348). It carried "Agentic control-tower cockpit
+  # over the PARR pipeline" - a shorter restatement of the `description` below,
+  # so nothing was lost by dropping it. The alternative was moving the document
+  # to 3.1, which is not a one-line change: `nullable: true` appears throughout
+  # and 3.1 spells that as a type union.
   description: >-
     Read-first, advise-and-confirm cockpit over the three Factory services
     (PFactory · AIFactory · TFactory). Ingests normalized completion events,
@@ -400,6 +418,10 @@ paths:
             application/json:
               schema:
                 type: object
+                # `count`, not `total`: the length of `cards` in THIS response,
+                # not a total across pages. An envelope rather than a bare array
+                # so pagination and echoed filters can be added additively.
+                required: [count, cards]
                 properties:
                   count: { type: integer }
                   cards:
@@ -415,7 +437,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Card" }
+            schema: { $ref: "#/components/schemas/CardCreate" }
       responses:
         "201":
           description: The created card.
@@ -610,7 +632,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GitConfig" }
-        "400": { description: Unknown provider, unaddressable project path, non-http base_url, or an intake-trigger label. }
+        # QUOTED, and it has to be: inside YAML flow style the commas are
+        # separators, so the unquoted sentence parsed as a four-key map whose
+        # `description` was the two words "Unknown provider" and whose other
+        # three keys were fragments with null values (#348).
+        "400": { description: "Unknown provider, unaddressable project path, non-http base_url, or an intake-trigger label." }
         "403": { description: The tenant in the path is not the caller's tenant. }
 
   /api/tenants/{tenant}/git-config:verify:
@@ -663,7 +689,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Card" }
+            schema: { $ref: "#/components/schemas/CardUpdate" }
       responses:
         "200":
           description: The updated card.
@@ -724,7 +750,10 @@ paths:
                           type: string
                           description: The provider's own id; re-import is idempotent on it.
                         author: { type: string }
-                        body: { type: string, description: Markdown, rendered as inert nodes. }
+                        # Quoted for the same reason as the git-config 400 above
+                        # (#348): unquoted, this parsed as a Schema Object with
+                        # a stray `rendered as inert nodes.` key.
+                        body: { type: string, description: "Markdown, rendered as inert nodes." }
                         url: { type: string }
                         created_at: { type: string, format: date-time }
                         updated_at: { type: string, format: date-time }
@@ -734,6 +763,12 @@ paths:
     get:
       tags: [Audit]
       summary: Recent confirmed actions (the human-in-the-loop trail)
+      description: >-
+        The `actor` on every entry identifies WITHOUT authenticating (#251): it
+        is `user:<email>` for a person proved by a verified OIDC ID token,
+        `unattributed:key-<digest>` for a non-reversible reference to the API
+        key that acted, or `local` in single-user mode. It is never the key
+        itself — a read of this trail must not grant write access to the fleet.
       responses:
         "200":
           description: Audit entries, newest first.
@@ -743,6 +778,16 @@ paths:
                 type: object
                 properties:
                   count: { type: integer }
+                  attribution:
+                    type: string
+                    description: >-
+                      What this trail is CAPABLE of naming (#251 part b).
+                      `oidc` — an issuer is configured, so a confirmed action
+                      can be attributed to the person who confirmed it.
+                      `unattributed` — no issuer, so every actor is a shared
+                      client and "who approved this" is unanswerable; do not
+                      present it as human oversight. Treat an unrecognised
+                      value as unknown, not as either answer.
                   entries: { type: array, items: { type: object } }
 
   /api/audit/chain:
@@ -859,10 +904,22 @@ components:
     Card:
       type: object
       description: >-
-        RFC-0019 §3.1 planning card. Lives in its own `cards` table, NOT on
-        work_items (whose rows the reconcile/prune machinery rewrites and
+        RFC-0019 §3.1 planning card, as SERVED. Lives in its own `cards` table,
+        NOT on work_items (whose rows the reconcile/prune machinery rewrites and
         deletes from upstream polling). `correlation_key` is null while the
         card is only planned and joins work_items once it enters the factory.
+        This is a response schema and is NOT what you POST or PATCH — see
+        `CardCreate` and `CardUpdate`, which omit every field the server owns.
+      required:
+        # The subset a response ALWAYS carries. Narrower than the property list:
+        # the five fields with a model default (`description`, `repository_id`,
+        # `comment_count`, `comments_synced_at`, `deleted_at`) are serialised on
+        # every response but may be absent from a document validated against this
+        # schema. Mirrors `$defs.card.required` in the hub contract, and #323's
+        # gate compares the two.
+        [card_key, tenant_id, title, acceptance_criteria, status, priority, tier,
+         assignee, milestone, correlation_key, issue_ref, issue_state, labels,
+         github_sync_error, stage_runs, created_at, updated_at]
       properties:
         card_key: { type: string, description: "Stable human id, e.g. FCT-42. Unique per tenant." }
         tenant_id: { type: string }
@@ -885,6 +942,64 @@ components:
           description: A human handle or a factory runtime (e.g. "aifactory").
         milestone: { type: string, nullable: true }
         correlation_key: { type: string, nullable: true }
+        issue_ref:
+          type: string
+          nullable: true
+          description: >-
+            The issue this card is the projection of, as "owner/repo#123", or
+            null if it has none yet. Settable on create and patch to ADOPT an
+            existing issue (RFC-0019 §3.5); non-null is also the idempotency
+            guard, so a second sync adopts rather than opening a second issue.
+            Carries no HOST: the board is multi-provider, so a link out is built
+            from the connection this card's repository is reached through.
+        repository_id:
+          type: integer
+          nullable: true
+          description: >-
+            Which of the tenant's repositories this card targets (RFC-0020
+            §3.3). Null means the tenant DEFAULT, which is what every card
+            created before there was more than one means.
+        issue_state:
+          type: string
+          nullable: true
+          description: >-
+            The MIRRORED issue state (`open`/`closed`). NOT a card `status`: an
+            issue can be closed while the card is still in review, and
+            conflating the two is the mistake CardStatus's enum exists to
+            prevent. Read-only on the wire.
+        labels:
+          type: array
+          items: { type: string }
+          description: >-
+            Labels mirrored FROM the issue, read-only on the wire — the host
+            owns them, and a card that could set them would silently diverge.
+            Always an array; an unmirrored card carries [].
+        github_sync_error:
+          type: string
+          nullable: true
+          description: >-
+            Why the last sync with the git host failed, or null when the last
+            one succeeded. Present so a STALE mirror is legible rather than
+            looking like fresh data: the absence of an error and the absence of
+            a sync are different states.
+        stage_runs:
+          type: object
+          description: >-
+            Per-stage dispatch records keyed by stage (`plan`/`code`/`test`),
+            each `{service, status, dispatched_at, ref, detail}`. Read-only on
+            the wire: it records what the factory was actually ASKED to do, so a
+            caller must not be able to assert a dispatch that never happened.
+            This is where per-stage idempotency lives, because `correlation_key`
+            is deliberately reused across stages (RFC-0019 phase 7).
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Soft-delete tombstone. Always null on anything a read hands back — a
+            soft-deleted card is off the board. It exists because the import
+            asks for a card BY ISSUE and has to see the tombstone rather than
+            re-creating a card somebody deleted (RFC-0020 §3.6).
         comment_count:
           type: integer
           description: >-
@@ -903,6 +1018,67 @@ components:
             it means the board does not know, and the two are never conflated.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    CardCreate:
+      type: object
+      description: >-
+        POST /api/cards body. NOT the card resource: `tenant_id`, `created_at`
+        and `updated_at` are server-owned and appear here nowhere, and the four
+        mirrored columns (`issue_state`, `labels`, `github_sync_error`) plus
+        `stage_runs` are absent because a caller must not be able to assert
+        something the host, or the factory, never said. Both bodies used to
+        `$ref` `Card`, which told a client to send exactly those (#323).
+        `card_key` IS accepted: omit it and the store assigns the next
+        `FCT-<n>`, or supply your own to mirror an id from another tracker.
+      required: [title]
+      additionalProperties: false
+      properties:
+        card_key: { type: string, maxLength: 128 }
+        title: { type: string, minLength: 1, maxLength: 512 }
+        description: { type: string, nullable: true, description: Free-form markdown body. }
+        acceptance_criteria:
+          type: array
+          items: { type: string, minLength: 1 }
+          description: >-
+            One testable statement per entry. A blank entry is refused (#324):
+            when the card dispatches these become the RFC-0002 task contract's
+            acceptance criteria, and an empty one is satisfied by anything.
+        status: { $ref: "#/components/schemas/CardStatus" }
+        priority: { type: integer, description: "Lower = higher priority." }
+        tier: { $ref: "#/components/schemas/CardTier" }
+        assignee: { type: string, nullable: true, maxLength: 128 }
+        milestone: { type: string, nullable: true, maxLength: 128 }
+        correlation_key: { type: string, nullable: true, maxLength: 128 }
+        issue_ref:
+          type: string
+          nullable: true
+          maxLength: 256
+          description: Adopt an EXISTING issue instead of opening one (RFC-0019 §3.5).
+        repository_id: { type: integer, nullable: true }
+    CardUpdate:
+      type: object
+      description: >-
+        PATCH /api/cards/{card_key} body: every mutable field, all optional.
+        Only the fields actually PRESENT are applied, so `{"status": "done"}` is
+        a move and `{"priority": 3}` is a reprioritise — one route covers both.
+        `card_key` is absent: it is the path segment and the id other systems
+        quote, so it is immutable. Sending no field at all is a mistake, not a
+        no-op, and is refused (#322).
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 1, maxLength: 512 }
+        description: { type: string, nullable: true }
+        acceptance_criteria:
+          type: array
+          items: { type: string, minLength: 1 }
+        status: { $ref: "#/components/schemas/CardStatus" }
+        priority: { type: integer }
+        tier: { $ref: "#/components/schemas/CardTier" }
+        assignee: { type: string, nullable: true, maxLength: 128 }
+        milestone: { type: string, nullable: true, maxLength: 128 }
+        correlation_key: { type: string, nullable: true, maxLength: 128 }
+        issue_ref: { type: string, nullable: true, maxLength: 256 }
+        repository_id: { type: integer, nullable: true }
     TokenUsage:
       type: object
       description: RFC-0001 v1.1 additive per-stage token/cost usage.

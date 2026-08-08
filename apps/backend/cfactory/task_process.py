@@ -9,7 +9,10 @@ that rather than reaching for the siblings' MCP server (cf. DEC-002).
 
 Best-effort: an unknown key, no task id, or an unreachable service yields
 ``{"available": false}`` (plus whatever slice state we do have) so the drawer
-degrades instead of erroring.
+degrades instead of erroring. Degrading is not the same as guessing: a stage
+whose upstream did not answer is named in ``unreachable`` rather than dropped,
+so the cockpit renders it as *unknown* instead of falling back to an earlier
+stage that happens to still be fetchable (#249).
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from .adapters.aifactory import AIFactoryAdapter
-from .adapters.base import BaseHTTPAdapter
+from .adapters.base import AdapterError, BaseHTTPAdapter
 from .adapters.pfactory import PFactoryAdapter
 from .adapters.tfactory import TFactoryAdapter
 from .store import WorkItemStore
@@ -507,9 +510,33 @@ def build_process_detail(
     ai_adapter = next((a for a in adapters if isinstance(a, AIFactoryAdapter)), None)
     pf_adapter = next((a for a in adapters if isinstance(a, PFactoryAdapter)), None)
 
-    tf_evidence, tdetail_raw, test = _fetch_test_stage(tf_adapter, tf.task_id, correlation_key)
-    code = _fetch_code_stage(ai_adapter, ai.task_id, correlation_key)
-    session_raw, plan = _fetch_plan_stage(pf_adapter, wi.pfactory.task_id, correlation_key, store)
+    # A stage whose upstream did not answer is *unknown*, not absent (#249). Each
+    # fetch is still best-effort, but the failure is recorded by name instead of
+    # collapsing into "no such stage" — otherwise one blip on the code stage makes
+    # the plan stage the furthest present, and the DAG shows a completed plan while
+    # a build is in flight. Unknown must render as unknown (Factory#431).
+    unreachable: list[str] = []
+
+    def _best_effort(stage: str, fn: Any, absent: Any) -> Any:
+        try:
+            return fn()
+        except AdapterError:
+            unreachable.append(stage)
+            return absent
+
+    tf_evidence, tdetail_raw, test = _best_effort(
+        "test",
+        lambda: _fetch_test_stage(tf_adapter, tf.task_id, correlation_key),
+        (None, None, None),
+    )
+    code = _best_effort(
+        "code", lambda: _fetch_code_stage(ai_adapter, ai.task_id, correlation_key), None
+    )
+    session_raw, plan = _best_effort(
+        "plan",
+        lambda: _fetch_plan_stage(pf_adapter, wi.pfactory.task_id, correlation_key, store),
+        (None, None),
+    )
 
     stages: dict[str, dict[str, Any]] = {}  # stage -> normalized process detail
     if test is not None:
@@ -534,6 +561,8 @@ def build_process_detail(
             primary["graphs"] = graphs
         if tf_evidence:
             primary["evidence"] = tf_evidence
+        if unreachable:
+            primary["unreachable"] = unreachable
         primary.update(extras)
         return primary
 
@@ -546,8 +575,10 @@ def build_process_detail(
         "task_id": ai.task_id,
         "status": ai.status,
         "phase": ai.phase,
-        "reason": "detail_unavailable",
+        "reason": "unreachable" if unreachable else "detail_unavailable",
     }
+    if unreachable:
+        fallback["unreachable"] = unreachable
     fallback.update(extras)
     if tf_evidence:
         fallback["evidence"] = tf_evidence

@@ -11,3 +11,10 @@ jsonschema>=4.23
 # ruff absent those cases raise FileNotFoundError rather than skipping, which is
 # loud, which is the point.
 ruff==0.15.17
+# test_ratchet_foreign_errors.py shells out to mypy for the same reason
+# (CFactory#319): the defect it pins exists only in the shape of mypy's real
+# output -- which file each error line names -- so a mock would assert the
+# fixture, not the tool. Pinned to code-quality.yml's MYPY_VERSION, and equally
+# not optional: absent, those cases raise FileNotFoundError rather than
+# skipping.
+mypy==1.20.1

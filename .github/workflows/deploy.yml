@@ -161,9 +161,22 @@ jobs:
       # image (only /app/dist is copied into nginx), so the image scan can't see
       # bundled JS deps. Scan the lockfile directly — this is the layer that
       # caught the Copilot-cache CVE class (Factory#971).
-      - name: Trivy scan frontend lockfile (bundled JS deps)
+      #
+      # `--include-dev-deps` is load-bearing (CFactory#327). Trivy suppresses
+      # devDependencies by default and logs it, and without the flag this step
+      # reported a confident `0` while four fixable HIGHs sat in the lockfile —
+      # one of them an advisory Dependabot had open against this very file. The
+      # default is reasonable in general and wrong for THIS step: it exists
+      # precisely because dev deps do reach the shipped bundle. Vite bundles
+      # whatever the source imports, and the dependencies/devDependencies split
+      # in package.json is a packaging convention, not a statement about what
+      # lands in `dist`. A gate that measures less than its name claims is worse
+      # than an absent one, because the `0` is read as evidence (Factory#642).
+      # tests/test_trivy_gates.py asserts the flag is still here.
+      - name: Trivy scan frontend lockfile (bundled JS deps, incl. dev)
         run: |
-          trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+          trivy fs --scanners vuln --include-dev-deps \
+            --severity HIGH,CRITICAL --ignore-unfixed \
             --exit-code 1 apps/frontend-web/package-lock.json
 
       # ----------------------------------------------------------------------

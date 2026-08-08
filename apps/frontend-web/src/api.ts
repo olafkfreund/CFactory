@@ -1390,13 +1390,30 @@ export async function fetchAuditChain(): Promise<ChainReport> {
   return getJson("/api/audit/chain", ChainReportSchema, "audit chain");
 }
 
-export async function fetchAudit(): Promise<AuditEntry[]> {
+// `| undefined` spelled out: the repo runs `exactOptionalPropertyTypes`, under
+// which `attribution?: string` forbids explicitly assigning undefined — and an
+// older backend omitting the field is exactly that case.
+export type AuditPage = { entries: AuditEntry[]; attribution?: string | undefined };
+
+export async function fetchAudit(): Promise<AuditPage> {
   const data = await getJson(
     "/api/audit",
-    z.object({ count: z.number(), entries: z.array(AuditEntrySchema) }),
+    z.object({
+      count: z.number(),
+      entries: z.array(AuditEntrySchema),
+      // What the trail can NAME (#251 part b). Optional because the frontend
+      // and backend images roll separately — an older backend simply omits it,
+      // and an absent field must not render as either reassurance or alarm.
+      //
+      // Deliberately `string`, not a closed enum: a stricter attribution mode
+      // added later must not make this response fail to parse and blank the
+      // whole Audit view (#431). Anything unrecognised says nothing, which is
+      // the honest answer to a value this build does not understand.
+      attribution: z.string().optional(),
+    }),
     "audit",
   );
-  return data.entries;
+  return { entries: data.entries, attribution: data.attribution };
 }
 
 export const ConnectTokenSchema = z.object({

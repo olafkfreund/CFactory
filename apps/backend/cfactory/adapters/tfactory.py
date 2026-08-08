@@ -22,13 +22,46 @@ class TFactoryAdapter(BaseHTTPAdapter):
     list_path = "/api/tfactory/tasks"
 
     def get_test_detail(self, task_id: str) -> dict[str, Any] | None:
-        """Rich detail for one test task: ``GET /api/tasks/{task_id}``.
+        """Rich detail for one test task, shaped for the lane-pipeline diagram (#94).
 
-        Returns the raw task object — whose ``subtasks`` carry the ``lane`` tag +
-        timing the cockpit aggregates into the test-stage lane pipeline (#94) — or
-        ``None`` when unavailable. Best-effort so the drawer degrades, not errors.
+        The lane-tagged subtasks live in the spec's **test plan**, under
+        ``phases[].subtasks[]``, and the only route that serves it is
+        ``GET /api/tfactory/tasks/{spec}/test-plan.json``.
+
+        This used to call ``GET /api/tasks/{task_id}`` — the generic *agent-task*
+        store, the same one ``list_path`` was already moved off because it is empty
+        for verification runs. That endpoint requires a ``project_id:spec_id`` key
+        and rejects anything else with a 400, while ``_normalize`` hands it a bare
+        spec id. So it answered 400 for every task ever asked about, the subtask
+        list came back empty, and the test graph never rendered for any work item
+        at any status — including fully triaged ones (#260).
+
+        Returns a dict in the shape ``_normalize_test`` expects, or ``None`` when
+        the spec has no plan (a 404 — e.g. ``planner_failed``, where no plan was
+        ever written).
         """
-        return self._get_detail(f"/api/tasks/{task_id}")
+        plan = self._get_detail(f"{_TF_PREFIX}/{task_id}/test-plan.json")
+        if plan is None:
+            return None
+        phases = plan.get("phases")
+        # Deliberately NOT `phases[].chunks`: TFactory emits it as a back-compat
+        # duplicate of `subtasks` with identical contents, so reading both would
+        # double every lane's member count and its "(n/m) done" label.
+        subtasks = [
+            s
+            for p in (phases if isinstance(phases, list) else [])
+            if isinstance(p, dict) and isinstance(p.get("subtasks"), list)
+            for s in p["subtasks"]
+            if isinstance(s, dict)
+        ]
+        return {
+            "id": task_id,
+            "spec_id": task_id,
+            "title": plan.get("feature"),
+            "status": plan.get("status"),
+            "updated_at": plan.get("updated_at"),
+            "subtasks": subtasks,
+        }
 
     def get_evidence_manifest(self, spec_id: str) -> dict[str, list[str]]:
         """Browser-lane media captured for a spec: screenshot + recording file

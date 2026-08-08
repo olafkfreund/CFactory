@@ -106,6 +106,32 @@ file may not gain violations against the PR base), a whole-repo
 `apps/frontend-web/src/index.css` is hand-authored and deliberately outside the
 prettier scope. Never run `prettier --write` over it.
 
+### pre-commit
+
+`.pre-commit-config.yaml` runs those same gates locally, at the same pinned tool
+versions, so you find out before you push rather than after. It adds no rules of
+its own — a green pre-commit is the same tools reaching the same verdict CI will.
+
+```bash
+pip install pre-commit
+pre-commit install                      # commit-stage hooks
+pre-commit install --hook-type pre-push # the ruff ratchet (needs both)
+pre-commit run --all-files              # optional: whole tree, ~20s
+```
+
+Both `install` commands are needed. The ruff ratchet compares `origin/dev...HEAD`
+with `git diff`, so it reads committed content and only means anything at push
+time; the rest run per commit on the files you staged.
+
+Frontend hooks call this repo's own npm scripts, so `just ui-install` must have
+been run — otherwise they fail rather than skip, which is the correct way round.
+
+Read the comments in that file before changing it. Two of the exclusions are
+load-bearing rather than cosmetic: the vendored trees (`apps/backend/runners/
+github/`, `scripts/`, `standards/`, `_contracts/`) are byte-exact hub copies
+under blocking drift gates, and a whitespace fixer let loose on them turns a
+green repo red with a tidy-looking diff.
+
 ## Maintainers
 
 Branch protection on `main` and `dev` is declared as code in the Factory hub, in

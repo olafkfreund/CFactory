@@ -1138,10 +1138,15 @@ export const FlowNodeSchema = z.object({
 });
 export type FlowNode = z.infer<typeof FlowNodeSchema>;
 
-const StageSchema = z.enum(["plan", "code", "test"]);
-
 export const ProcessGraphSchema = z.object({
-  stage: StageSchema,
+  // OPEN, deliberately — not the closed plan|code|test enum this used to be
+  // (#339, Factory#431). `fetchProcess` runs through `getJson`, which calls
+  // `schema.parse` and throws, so the first producer to emit a fourth stage
+  // would have taken the ENTIRE process detail down: not just its own graph,
+  // but the plan and code DAGs beside it that parse perfectly well. The stages
+  // this build understands are narrowed once at the render site (`isStage` in
+  // TaskFlow.tsx), which is the only place the distinction means anything.
+  stage: z.string(),
   nodes: z.array(FlowNodeSchema),
   title: z.string().nullable().optional(),
 });
@@ -1199,7 +1204,11 @@ export const ProcessDetailSchema = z.object({
   // `graph` is the furthest stage (default view); `graphs` carries every available
   // stage so the modal can switch between plan / code / test.
   graph: ProcessGraphSchema.nullable().optional(),
-  graphs: z.record(StageSchema, ProcessGraphSchema).optional(),
+  // Open KEY type for the same reason as `stage` above (#339). Opening one
+  // without the other fixes nothing: a `{"deploy": {...}}` entry fails on the
+  // key AND on the graph's own `stage` field, so a closed enum in either
+  // position is the same outage at a different line number.
+  graphs: z.record(z.string(), ProcessGraphSchema).optional(),
   // Stages whose upstream did NOT answer (#249). Absent from `graphs` means "no
   // such stage"; named here means "we could not tell" — the cockpit must render
   // those as unknown, never fall back to an earlier stage that happens to still

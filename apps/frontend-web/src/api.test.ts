@@ -6,6 +6,7 @@ import {
   CostRoutingSchema,
   FeedMessageSchema,
   HealthSchema,
+  ProcessDetailSchema,
   ServiceStateSchema,
   ServiceStatusSchema,
   TokenTotalsSchema,
@@ -294,5 +295,58 @@ describe("approvalBlockReason", () => {
 
   it("allows approval when there is no review at all", () => {
     expect(approvalBlockReason(undefined)).toBeNull();
+  });
+});
+
+// #339 / Factory#431. `fetchProcess` goes through `getJson`, which calls
+// `schema.parse` and THROWS. So any closed union inside this schema is a
+// tripwire: the first payload carrying a stage name this build predates takes
+// down the WHOLE process detail, not just the new stage — and `TaskDetail`
+// catches that into `{available: false}`, so the drawer renders an empty pane
+// with no clue why. A value we have not heard of must degrade to "unknown",
+// never take working data with it.
+//
+// Both stage positions are open, and both have to be: the key of `graphs`, and
+// `stage` INSIDE each graph. Opening only the key still throws on the graph
+// body, which is the same outage by a different line number.
+describe("ProcessDetailSchema stage keys are open (#339)", () => {
+  const planGraph = { stage: "plan", nodes: [{ id: "a", label: "AC1" }] };
+  const deployGraph = { stage: "deploy", nodes: [{ id: "d", label: "Deploy" }] };
+
+  const withDeploy = {
+    available: true,
+    correlation_key: "task-1",
+    graph: planGraph,
+    graphs: { plan: planGraph, deploy: deployGraph },
+  };
+
+  it("parses a payload carrying a stage this build has never heard of", () => {
+    expect(() => ProcessDetailSchema.parse(withDeploy)).not.toThrow();
+  });
+
+  it("keeps the stages it DOES understand rather than dropping the payload", () => {
+    const parsed = ProcessDetailSchema.parse(withDeploy);
+    expect(parsed.graphs?.plan?.nodes).toHaveLength(1);
+    expect(parsed.graph?.stage).toBe("plan");
+  });
+
+  it("carries the unrecognised stage through instead of erasing it", () => {
+    // Parsing must not silently bin it either — dropping at the schema would
+    // hide the fact that a newer producer is talking. It is narrowed at the
+    // render site (see TaskFlow.test.tsx), which is where a human sees it.
+    const parsed = ProcessDetailSchema.parse(withDeploy);
+    expect(parsed.graphs?.deploy?.stage).toBe("deploy");
+  });
+
+  it("still rejects a graph that is structurally wrong, not merely unfamiliar", () => {
+    // The open key type must not become "accept anything". A node list that is
+    // not a list is a real defect and has to keep failing loudly.
+    expect(() =>
+      ProcessDetailSchema.parse({
+        available: true,
+        correlation_key: "task-1",
+        graphs: { plan: { stage: "plan", nodes: "not-a-list" } },
+      }),
+    ).toThrow();
   });
 });

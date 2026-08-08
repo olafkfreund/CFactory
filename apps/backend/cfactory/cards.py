@@ -25,9 +25,9 @@ import copy
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import DateTime, Index, Integer, Select, String, Text, func, select, update
 from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.exc import IntegrityError
@@ -100,6 +100,24 @@ CardStatus = Literal["backlog", "ready", "in_progress", "blocked", "done"]
 # RFC-0011 difficulty tiers, reused verbatim so a card can be dispatched to the
 # intake path that already understands them.
 CardTier = Literal["low", "medium", "hard"]
+
+# One acceptance criterion, as it may be WRITTEN. A blank entry is refused
+# (#324): when a ``ready`` card dispatches (RFC-0019 §3.2) these become the
+# acceptance criteria of the RFC-0002 task contract, and an empty string is a
+# criterion the factory reports as satisfied by anything -- a green verdict
+# against nothing, which is worse than a missing criterion because it looks like
+# a check that ran.
+#
+# ``strip_whitespace`` before ``min_length``, so a single space is refused too.
+# A guard a spacebar defeats is not a guard, and the one UI that writes these
+# already trims each line (``criteria()`` in BacklogView.tsx), so nothing a real
+# caller sends changes shape.
+#
+# The RESOURCE keeps a plain ``list[str]``: 436 cards predate this rule and the
+# response model describes what the service RETURNS, which still includes
+# whatever they hold. The bound goes where the service enforces it -- the request
+# bodies -- exactly as the hub contract declares it (Factory#554).
+Criterion = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 # Auto-assigned key prefix when the caller doesn't supply one (see ``create``).
 _KEY_PREFIX = "FCT-"
@@ -367,7 +385,7 @@ class CardCreate(BaseModel):
     title: str = Field(min_length=1, max_length=512)
     # Free-form markdown (RFC-0020 §3.6). An imported issue's body lands here.
     description: str | None = None
-    acceptance_criteria: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[Criterion] = Field(default_factory=list)
     status: CardStatus = "backlog"
     priority: int = 0
     tier: CardTier | None = None
@@ -396,7 +414,7 @@ class CardUpdate(BaseModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=512)
     description: str | None = None
-    acceptance_criteria: list[str] | None = None
+    acceptance_criteria: list[Criterion] | None = None
     status: CardStatus | None = None
     priority: int | None = None
     tier: CardTier | None = None

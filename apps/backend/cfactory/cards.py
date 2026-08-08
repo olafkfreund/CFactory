@@ -52,7 +52,7 @@ from .credentials import (
     seal,
     unseal,
 )
-from .db import Base, make_engine
+from .db import Base, add_column_ddl, make_engine
 from .git_config import (
     GitConfig,
     GitConfigError,
@@ -519,45 +519,51 @@ class DuplicateIssueRefError(Exception):
     """
 
 
-# Columns added to ``cards`` after Phase 1, and the DDL that adds each to a live
-# table: the Phase 6 GitHub mirror, the §3.6 import columns, and the Phase 7
-# per-stage dispatch record. Every one is nullable or defaulted, so backfilling
-# an existing board is a no-op: a pre-Phase-6 card simply has no issue and no
-# body, a pre-Phase-7 one no stage runs.
+# Columns added to ``cards`` after Phase 1: the Phase 6 GitHub mirror, the §3.6
+# import columns, and the Phase 7 per-stage dispatch record. Every one is
+# nullable or defaulted, so backfilling an existing board is a no-op: a
+# pre-Phase-6 card simply has no issue and no body, a pre-Phase-7 one no stage
+# runs.
+#
+# The value is the clause AFTER the type, and ONLY that. The type itself is
+# rendered from the model column by ``db.add_column_ddl`` rather than restated
+# here, because when it was restated it disagreed -- four datetime columns said
+# TIMESTAMP where the models say DateTime (#316). What is left is what the model
+# does not carry: the nullability and backfill DEFAULT that exist purely because
+# this is an ALTER against a table that already has rows, and that ``create_all``
+# has no use for. Empty string = nothing beyond the type, which is most of them.
 _LATE_COLUMNS = {
-    "issue_ref": "VARCHAR(256)",
-    "issue_state": "VARCHAR(16)",
-    "labels": "JSON NOT NULL DEFAULT '[]'",
-    "github_sync_error": "VARCHAR(512)",
-    "stage_runs": "JSON NOT NULL DEFAULT '{}'",
-    "description": "TEXT",
-    # TIMESTAMP, not DATETIME: PostgreSQL has no DATETIME, and SQLite accepts
-    # any type name.
-    "deleted_at": "TIMESTAMP",
+    "issue_ref": "",
+    "issue_state": "",
+    "labels": "NOT NULL DEFAULT '[]'",
+    "github_sync_error": "",
+    "stage_runs": "NOT NULL DEFAULT '{}'",
+    "description": "",
+    "deleted_at": "",
     # Phase 8: which repository this card targets. NULL = the tenant default, so
     # every existing card keeps behaving exactly as it did.
-    "repository_id": "INTEGER",
+    "repository_id": "",
     # Factory#375: when this card's comment thread was last read in full. NULL on
     # every existing card, which is exactly what it means — never read — so the
     # next poll backfills rather than claiming an empty thread is complete.
-    "comments_synced_at": "TIMESTAMP",
+    "comments_synced_at": "",
 }
 
 # The same guard for ``tenant_git_config``, which RFC-0020 phase 2 shipped and
 # phase 3 gave one more column. A live board created by phase 2 already HAS the
 # table, so ``create_all`` will not add it and every config read would fail.
-_LATE_CONFIG_COLUMNS = {"credential_rejected": "BOOLEAN"}
+_LATE_CONFIG_COLUMNS = {"credential_rejected": ""}
 
 # And for ``card_import_state``, which #374 gives the poll lease. A board created
 # by §3.6 already HAS the table, so ``create_all`` will not add the column and
 # every watermark read would fail.
-_LATE_IMPORT_STATE_COLUMNS = {"poll_leased_until": "TIMESTAMP", "last_polled_at": "TIMESTAMP"}
+_LATE_IMPORT_STATE_COLUMNS = {"poll_leased_until": "", "last_polled_at": ""}
 
 # And for ``tenant_git_credential``, which phase 8 moves from per-tenant to
 # per-connection. Both columns are added UNSET, which is exactly what a legacy
 # record is: no connection yet, and the pre-phase-8 tenant-only crypto binding.
 # ``adopt_legacy_git_config`` fills them in at boot.
-_LATE_CREDENTIAL_COLUMNS = {"connection_id": "INTEGER", "aad_version": "INTEGER DEFAULT 1"}
+_LATE_CREDENTIAL_COLUMNS = {"connection_id": "", "aad_version": "DEFAULT 1"}
 
 # The per-tenant unique index phase 8 replaces: one credential per tenant is
 # exactly the limitation being removed, so it has to GO on a live database and
@@ -592,18 +598,20 @@ def _ensure_late_columns(engine: Engine) -> None:
     from sqlalchemy import inspect, text  # noqa: PLC0415 — init-time only
 
     inspector = inspect(engine)
-    for table, columns in (
-        (GitConfigRow.__tablename__, _LATE_CONFIG_COLUMNS),
-        (GitCredentialRow.__tablename__, _LATE_CREDENTIAL_COLUMNS),
-        (ImportStateRow.__tablename__, _LATE_IMPORT_STATE_COLUMNS),
+    for model, columns in (
+        (GitConfigRow, _LATE_CONFIG_COLUMNS),
+        (GitCredentialRow, _LATE_CREDENTIAL_COLUMNS),
+        (ImportStateRow, _LATE_IMPORT_STATE_COLUMNS),
     ):
+        table = model.__tablename__
         if not inspector.has_table(table):
             continue
         present = {c["name"] for c in inspector.get_columns(table)}
         with engine.begin() as conn:
-            for name, ddl in columns.items():
+            for name, tail in columns.items():
                 if name not in present:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                    ddl = add_column_ddl(model, name, tail, engine.dialect)
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {ddl}"))
     for index in _DROPPED_INDEXES:
         # Its own transaction, and survivable: a database that never had the index
         # (a fresh create_all) must not fail boot because a DROP found nothing.
@@ -615,12 +623,13 @@ def _ensure_late_columns(engine: Engine) -> None:
     if not inspector.has_table(CardRow.__tablename__):
         return
     existing = {c["name"] for c in inspector.get_columns(CardRow.__tablename__)}
-    missing = {name: ddl for name, ddl in _LATE_COLUMNS.items() if name not in existing}
+    missing = {name: tail for name, tail in _LATE_COLUMNS.items() if name not in existing}
     # No early return when nothing is missing: the indexes below still have to be
     # ensured on a board whose columns were added by an earlier release.
     with engine.begin() as conn:
-        for name, ddl in missing.items():
-            conn.execute(text(f"ALTER TABLE cards ADD COLUMN {name} {ddl}"))
+        for name, tail in missing.items():
+            ddl = add_column_ddl(CardRow, name, tail, engine.dialect)
+            conn.execute(text(f"ALTER TABLE cards ADD COLUMN {ddl}"))
     for statement in _LATE_INDEXES:
         # Each in its own transaction: a board that already holds two cards
         # pointing at ONE issue (nothing forbade it before this index) cannot

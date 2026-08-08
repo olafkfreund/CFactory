@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import httpx
 from fastapi.testclient import TestClient
@@ -425,6 +425,96 @@ def test_build_process_emits_all_stage_graphs(store):
     assert out["graph"]["stage"] == "code"  # furthest stage is the default view
 
 
+# --- #249: unreachable is not absent ----------------------------------------
+
+
+def _seed_plan_and_code(store, key="21"):
+    """One work item mid-build: PFactory plan emitted, AIFactory still coding."""
+    for service, task_id, status in (
+        (Service.PFACTORY, "sess-1", "emitted"),
+        (Service.AIFACTORY, "proj:spec-1", "in_progress"),
+    ):
+        store.upsert_from_event(
+            CompletionEvent(
+                correlation_key=key,
+                service=service,
+                task_id=task_id,
+                status=status,
+                phase="coding",
+                updated_at=datetime.now(UTC),
+            )
+        )
+
+
+def _down_transport():
+    """AIFactory unreachable at the transport layer — the #249 reproduction."""
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    return httpx.MockTransport(handle)
+
+
+def test_unreachable_code_stage_is_named_not_dropped(store):
+    """THE DEFECT (#249): with AIFactory unreachable mid-build, the code stage used
+    to vanish from `graphs`, which promoted plan to "furthest present" — the cockpit
+    then showed a completed plan for the whole duration of a running build. The
+    stage is now named in `unreachable`, so the UI can say unknown."""
+    _seed_plan_and_code(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    ai = AIFactoryAdapter("http://ai", transport=_down_transport())
+    out = build_process_detail(store, [pf, ai], "21")
+    # The downgrade still happens to the legacy top-level fields (back-compat)...
+    assert set(out["graphs"].keys()) == {"plan"}
+    # ...but it is no longer silent: the consumer is told which stage it can't see.
+    assert out["unreachable"] == ["code"]
+
+
+def test_absent_stage_is_not_reported_unreachable(store):
+    """Mutation check, the other direction: a 404 means the task genuinely is not
+    there. That must NOT be reported as unreachable, or every plan-only item would
+    claim a phantom code stage it never had."""
+    _seed_plan_and_code(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    # _detail_transport answers non-/api/tasks/ paths with 404; point it at a 404
+    # for the task itself by using the plan transport's base behaviour.
+    ai = AIFactoryAdapter("http://ai", transport=_plan_transport())  # 404s /api/tasks/*
+    out = build_process_detail(store, [pf, ai], "21")
+    assert set(out["graphs"].keys()) == {"plan"}
+    assert "unreachable" not in out
+
+
+def test_upstream_5xx_is_unreachable_not_absent(store):
+    """A 5xx is the upstream failing to answer, not answering "no such task"."""
+    _seed_plan_and_code(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    ai = AIFactoryAdapter("http://ai", transport=_detail_transport(status=500))
+    out = build_process_detail(store, [pf, ai], "21")
+    assert out["unreachable"] == ["code"]
+
+
+def test_all_stages_reachable_carries_no_unreachable_key(store):
+    """Mutation check: the key is absent entirely on a healthy fetch, so a consumer
+    can't be nudged into rendering doubt where there is none."""
+    _seed_plan_and_code(store)
+    pf = PFactoryAdapter("http://pf", transport=_plan_transport())
+    ai = AIFactoryAdapter("http://ai", transport=_detail_transport())
+    out = build_process_detail(store, [pf, ai], "21")
+    assert set(out["graphs"].keys()) == {"code", "plan"}
+    assert "unreachable" not in out
+
+
+def test_fallback_says_unreachable_not_detail_unavailable(store):
+    """With nothing fetchable at all, the reason distinguishes "the upstream did not
+    answer" from "there was nothing to show" (#249)."""
+    _seed(store)
+    ai = AIFactoryAdapter("http://ai", transport=_down_transport())
+    out = build_process_detail(store, [ai], "7")
+    assert out["available"] is False
+    assert out["reason"] == "unreachable"
+    assert out["unreachable"] == ["code"]
+
+
 def test_build_process_no_work_item(store):
     out = build_process_detail(store, [], "nope")
     assert out["available"] is False
@@ -436,7 +526,9 @@ def test_build_process_service_down_falls_back_to_slice(store):
     ai = AIFactoryAdapter("http://ai", transport=_detail_transport(status=500))
     out = build_process_detail(store, [ai], "7")
     assert out["available"] is False
-    assert out["reason"] == "detail_unavailable"
+    # A 500 is the upstream failing to answer, so the reason names that rather
+    # than the vaguer "detail_unavailable", which also covers "nothing to show".
+    assert out["reason"] == "unreachable"  # was detail_unavailable before #249
     assert out["status"] == "coding"  # slice state still surfaced
 
 

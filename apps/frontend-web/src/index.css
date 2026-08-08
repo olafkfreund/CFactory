@@ -984,6 +984,10 @@ body {
 .tf-switch-tab--plan.on { background: var(--plan); }
 .tf-switch-tab--code.on { background: var(--code); }
 .tf-switch-tab--test.on { background: var(--test); }
+/* A stage whose upstream did not answer (#249): dashed + muted, and never tinted
+   with its stage colour even when selected — "unknown" must not look like state. */
+.tf-switch-tab--unknown { border-style: dashed; opacity: 0.7; }
+.tf-switch-tab--unknown.on { color: var(--text); background: var(--panel-2); border-color: var(--muted); }
 .tf { }
 .tf-head { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; flex-wrap: wrap; }
 .tf-head h3 { display: flex; align-items: center; gap: 0.45rem; margin: 0; }

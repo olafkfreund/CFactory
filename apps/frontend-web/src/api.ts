@@ -1200,6 +1200,14 @@ export const ProcessDetailSchema = z.object({
   // stage so the modal can switch between plan / code / test.
   graph: ProcessGraphSchema.nullable().optional(),
   graphs: z.record(StageSchema, ProcessGraphSchema).optional(),
+  // Stages whose upstream did NOT answer (#249). Absent from `graphs` means "no
+  // such stage"; named here means "we could not tell" — the cockpit must render
+  // those as unknown, never fall back to an earlier stage that happens to still
+  // be fetchable. Deliberately `z.string()` and not the closed StageSchema enum:
+  // `getJson` throws on a parse failure, so a stage name this build has never
+  // heard of would take the whole process detail down with it (Factory#431).
+  // Unknown names are filtered out at the render site instead.
+  unreachable: z.array(z.string()).optional(),
   branch: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
   // Browser-lane test evidence captured by TFactory: screenshot + recording file

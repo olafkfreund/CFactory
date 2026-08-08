@@ -1544,6 +1544,17 @@ export const CardSchema = z
     repository_id: z.number().nullish(),
     issue_state: z.string().nullish(),
     labels: z.array(z.string()).default([]),
+    // Why the last sync with the git host failed, or null when it succeeded.
+    // The board could not show this before because it did not model it (#323):
+    // `.passthrough()` meant the field arrived and was thrown away, so a card
+    // whose mirror is stale looked exactly like one that is current. Modelling
+    // it is what makes rendering it possible; nothing renders it yet.
+    // Always null on anything a read hands back - a soft-deleted card is off the
+    // board. Modelled because the field is on the wire and this schema is the
+    // board's statement of what a card IS; a reader should not have to open
+    // openapi.yaml to find out that a card has a tombstone.
+    github_sync_error: z.string().nullish(),
+    deleted_at: z.string().nullish(),
     // Per-stage dispatch records, keyed by stage name. Optional so a card served
     // by a pre-Phase-7 backend still parses.
     stage_runs: z.record(CardStageSchema, StageRunSchema).default({}),

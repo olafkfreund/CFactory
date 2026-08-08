@@ -9,8 +9,10 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from cfactory import auth, routes_actions
 from cfactory.app import action_transport_dep, audit_dep, create_app, store_dep
 from cfactory.audit import AuditStore
+from cfactory.config import Settings
 from fastapi.testclient import TestClient
 
 
@@ -59,7 +61,7 @@ def test_audit_empty_initially(client_with_audit):
     api, _ = client_with_audit
     resp = api.get("/api/audit")
     assert resp.status_code == 200
-    assert resp.json() == {"count": 0, "entries": []}
+    assert resp.json() == {"count": 0, "entries": [], "attribution": "unattributed"}
 
 
 def test_execute_records_audit_entry(client_with_audit):
@@ -394,3 +396,72 @@ def test_compute_entry_hash_is_deterministic():
     assert h1 == h2
     # Changing prev_hash changes the digest.
     assert compute_entry_hash("s", values, "abc") != h1
+
+
+# ── #251: the actor must identify without authenticating ────────────────────
+#
+# The unit-level guards live in test_enterprise.py (identity_dep never returns
+# the key; redact_actor catches one that reached the row anyway). These pin the
+# SURFACE the issue was actually filed about: what `GET /api/audit` serves,
+# which is verbatim what the cockpit's Audit view renders and what any export or
+# SIEM ship carries.
+
+# Not a real credential: assembled at runtime so no key-shaped literal is
+# committed, and shaped like the fleet's keys so it exercises both redaction
+# conditions (currently configured, and key-shaped).
+FAKE_LIVE_KEY = "cfk_" + "a1b2c3d4" * 4
+
+
+def test_the_audit_endpoint_never_serves_a_live_api_key(store, audit, monkeypatch):
+    """A read of the trail must not hand back a working credential (#251).
+
+    The audit table is the one most likely to be exported to a SIEM, shown to an
+    auditor, or screenshotted for a demo — the Factory#245 capture had to black
+    this column out. If the actor is the presented key then anyone with READ
+    access to the trail gains WRITE access to the fleet.
+
+    Recorded here the way a pre-fix row (or a future route that forgets the
+    seam) would land it: raw. Nothing reversible may come back.
+    """
+    monkeypatch.setattr(auth, "_keystore", auth.KeyStore({FAKE_LIVE_KEY: {"read", "write"}}))
+    audit.record(
+        actor=FAKE_LIVE_KEY,
+        kind="approve_review",
+        correlation_key="42",
+        target_service="aifactory",
+        endpoint="/api/tasks/ai-7/approve",
+        status_code=200,
+        ok=True,
+    )
+    app = create_app()
+    app.dependency_overrides[store_dep] = lambda: store
+    app.dependency_overrides[audit_dep] = lambda: audit
+    resp = TestClient(app).get("/api/audit", headers={"X-API-Key": FAKE_LIVE_KEY})
+
+    assert resp.status_code == 200
+    assert FAKE_LIVE_KEY not in resp.text  # not in the actor, and not anywhere else
+    assert resp.json()["entries"][0]["actor"] == auth.key_actor(FAKE_LIVE_KEY)
+
+
+def test_the_trail_says_when_it_cannot_name_a_person(client_with_audit):
+    """No IdP → say so, rather than let `unattributed:` be read as a name.
+
+    `unattributed:key-<digest>` is honest about being a shared client, but the
+    column looks identical whether no issuer is configured (no row will EVER
+    name a person) or one is and tokens are silently failing to verify. This
+    flow is sold as Article 14 human oversight; the reader has to tell those
+    apart.
+    """
+    api, _ = client_with_audit
+    assert api.get("/api/audit").json()["attribution"] == "unattributed"
+
+
+def test_the_trail_says_when_it_can_name_a_person(client_with_audit, monkeypatch):
+    """Issuer configured → the trail is capable of attributing to a human."""
+    api, _ = client_with_audit
+    monkeypatch.setattr(
+        routes_actions,
+        "get_settings",
+        lambda: Settings(oidc_issuer="https://idp.example/realms/factory"),
+    )
+    assert api.get("/api/audit").json()["attribution"] == "oidc"

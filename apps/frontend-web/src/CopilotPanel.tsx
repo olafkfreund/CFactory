@@ -47,7 +47,7 @@ export default function CopilotPanel({
   const threadRef = useRef<HTMLDivElement>(null);
 
   const loadAudit = useCallback(() => {
-    fetchAudit().then(setAudit).catch(() => setAudit([]));
+    fetchAudit().then((p) => { setAudit(p.entries); }).catch(() => { setAudit([]); });
   }, []);
 
   const loadInsights = useCallback(() => {

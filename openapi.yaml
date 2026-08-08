@@ -734,6 +734,12 @@ paths:
     get:
       tags: [Audit]
       summary: Recent confirmed actions (the human-in-the-loop trail)
+      description: >-
+        The `actor` on every entry identifies WITHOUT authenticating (#251): it
+        is `user:<email>` for a person proved by a verified OIDC ID token,
+        `unattributed:key-<digest>` for a non-reversible reference to the API
+        key that acted, or `local` in single-user mode. It is never the key
+        itself — a read of this trail must not grant write access to the fleet.
       responses:
         "200":
           description: Audit entries, newest first.
@@ -743,6 +749,16 @@ paths:
                 type: object
                 properties:
                   count: { type: integer }
+                  attribution:
+                    type: string
+                    description: >-
+                      What this trail is CAPABLE of naming (#251 part b).
+                      `oidc` — an issuer is configured, so a confirmed action
+                      can be attributed to the person who confirmed it.
+                      `unattributed` — no issuer, so every actor is a shared
+                      client and "who approved this" is unanswerable; do not
+                      present it as human oversight. Treat an unrecognised
+                      value as unknown, not as either answer.
                   entries: { type: array, items: { type: object } }
 
   /api/audit/chain:

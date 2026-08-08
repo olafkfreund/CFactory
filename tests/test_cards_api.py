@@ -126,6 +126,48 @@ def test_invalid_status_is_rejected(client):
     assert resp.status_code == 422
 
 
+# ── a blank acceptance criterion is not a criterion (#324) ───────────────────
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_acceptance_criterion_is_refused_on_create(client, blank):
+    """When a `ready` card dispatches these become the RFC-0002 task contract's
+    acceptance criteria, and a blank one is satisfied by anything - a green
+    verdict against nothing, which reads like a check that ran."""
+    resp = client.post("/api/cards", json={"title": "t", "acceptance_criteria": ["real", blank]})
+
+    assert resp.status_code == 422
+    assert "acceptance_criteria" in resp.text
+    assert client.get("/api/cards").json()["count"] == 0
+
+
+def test_a_blank_acceptance_criterion_is_refused_on_patch(client):
+    client.post("/api/cards", json={"card_key": "FCT-1", "title": "t"})
+
+    resp = client.patch("/api/cards/FCT-1", json={"acceptance_criteria": [""]})
+
+    assert resp.status_code == 422
+    assert client.get("/api/cards/FCT-1").json()["acceptance_criteria"] == []
+
+
+def test_real_criteria_still_round_trip_and_an_empty_list_is_still_legal(client):
+    """The other direction, and the two shapes the rule must NOT refuse: an
+    empty list (legal while planning - the contract says so) and entries with
+    ordinary internal whitespace."""
+    created = client.post(
+        "/api/cards",
+        json={"card_key": "FCT-3", "title": "t", "acceptance_criteria": ["  the board loads  "]},
+    )
+    assert created.status_code == 201
+    # Trimmed, not rejected: `strip_whitespace` runs before the length bound.
+    assert created.json()["acceptance_criteria"] == ["the board loads"]
+
+    assert client.post("/api/cards", json={"title": "planning"}).status_code == 201
+    empty = client.post(
+        "/api/cards", json={"card_key": "FCT-5", "title": "t", "acceptance_criteria": []}
+    )
+    assert empty.status_code == 201
+    assert empty.json()["acceptance_criteria"] == []
 # ── unknown fields are rejected, not dropped (#322) ──────────────────────────
 
 

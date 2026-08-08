@@ -93,7 +93,7 @@ env:
   # like a network fault, not like a bad pin. Every other pin in this repo is
   # full-length for the same reason.
   #
-  HUB_PIN_SHA: "6eb6fb86d76953cf0cde719dae3a928ffbd31773"
+  HUB_PIN_SHA: "574afc1b853c12a177ef27d645230697817c6f09"
 
 jobs:
   conformance:

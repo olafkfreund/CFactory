@@ -21,6 +21,7 @@ from .config import Settings, get_settings
 
 if TYPE_CHECKING:
     from alembic.config import Config
+    from sqlalchemy.engine.interfaces import Dialect
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,42 @@ VERSION_TABLE = "alembic_version"
 
 class Base(DeclarativeBase):
     pass
+
+
+def add_column_ddl(model: type[Base], name: str, tail: str, dialect: Dialect) -> str:
+    """``ALTER TABLE`` body for one late column, with its TYPE read off the model.
+
+    Both stores carry idempotent "add the column if it is missing" guards for
+    columns that landed after the table did, because the deployed bootstrap is
+    ``create_all``, which never ALTERs an existing table. Those guards used to
+    restate each column's type as a literal string beside the model that already
+    declares it, and the two disagreed (#316): the four datetime columns were
+    written ``TIMESTAMP`` where the models declare ``DateTime``, which SQLAlchemy
+    renders as ``DATETIME``. So one column carried a different declared type
+    depending on which of the two paths made it -- ``create_all``/Alembic, or the
+    guard.
+
+    On SQLite that was inert, because ``TIMESTAMP`` and ``DATETIME`` both carry
+    NUMERIC affinity, and SQLite is what is deployed. It was not inert in the two
+    directions that matter. PostgreSQL, which this module's own docstring names as
+    the real deployment target, has no ``DATETIME`` type at all and no
+    ``TIMESTAMP``-vs-``DATETIME`` equivalence -- so whichever literal was chosen,
+    one of the two paths was wrong there rather than merely differently spelled.
+    And a database a guard had touched was a THIRD schema shape, matching neither
+    ``create_all`` nor ``alembic upgrade head``, which puts a hole in the equality
+    #308 stamps the live database on the strength of.
+
+    Rendering from the column removes the restatement rather than correcting it:
+    ``column.type.compile(dialect)`` is the same call ``create_all`` makes, so the
+    two paths cannot disagree again, and it is dialect-correct by construction --
+    ``DATETIME`` on SQLite, ``TIMESTAMP WITHOUT TIME ZONE`` on PostgreSQL, from
+    one declaration.
+
+    *tail* is what the model genuinely does not carry: the nullability and
+    backfill ``DEFAULT`` that exist only because this is an ALTER against a table
+    that already has rows. ``create_all`` needs neither, so neither is drift.
+    """
+    return f"{name} {model.__table__.c[name].type.compile(dialect)} {tail}".strip()
 
 
 def resolve_database_url(settings: Settings | None = None) -> str:

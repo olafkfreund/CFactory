@@ -17,7 +17,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
 
 from .config import DEFAULT_TENANT, Settings, get_settings
-from .db import Base, make_engine
+from .db import Base, add_column_ddl, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem, as_utc
 from .status_taxonomy import is_running
 from .status_taxonomy import is_terminal as _is_terminal
@@ -392,13 +392,15 @@ def _ensure_tenant_column(engine: Engine) -> None:
 
     if "tenant_id" in {c["name"] for c in inspect(engine).get_columns("work_items")}:
         return
+    # The type comes off the model, not a literal beside it (#316). It happens to
+    # agree today -- String(64) renders VARCHAR(64) on both dialects -- but this
+    # is the same restatement that let the card guards drift, and a guard that is
+    # right by luck is one edit from being wrong in silence.
+    ddl = add_column_ddl(
+        WorkItemRow, "tenant_id", f"NOT NULL DEFAULT '{DEFAULT_TENANT}'", engine.dialect
+    )
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                "ALTER TABLE work_items ADD COLUMN tenant_id VARCHAR(64) "
-                f"NOT NULL DEFAULT '{DEFAULT_TENANT}'"
-            )
-        )
+        conn.execute(text(f"ALTER TABLE work_items ADD COLUMN {ddl}"))
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_work_items_tenant_id ON work_items (tenant_id)")
         )

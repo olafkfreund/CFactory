@@ -49,6 +49,18 @@ name: planning-card conformance gate
 # one-directional -- offering FEWER fields than the model accepts is a deliberate
 # tool split, offering MORE is a 422 at runtime.
 #
+# AND `openapi.yaml` IS A VALID OpenAPI DOCUMENT (#348). Separate question from
+# the field-name comparison above, and it lives here because this is the only
+# job that already checks out the repo, installs Python and reads this file.
+# Wiring #323 turned up two defects that had been on `dev` unnoticed: an
+# `info.summary` key that does not exist before OpenAPI 3.1 in a document
+# declaring 3.0.3, and a response `description` written in YAML flow style with
+# commas in it, which parses as a four-key map rather than the sentence its
+# author wrote. Nothing anywhere in CI parsed this file AS OpenAPI, so both
+# survived; a published spec nobody validates is a contract that drifts
+# silently. Runs BEFORE the comparator steps, so a broken comparator cannot
+# take the validation offline with it.
+#
 # TO CHANGE THE CARD SHAPE: land the change in the hub contract FIRST, in a
 # CODEOWNERS-reviewed PR that carries the reasoning in the field's description.
 # Then change the model here and bump HUB_PIN_SHA below to the hub commit that
@@ -147,9 +159,26 @@ jobs:
         # today, and a gate that depends on a transitive dependency is one
         # unrelated bump away from exiting 2 for a reason nobody will connect to
         # this file. Naming it costs a line.
+        #
+        # `openapi-spec-validator` for the step below (#348). Pinned, like every
+        # other tool this job runs: an unpinned validator can start failing this
+        # repo's PRs on a release that changed nothing here.
         run: |
           python -m pip install --upgrade pip
-          pip install -r service/apps/backend/requirements.txt PyYAML
+          pip install -r service/apps/backend/requirements.txt PyYAML "openapi-spec-validator==0.9.0"
+
+      - name: openapi.yaml is a valid OpenAPI document (blocking)
+        # FIRST, and before the comparator steps, deliberately. The comparator
+        # is fetched from hub `main` and has already spent a period unable to
+        # run at all; if this step sat after it, a broken comparator would take
+        # the spec validation down with it and the file would go unchecked
+        # again for exactly the reason it went unchecked the first time.
+        #
+        # The validator reads `openapi:` and applies the matching meta-schema,
+        # so bumping the document to 3.1 later needs no change here. It reports
+        # only the FIRST error per run, which is fine for a gate: the answer it
+        # owes is valid / not valid.
+        run: openapi-spec-validator service/openapi.yaml
 
       - name: Prove the comparator itself is not always-green
         # Run BEFORE the real comparison, and blocking. The comparator lives in

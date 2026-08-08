@@ -20,7 +20,13 @@ openapi: 3.0.3
 info:
   title: CFactory API
   version: 0.1.0
-  summary: Agentic control-tower cockpit over the PARR pipeline.
+  # NO `summary:` HERE. It is a 3.1 key and this document declares 3.0.3, where
+  # `info` is `additionalProperties: false` with a `^x-` escape hatch, so the
+  # key was simply invalid (#348). It carried "Agentic control-tower cockpit
+  # over the PARR pipeline" - a shorter restatement of the `description` below,
+  # so nothing was lost by dropping it. The alternative was moving the document
+  # to 3.1, which is not a one-line change: `nullable: true` appears throughout
+  # and 3.1 spells that as a type union.
   description: >-
     Read-first, advise-and-confirm cockpit over the three Factory services
     (PFactory · AIFactory · TFactory). Ingests normalized completion events,
@@ -626,7 +632,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GitConfig" }
-        "400": { description: Unknown provider, unaddressable project path, non-http base_url, or an intake-trigger label. }
+        # QUOTED, and it has to be: inside YAML flow style the commas are
+        # separators, so the unquoted sentence parsed as a four-key map whose
+        # `description` was the two words "Unknown provider" and whose other
+        # three keys were fragments with null values (#348).
+        "400": { description: "Unknown provider, unaddressable project path, non-http base_url, or an intake-trigger label." }
         "403": { description: The tenant in the path is not the caller's tenant. }
 
   /api/tenants/{tenant}/git-config:verify:
@@ -740,7 +750,10 @@ paths:
                           type: string
                           description: The provider's own id; re-import is idempotent on it.
                         author: { type: string }
-                        body: { type: string, description: Markdown, rendered as inert nodes. }
+                        # Quoted for the same reason as the git-config 400 above
+                        # (#348): unquoted, this parsed as a Schema Object with
+                        # a stray `rendered as inert nodes.` key.
+                        body: { type: string, description: "Markdown, rendered as inert nodes." }
                         url: { type: string }
                         created_at: { type: string, format: date-time }
                         updated_at: { type: string, format: date-time }

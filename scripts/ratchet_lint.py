@@ -40,7 +40,6 @@ Exit code 0 if no changed file regressed; 1 otherwise.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -54,7 +53,13 @@ from pathlib import Path
 # Canonical shared ratchet rules, vendored byte-exact from the Factory hub
 # and byte-exact drift-gated (Factory#403). scripts/ is sys.path[0] when this
 # runs as a script, so the sibling import resolves without packaging.
-from ratchet_helpers import MYPY_TEST_RELAX, is_test_file, require_tool_ran, ruff_stdin_argv
+from ratchet_helpers import (
+    MYPY_TEST_RELAX,
+    is_test_file,
+    require_tool_ran,
+    ruff_findings,
+    ruff_stdin_argv,
+)
 
 # The VENDORED baseline, not the repo-wide config at the root (Factory#513).
 # The ratchet holds new and touched code to the full shared bar; the root
@@ -146,20 +151,15 @@ def ruff_counts(source: str, filename: str) -> Counter[str]:
     real tree exempts it from.
     """
     res = _run(ruff_stdin_argv(RUFF_CONFIG, filename), stdin=source)
-    # The shared "did the tool actually run" rule (Factory#590). This used to be
-    # four lines restated here, and in the mypy counter below, and in both halves
-    # of the four sibling ratchets -- nine copies of one rule, which is why fixing
-    # it once cost five PRs (PFactory#455, TFactory#951). It now lives in the
-    # drift-gated canonical, so the next correction reaches every consumer.
-    require_tool_ran("ruff", res)
-    if not res.stdout.strip():
-        return Counter()
-    try:
-        items = json.loads(res.stdout)
-    except json.JSONDecodeError:
-        sys.stderr.write(res.stdout + res.stderr)
-        sys.exit(2)
-    return Counter(item["code"] for item in items)
+    # The shared "is this run a measurement" rule, both halves (Factory#590 for
+    # the exit code, Factory#648 for the output). This used to be an exit-code
+    # check plus a `return Counter()` for empty stdout plus a bare
+    # `except json.JSONDecodeError`, restated here and in the four sibling
+    # ratchets. The empty-stdout branch was the one with teeth: the pinned ruff
+    # prints `[]` for a clean run -- including for empty stdin -- so empty
+    # stdout was always ruff writing no report, counted as zero violations.
+    # Both verdicts now live in the drift-gated canonical.
+    return ruff_findings(res)
 
 
 def mypy_command(target: str, original: str | None = None) -> list[str]:

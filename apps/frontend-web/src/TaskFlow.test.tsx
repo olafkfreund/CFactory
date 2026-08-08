@@ -121,4 +121,39 @@ describe("StageFlow with an unreachable stage (#249)", () => {
     expect(html).toContain("Plan flow");
     expect(html).not.toContain("stage unknown");
   });
+
+  // #339: same rule, now for `graphs` itself. `unreachable` was already open;
+  // the graph map was not, and it is the one that carries the diagrams.
+  it("renders the stages it knows when graphs carries one it does not", () => {
+    const deployGraph = {
+      stage: "deploy",
+      nodes: [{ id: "d1", label: "Apply the plan" }],
+    } as ProcessGraph;
+    const html = renderToStaticMarkup(
+      <StageFlow
+        graphs={{ plan: planGraph, code: codeGraph, deploy: deployGraph }}
+        stageDone={stageDone}
+      />,
+    );
+    // The panel is NOT blank: plan and code render exactly as they did before.
+    expect(html).toContain("Plan");
+    expect(html).toContain("Code flow");
+    // And the stage this build predates gets no tab invented for it.
+    expect(html).not.toContain("tf-switch-tab--deploy");
+  });
+
+  // The `fallback` path (`proc.graph`, the furthest stage) is a second way an
+  // unknown stage reaches the renderer, and it bypasses the tab filter entirely
+  // — there is no switcher when there is only one graph. It has to degrade too:
+  // the DAG is perfectly renderable, only its LABEL and accent are unknown.
+  it("draws a graph whose stage it does not recognise, labelled with the raw name", () => {
+    const deployGraph = {
+      stage: "deploy",
+      nodes: [{ id: "d1", label: "Apply the plan", status: "completed" }],
+    } as ProcessGraph;
+    const html = renderToStaticMarkup(<TaskFlow graph={deployGraph} />);
+    expect(html).toContain("Apply the plan"); // the nodes still draw
+    expect(html).toContain("deploy flow"); // raw name, not a blank label
+    expect(html).not.toContain("undefined");
+  });
 });

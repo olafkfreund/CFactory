@@ -30,17 +30,30 @@ import {
 import { useNow } from "./motion";
 import { IconRobot } from "./icons";
 
-const STAGE_ACCENT: Record<ProcessGraph["stage"], string> = {
+// Keyed by `Stage`, NOT by `ProcessGraph["stage"]`, which is now an open
+// `string` on the wire (#339). These maps say what this build knows how to
+// paint; `stageLabel` / `stageAccent` below are how anything holding a raw
+// stage name asks them, and they answer for names that are not in here.
+const STAGE_ACCENT: Record<Stage, string> = {
   plan: "var(--plan)",
   code: "var(--code)",
   test: "var(--test)",
 };
 
-const STAGE_LABEL: Record<ProcessGraph["stage"], string> = {
+const STAGE_LABEL: Record<Stage, string> = {
   plan: "Plan",
   code: "Code",
   test: "Test",
 };
+
+// A stage name straight off the wire may be one this build predates. Show the
+// raw name rather than a blank, and a neutral accent rather than a colour that
+// would claim it is one of the three we know (Factory#431: "unknown" beats a
+// plausible token). The DAG itself is entirely renderable either way — nothing
+// about drawing nodes and edges depends on which stage produced them.
+const stageLabel = (stage: string): string => (isStage(stage) ? STAGE_LABEL[stage] : stage);
+const stageAccent = (stage: string): string =>
+  isStage(stage) ? STAGE_ACCENT[stage] : "var(--border)";
 
 // A cubic bezier from the right edge of the source card to the left edge of the
 // target card — a gentle S-curve that reads cleanly even when columns stack.
@@ -193,7 +206,13 @@ export function StageFlow({
   stageDone,
   unreachable,
 }: {
-  graphs?: Partial<Record<Stage, ProcessGraph>> | undefined;
+  // Raw stage-keyed map from the API. The KEY type is open (#339), matching
+  // `unreachable` below and for the same reason: a stage name this build has
+  // never heard of must not be able to reject the payload it arrived in. The
+  // narrowing happens two lines into the body — `SWITCH_ORDER.filter` only ever
+  // looks up the three stages this build can draw, so an unfamiliar key is
+  // simply never asked for.
+  graphs?: Record<string, ProcessGraph> | undefined;
   fallback?: ProcessGraph | null | undefined;
   // Per-stage "the stage itself is complete" flag, keyed by stage. Drives the
   // green frame + "stage complete" cue on the DAG — a signal that lives at the
@@ -224,7 +243,13 @@ export function StageFlow({
   // Nothing to switch between → render the single furthest graph (back-compat).
   if (!tabs.length)
     return fallback ? (
-      <TaskFlow graph={fallback} stageDone={stageDone?.[fallback.stage]} />
+      // `fallback.stage` is a raw wire string, so it may name a stage this
+      // build predates — in which case there is no completion flag to look up
+      // and the diagram simply renders without one. It still renders (#339).
+      <TaskFlow
+        graph={fallback}
+        stageDone={isStage(fallback.stage) ? stageDone?.[fallback.stage] : false}
+      />
     ) : null;
 
   const cur = sel && tabs.includes(sel) ? sel : furthest!;
@@ -342,7 +367,7 @@ export default function TaskFlow({
 
   if (!graph || !layout || layout.placed.length === 0) return null;
 
-  const accent = STAGE_ACCENT[graph.stage];
+  const accent = stageAccent(graph.stage);
   const total = layout.placed.length;
   const done = counts.done;
   const hasLive = counts.active > 0 || counts.stalled > 0;
@@ -352,7 +377,7 @@ export default function TaskFlow({
       <div className="tf-head">
         <h3>
           <span className="tf-stage-dot" style={{ background: accent }} />
-          {STAGE_LABEL[graph.stage]} flow
+          {stageLabel(graph.stage)} flow
           <span className="tf-progress">
             {done}/{total}
           </span>

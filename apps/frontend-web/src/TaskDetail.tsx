@@ -363,7 +363,12 @@ export default function TaskDetail({
 
           {/* Live execution diagram — animated DAG with a plan/code/test stage
               switcher; defaults to the furthest stage (#94). */}
-          <StageFlow graphs={proc?.graphs} fallback={proc?.graph} stageDone={stageDone} />
+          <StageFlow
+            graphs={proc?.graphs}
+            fallback={proc?.graph}
+            stageDone={stageDone}
+            unreachable={proc?.unreachable}
+          />
 
           {/* Test evidence — the browser-lane screenshots + recordings TFactory
               captured, proxied through CFactory so they render here on the

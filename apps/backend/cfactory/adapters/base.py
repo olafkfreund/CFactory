@@ -119,11 +119,15 @@ _HTTP_REFUSED = 409
 
 def _refusal(service: str, method: str, path: str, resp: httpx.Response) -> AdapterRefusalError:
     """Build an AdapterRefusalError carrying the upstream's own error text if it sent one."""
-    detail = None
+    detail: str | None = None
     try:
         body = resp.json()
         if isinstance(body, dict):
-            detail = body.get("error") or body.get("detail")
+            raw = body.get("error") or body.get("detail")
+            # Coerce: an upstream is free to answer with a structured error
+            # (dict/list/number), and .detail is annotated str | None. Without
+            # this the annotation quietly lies and the message embeds a repr.
+            detail = raw if isinstance(raw, str) else (str(raw) if raw is not None else None)
     except ValueError:
         pass
     return AdapterRefusalError(

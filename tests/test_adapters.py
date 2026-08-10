@@ -288,3 +288,22 @@ def test_a_real_outage_is_still_an_outage_not_a_refusal():
         pass
     else:  # pragma: no cover
         raise AssertionError("503 raised nothing")
+
+
+def test_a_structured_upstream_error_is_coerced_to_str():
+    """`.detail` is annotated `str | None`; an upstream may answer with a dict."""
+    from cfactory.adapters.base import AdapterRefusalError
+
+    adapter = AIFactoryAdapter(
+        "http://x",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(409, json={"success": False, "error": {"code": 7}})
+        ),
+    )
+    try:
+        adapter.list_items()
+    except AdapterRefusalError as exc:
+        assert isinstance(exc.detail, str), type(exc.detail)
+        assert "7" in exc.detail
+    else:  # pragma: no cover
+        raise AssertionError("409 did not raise")

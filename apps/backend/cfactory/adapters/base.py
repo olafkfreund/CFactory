@@ -84,7 +84,7 @@ class AdapterError(RuntimeError):
     """Raised when an upstream service is unreachable or returns an error."""
 
 
-class AdapterRefusal(AdapterError):
+class AdapterRefusalError(AdapterError):
     """The upstream ANSWERED and declined the request (AIFactory#1126).
 
     A subclass on purpose: all eight existing ``except AdapterError`` sites keep
@@ -117,8 +117,8 @@ _HTTP_NOT_FOUND = 404
 _HTTP_REFUSED = 409
 
 
-def _refusal(service: str, method: str, path: str, resp: httpx.Response) -> AdapterRefusal:
-    """Build an AdapterRefusal carrying the upstream's own error text if it sent one."""
+def _refusal(service: str, method: str, path: str, resp: httpx.Response) -> AdapterRefusalError:
+    """Build an AdapterRefusalError carrying the upstream's own error text if it sent one."""
     detail = None
     try:
         body = resp.json()
@@ -126,7 +126,7 @@ def _refusal(service: str, method: str, path: str, resp: httpx.Response) -> Adap
             detail = body.get("error") or body.get("detail")
     except ValueError:
         pass
-    return AdapterRefusal(
+    return AdapterRefusalError(
         f"{service}: {method} {path} refused (409): {detail or resp.reason_phrase}",
         detail=detail,
     )

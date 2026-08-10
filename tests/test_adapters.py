@@ -247,7 +247,7 @@ def test_pfactory_adapter_leaves_a_passing_or_unreviewed_session_alone():
 
 def test_409_is_a_refusal_not_a_generic_adapter_error():
     """The upstream ANSWERED. That must be distinguishable from unreachable."""
-    from cfactory.adapters.base import AdapterRefusal
+    from cfactory.adapters.base import AdapterRefusalError
 
     adapter = AIFactoryAdapter(
         "http://x",
@@ -257,24 +257,24 @@ def test_409_is_a_refusal_not_a_generic_adapter_error():
     )
     try:
         adapter.list_items()
-    except AdapterRefusal as exc:
+    except AdapterRefusalError as exc:
         assert exc.detail == "branch is dirty", exc.detail
         assert "refused (409)" in str(exc)
     else:  # pragma: no cover - the assertion is the point
-        raise AssertionError("409 did not raise AdapterRefusal")
+        raise AssertionError("409 did not raise AdapterRefusalError")
 
 
 def test_refusal_is_still_an_adapter_error_so_existing_callers_do_not_break():
     """Subclass on purpose: the eight existing `except AdapterError` sites keep working."""
-    from cfactory.adapters.base import AdapterError, AdapterRefusal
+    from cfactory.adapters.base import AdapterError, AdapterRefusalError
 
-    assert issubclass(AdapterRefusal, AdapterError)
+    assert issubclass(AdapterRefusalError, AdapterError)
 
 
 def test_a_real_outage_is_still_an_outage_not_a_refusal():
     """The other direction. A test that only proves 409 raises the new type would
     pass just as happily against code that raised it for everything."""
-    from cfactory.adapters.base import AdapterError, AdapterRefusal
+    from cfactory.adapters.base import AdapterError, AdapterRefusalError
 
     adapter = AIFactoryAdapter(
         "http://x",
@@ -282,7 +282,7 @@ def test_a_real_outage_is_still_an_outage_not_a_refusal():
     )
     try:
         adapter.list_items()
-    except AdapterRefusal:  # pragma: no cover - this is the failure
+    except AdapterRefusalError:  # pragma: no cover - this is the failure
         raise AssertionError("503 was misreported as a refusal")
     except AdapterError:
         pass

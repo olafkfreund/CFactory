@@ -84,9 +84,52 @@ class AdapterError(RuntimeError):
     """Raised when an upstream service is unreachable or returns an error."""
 
 
+class AdapterRefusal(AdapterError):
+    """The upstream ANSWERED and declined the request (AIFactory#1126).
+
+    A subclass on purpose: all eight existing ``except AdapterError`` sites keep
+    catching this unchanged, so nothing degrades. Callers that want to show the
+    refusal reason catch this instead and read ``.detail``.
+
+    Why it needs its own type: AIFactory is translating handlers that returned
+    ``{"success": false}`` inside an HTTP 200 into an honest 409 (#460, #1126).
+    Without this branch, ``raise_for_status`` turns each converted handler into
+    an ``AdapterError``, which the Services view renders as **offline** — so a
+    routine refusal would read as the whole service being down. That swaps a
+    failure disguised as success for a failure disguised as an outage, and the
+    second sends the operator to the wrong system.
+
+    Same distinction ``_get_detail`` already draws for 404 (#249): the upstream
+    answering is not the same as being unable to tell.
+    """
+
+    def __init__(self, message: str, *, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.detail = detail
+
+
 # The one status code that means "the upstream answered, and there is no such
 # object". Every other failure means we could not tell — see _get_detail (#249).
 _HTTP_NOT_FOUND = 404
+
+# The upstream answered and refused. `honest_status` (AIFactory#460) returns this
+# for a handler whose own body says success: false.
+_HTTP_REFUSED = 409
+
+
+def _refusal(service: str, method: str, path: str, resp: httpx.Response) -> AdapterRefusal:
+    """Build an AdapterRefusal carrying the upstream's own error text if it sent one."""
+    detail = None
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            detail = body.get("error") or body.get("detail")
+    except ValueError:
+        pass
+    return AdapterRefusal(
+        f"{service}: {method} {path} refused (409): {detail or resp.reason_phrase}",
+        detail=detail,
+    )
 
 
 class BaseHTTPAdapter:
@@ -118,6 +161,8 @@ class BaseHTTPAdapter:
     def _get_json(self, path: str) -> Any:
         try:
             resp = self._client.get(path)
+            if resp.status_code == _HTTP_REFUSED:
+                raise _refusal(self.service.value, "GET", path, resp)
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPError as exc:
@@ -143,6 +188,8 @@ class BaseHTTPAdapter:
             resp = self._client.get(path)
             if resp.status_code == _HTTP_NOT_FOUND:
                 return None
+            if resp.status_code == _HTTP_REFUSED:
+                raise _refusal(self.service.value, "GET", path, resp)
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPError as exc:

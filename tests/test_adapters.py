@@ -231,3 +231,60 @@ def test_pfactory_adapter_leaves_a_passing_or_unreviewed_session_alone():
 
     b = PFactoryAdapter("http://x")._normalize({"session_id": "s", "board_state": "draft"})
     assert b is not None and b.review is None
+
+
+# --------------------------------------------------------------------------
+# A refusal is not an outage (AIFactory#1126).
+#
+# AIFactory is translating handlers that returned {"success": false} inside an
+# HTTP 200 into an honest 409 (#460). Without the branch these tests cover,
+# raise_for_status turns every converted handler into a plain AdapterError,
+# which the Services view renders as OFFLINE — swapping a failure disguised as
+# success for a failure disguised as an outage, which sends the operator to the
+# wrong system entirely.
+# --------------------------------------------------------------------------
+
+
+def test_409_is_a_refusal_not_a_generic_adapter_error():
+    """The upstream ANSWERED. That must be distinguishable from unreachable."""
+    from cfactory.adapters.base import AdapterRefusal
+
+    adapter = AIFactoryAdapter(
+        "http://x",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(409, json={"success": False, "error": "branch is dirty"})
+        ),
+    )
+    try:
+        adapter.list_items()
+    except AdapterRefusal as exc:
+        assert exc.detail == "branch is dirty", exc.detail
+        assert "refused (409)" in str(exc)
+    else:  # pragma: no cover - the assertion is the point
+        raise AssertionError("409 did not raise AdapterRefusal")
+
+
+def test_refusal_is_still_an_adapter_error_so_existing_callers_do_not_break():
+    """Subclass on purpose: the eight existing `except AdapterError` sites keep working."""
+    from cfactory.adapters.base import AdapterError, AdapterRefusal
+
+    assert issubclass(AdapterRefusal, AdapterError)
+
+
+def test_a_real_outage_is_still_an_outage_not_a_refusal():
+    """The other direction. A test that only proves 409 raises the new type would
+    pass just as happily against code that raised it for everything."""
+    from cfactory.adapters.base import AdapterError, AdapterRefusal
+
+    adapter = AIFactoryAdapter(
+        "http://x",
+        transport=httpx.MockTransport(lambda r: httpx.Response(503, text="upstream down")),
+    )
+    try:
+        adapter.list_items()
+    except AdapterRefusal:  # pragma: no cover - this is the failure
+        raise AssertionError("503 was misreported as a refusal")
+    except AdapterError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("503 raised nothing")

@@ -186,3 +186,45 @@ def test_the_cached_rename_map_cannot_be_mutated_by_a_caller() -> None:
             raise AssertionError("the cached rename map is mutable")
     finally:
         tmp.cleanup()
+
+
+def test_renames_are_detected_even_when_diff_renames_is_disabled() -> None:
+    """``-M`` is passed explicitly, so the verdict does not depend on git config."""
+    repo, tmp = _repo_with_a_move()
+    try:
+        _git(repo, "config", "diff.renames", "false")
+        cwd = Path.cwd()
+        os.chdir(repo)
+        try:
+            ratchet_lint.rename_sources.cache_clear()
+            base_src = ratchet_lint.file_at_base("HEAD~1", "scripts/new.py")
+        finally:
+            os.chdir(cwd)
+        assert base_src == LEGACY, (
+            f"with diff.renames=false the rename must still be found via -M; got {base_src!r}"
+        )
+    finally:
+        tmp.cleanup()
+
+
+def test_an_unreadable_rename_lookup_says_so_instead_of_degrading_quietly(
+    capsys,
+) -> None:
+    """A gate that gets quietly less accurate is the failure mode being fixed.
+
+    On a git error the map falls back to empty — which silently measures a moved
+    file against no baseline. It must at least SAY so on stderr.
+    """
+    repo, tmp = _repo_with_a_move()
+    try:
+        cwd = Path.cwd()
+        os.chdir(repo)
+        try:
+            ratchet_lint.rename_sources.cache_clear()
+            pairs = ratchet_lint.rename_sources("no-such-ref-anywhere")
+        finally:
+            os.chdir(cwd)
+        assert dict(pairs) == {}
+        assert "rename information" in capsys.readouterr().err
+    finally:
+        tmp.cleanup()

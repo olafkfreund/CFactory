@@ -102,12 +102,15 @@ def _run(
 def changed_python_files(base: str, packages: list[str]) -> list[str]:
     """Python files under any of *packages* changed vs *base*.
 
-    ``ACMR`` — added, copied, modified, RENAMED. ``diff.renames`` has defaulted
-    to true since git 2.9, so a moved file has status R; the previous ``AM``
-    excluded it and a rename was gated by nothing at all (TFactory#1005). See
+    ``ACMR`` — added, copied, modified, RENAMED. The previous ``AM`` excluded a
+    moved file, so a rename was gated by nothing at all (TFactory#1005). See
     :func:`rename_sources` for why the baseline must follow the move.
+
+    ``-M`` is passed EXPLICITLY rather than relying on ``diff.renames``:
+    selecting the R status does not make git DETECT renames, and a gate whose
+    verdict depends on a developer's local git config is not a gate.
     """
-    res = _run(["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD"])
+    res = _run(["git", "diff", "-M", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD"])
     if res.returncode != 0:
         sys.stderr.write(res.stderr)
         sys.exit(2)
@@ -261,8 +264,16 @@ def rename_sources(base: str) -> Mapping[str, str]:
     """
     res = _run(["git", "diff", "--name-status", "-M", "--diff-filter=R", f"{base}...HEAD"])
     if res.returncode != 0:
-        # No rename information available: fall back to identity mapping rather
-        # than failing. Worst case is the pre-fix behaviour for moved files.
+        # Fall back to identity mapping rather than failing — worst case is the
+        # pre-fix behaviour for moved files — but SAY SO. A gate that quietly
+        # gets less accurate is the failure mode this whole change is about: the
+        # baseline would silently read as empty for a moved file and nothing
+        # would indicate why.
+        sys.stderr.write(
+            "ratchet: could not read rename information; moved files will be "
+            "measured against an empty baseline\n"
+        )
+        sys.stderr.write(res.stderr)
         return MappingProxyType({})
     pairs: dict[str, str] = {}
     for line in res.stdout.splitlines():

@@ -46,10 +46,9 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
-from collections.abc import Mapping
-from functools import cache
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from functools import cache
 from pathlib import Path
 from types import MappingProxyType
 

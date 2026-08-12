@@ -346,7 +346,16 @@ export type BillingByMode = z.infer<typeof BillingByModeSchema>;
 // absent on older/in-flight rows (the panel then falls back conservatively).
 export const BillingSummarySchema = z.object({
   modes: z.array(BillingModeSchema),
-  by_mode: z.record(BillingModeSchema, BillingByModeSchema),
+  // OPEN KEY (#353). The issue guessed the producer normalised to the five
+  // members above, because BillingModeSchema already carries `unknown`. It does
+  // not: `copilot/tools.py` builds this map with
+  //     mode = vals.get("billing_mode") or "unknown"
+  // which passes the UPSTREAM billing_mode through verbatim and only defaults
+  // when it is absent — and `billing_mode` is typed `str | None` on the model.
+  // So any new mode a service reports becomes a key here, and a closed key set
+  // turns that into a throw that takes the whole billing summary with it.
+  // Checked rather than assumed, which is what the issue asked for.
+  by_mode: z.record(z.string(), BillingByModeSchema),
   metered_cost_usd: z.number(), // real $ — api/cloud only
   nonmetered_tokens: z.number(), // subscription/local tokens (shown without $)
   has_metered: z.boolean(), // true → cost is real, may be shown
@@ -1566,7 +1575,16 @@ export const CardSchema = z
     deleted_at: z.string().nullish(),
     // Per-stage dispatch records, keyed by stage name. Optional so a card served
     // by a pre-Phase-7 backend still parses.
-    stage_runs: z.record(CardStageSchema, StageRunSchema).default({}),
+    //
+    // OPEN KEY, deliberately (#353, the shape #249 and #339 landed). Keying this
+    // by CardStageSchema made a stage the UI has never heard of throw, and the
+    // throw is not local: `getJson` calls `schema.parse`, so a fourth stage run
+    // does not blank one column, it fails CardSchema and the card does not
+    // render AT ALL. A board of 46 cards loses every card that reached that
+    // stage. Widening the wire type costs nothing here because every reader
+    // already narrows: CardParts filters by CARD_STAGES and cards.ts indexes by
+    // it, so an unknown key is ignored rather than drawn.
+    stage_runs: z.record(z.string(), StageRunSchema).default({}),
     // The imported issue DISCUSSION, as two scalars (Factory#375). The bodies are
     // a separate GET — 46 cards each carrying a full thread is a payload nobody
     // asked for, and the thread renders collapsed anyway. `comments_synced_at`

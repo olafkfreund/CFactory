@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   approvalBlockReason,
+  BillingSummarySchema,
   blockingLenses,
   CostRoutingSchema,
   FeedMessageSchema,
@@ -348,5 +349,41 @@ describe("ProcessDetailSchema stage keys are open (#339)", () => {
         graphs: { plan: { stage: "plan", nodes: "not-a-list" } },
       }),
     ).toThrow();
+  });
+});
+
+// #353. Same tripwire as #339 above, one schema over. `by_mode` was keyed by
+// BillingModeSchema, and the issue guessed the producer normalised to those five
+// members because the enum already carries `unknown`. It does not — checked, not
+// assumed: `copilot/tools.py` builds the map with
+//     mode = vals.get("billing_mode") or "unknown"
+// which passes the UPSTREAM billing_mode through verbatim and only defaults when
+// it is ABSENT, and `billing_mode` is `str | None` on the model. So a service
+// reporting a new mode puts an unheard-of key straight on the wire.
+describe("BillingSummarySchema by_mode keys are open (#353)", () => {
+  const withBedrock = {
+    modes: ["api"],
+    by_mode: {
+      api: { total_tokens: 10, cost_usd: 0.5, duration_ms: 100 },
+      bedrock: { total_tokens: 7, cost_usd: 0.25, duration_ms: 50 },
+    },
+    metered_cost_usd: 0.75,
+    nonmetered_tokens: 0,
+    has_metered: true,
+  };
+
+  it("parses a summary carrying a billing mode this build has never heard of", () => {
+    expect(() => BillingSummarySchema.parse(withBedrock)).not.toThrow();
+  });
+
+  it("keeps the modes it DOES understand rather than dropping the summary", () => {
+    const parsed = BillingSummarySchema.parse(withBedrock);
+    expect(parsed.by_mode.api?.cost_usd).toBe(0.5);
+    expect(parsed.metered_cost_usd).toBe(0.75);
+  });
+
+  it("carries the unrecognised mode through instead of erasing it", () => {
+    const parsed = BillingSummarySchema.parse(withBedrock);
+    expect(parsed.by_mode.bedrock?.total_tokens).toBe(7);
   });
 });

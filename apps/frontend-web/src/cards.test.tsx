@@ -98,6 +98,42 @@ describe("CardSchema (HTTP boundary)", () => {
     expect(parsed.title).toBe(CARD.title);
   });
 
+  // #353 / Factory#431, the shape #249 and #339 landed. `stage_runs` was keyed
+  // by CardStageSchema, and `getJson` calls `schema.parse` and THROWS — so a
+  // backend recording a fourth stage did not blank one column, it failed
+  // CardSchema and the card did not render AT ALL. On a board of 46 cards that
+  // is every card which has reached that stage, gone, with no clue why.
+  //
+  // Bigger blast radius than #339's: that one took down a drawer, this one takes
+  // out the board.
+  describe("stage_runs keys are open (#353)", () => {
+    const withDeploy = {
+      ...CARD,
+      stage_runs: {
+        code: { service: "aifactory", status: "done" as const },
+        deploy: { service: "aifactory", status: "dispatched" as const },
+      },
+    };
+
+    it("parses a card carrying a stage this build has never heard of", () => {
+      expect(() => CardSchema.parse(withDeploy)).not.toThrow();
+    });
+
+    it("keeps the stages it DOES understand rather than dropping the card", () => {
+      const parsed = CardSchema.parse(withDeploy);
+      expect(parsed.stage_runs.code?.status).toBe("done");
+      expect(parsed.card_key).toBe("FCT-42");
+    });
+
+    it("carries the unrecognised stage through instead of erasing it", () => {
+      // Binning it at the schema would hide that a newer producer is talking.
+      // The render sites narrow instead — CardParts filters by CARD_STAGES and
+      // stageBlocker indexes by it — so nothing draws a stage it cannot name.
+      const parsed = CardSchema.parse(withDeploy);
+      expect(parsed.stage_runs.deploy?.status).toBe("dispatched");
+    });
+  });
+
   it("rejects an out-of-contract status", () => {
     expect(() => CardSchema.parse({ ...CARD, status: "archived" })).toThrow();
   });

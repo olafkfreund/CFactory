@@ -113,12 +113,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out this service
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: service
 
       - name: Check out the Factory hub CONTRACT at the pinned SHA
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: olafkfreund/Factory
           ref: ${{ env.HUB_PIN_SHA }}
@@ -135,13 +135,13 @@ jobs:
         # honestly red - the gate genuinely cannot run - and it resolves itself
         # the moment #617 merges. It was observed running GREEN once, from the
         # pin, in CFactory run 31187440916; see the PR body.
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: olafkfreund/Factory
           ref: main
           path: factory-hub-main
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 

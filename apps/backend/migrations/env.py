@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from logging.config import fileConfig
 
-import cfactory.audit
+import cfactory.audit  # registers AuditEntry on Base.metadata
 import cfactory.cards  # registers CardRow on Base.metadata
 import cfactory.store  # noqa: F401  (registers WorkItemRow on Base.metadata)
 from alembic import context

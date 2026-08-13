@@ -65,7 +65,7 @@ from cfactory.credentials import (
     seal,
     unseal,
 )
-from cfactory.git_config import CREDENTIAL_MISSING, UNCONFIGURED, VERIFIED, GitConfigUpdate
+from cfactory.git_config import CREDENTIAL_MISSING, UNCONFIGURED, VERIFIED
 from cfactory.git_connections import (
     GitConnectionCreate,
     GitConnectionUpdate,
@@ -74,7 +74,7 @@ from cfactory.git_connections import (
     GitRepositoryUpdate,
     GitResourceNotFoundError,
 )
-from cfactory.git_providers import HttpGitHubProvider, build_provider
+from cfactory.git_providers import build_provider
 from fastapi.testclient import TestClient
 from runners.github.providers.gitlab_provider import GitLabProvider
 from sqlalchemy import select, text
@@ -1098,9 +1098,9 @@ def test_the_alembic_migration_adopts_the_single_row(tmp_path, monkeypatch, keyr
 def _alembic_ini():
     from pathlib import Path
 
-    import cfactory
+    from cfactory import __file__ as _cfactory_file
 
-    return Path(cfactory.__file__).resolve().parent.parent / "alembic.ini"
+    return Path(_cfactory_file).resolve().parent.parent / "alembic.ini"
 
 
 def test_an_old_schema_database_gains_the_new_columns_at_boot(tmp_path, keyring, settings):

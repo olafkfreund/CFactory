@@ -63,7 +63,6 @@ from cfactory.cards import CardCreate, CardStore
 from cfactory.config import Settings
 from cfactory.credentials import (
     CredentialError,
-    GitCredentialRow,
     KeyRing,
     load_keyring,
     rewrap,
@@ -80,7 +79,6 @@ from cfactory.git_config import (
 from cfactory.git_providers import HttpGitHubProvider, build_provider
 from fastapi.testclient import TestClient
 from runners.github.providers.gitlab_provider import GitLabProvider
-from sqlalchemy import select
 
 # Fake key material, generated once and pinned here so a failure is reproducible.
 # Not a secret: it protects nothing but this test module's temp databases.

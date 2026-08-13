@@ -25,16 +25,15 @@ import logging
 import sys
 from pathlib import Path
 
-import cfactory
 import pytest
 from alembic import command
 from alembic.config import Config
-from cfactory import db as db_module
+from cfactory import __file__ as _cfactory_file, db as db_module
 from cfactory.config import Settings
 
 
 def _alembic_ini() -> Path:
-    return Path(cfactory.__file__).resolve().parent.parent / "alembic.ini"
+    return Path(_cfactory_file).resolve().parent.parent / "alembic.ini"
 
 
 @pytest.fixture

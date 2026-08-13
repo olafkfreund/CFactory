@@ -156,8 +156,6 @@ def test_initialize_and_tools_list(mcp_client):
 
 
 def test_list_workitems_summarizes_each_factory(mcp_client):
-    import json
-
     r = _call(mcp_client, "cfactory_list_workitems")
     payload = json.loads(r.json()["result"]["content"][0]["text"])
     assert payload["count"] == 1
@@ -169,8 +167,6 @@ def test_list_workitems_summarizes_each_factory(mcp_client):
 
 
 def test_get_workitem_full_state(mcp_client):
-    import json
-
     r = _call(mcp_client, "cfactory_get_workitem", {"correlation_key": "142"})
     payload = json.loads(r.json()["result"]["content"][0]["text"])
     assert payload["correlation_key"] == "142"
@@ -178,8 +174,6 @@ def test_get_workitem_full_state(mcp_client):
 
 
 def test_get_workitem_missing_key(mcp_client):
-    import json
-
     r = _call(mcp_client, "cfactory_get_workitem", {"correlation_key": "999"})
     payload = json.loads(r.json()["result"]["content"][0]["text"])
     assert "error" in payload

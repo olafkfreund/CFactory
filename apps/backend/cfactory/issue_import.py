@@ -496,7 +496,12 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
         # own text is not returned: it reaches an API response and names internal
         # hosts and paths (CWE-209).
         ref = error_reference(logger, f"issue import failed for {target}", exc)
-        return _result(target, ok=False, reason=f"the provider call failed (reference {ref})")
+        return _result(
+            target,
+            ok=False,
+            reason=f"the provider call failed (reference {ref})",
+            rate_limited=_looks_rate_limited(exc),
+        )
 
     # The provider was asked for issues only; asserting it again is one line and
     # covers a host that answers with merge requests anyway.
@@ -601,9 +606,21 @@ class PollBackoff:
 
 
 def _is_rate_limited(result: dict[str, Any]) -> bool:
-    """Does this failure look like the host asking us to slow down?"""
-    reason = str(result.get("reason") or "").lower()
-    return "429" in reason or "rate limit" in reason or "too many requests" in reason
+    """Did the host ask us to slow down?
+
+    Reads the flag :func:`import_issues` set from the EXCEPTION, not the
+    ``reason`` string. It used to grep the reason for "429" - which coupled the
+    backoff ladder to the wording of a human-facing message, and duly broke the
+    moment that message stopped quoting the provider's error (CWE-209: it named
+    internal hosts and paths). A machine decision reads a machine field.
+    """
+    return bool(result.get("rate_limited"))
+
+
+def _looks_rate_limited(exc: BaseException) -> bool:
+    """Does this exception carry the host's "too many requests" refusal?"""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "429" in text or "rate limit" in text or "too many requests" in text
 
 
 def _lease_key(project: str | None) -> str:
@@ -752,5 +769,8 @@ def _result(project: str, *, ok: bool, **extra: Any) -> dict[str, Any]:
         # failed, in which case nothing was stored and no card claims completeness.
         "comments": {"ok": True, "cards": 0, "comments": 0},
         "live": False,  # Poll-based, by design. See the module docstring.
+        # Set from the EXCEPTION on a failed pass, so the poll's backoff ladder
+        # never has to grep a human-facing reason string (see _is_rate_limited).
+        "rate_limited": False,
         **extra,
     }

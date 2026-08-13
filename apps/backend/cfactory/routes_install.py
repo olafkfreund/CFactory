@@ -173,7 +173,12 @@ def git_install_callback(
             f"{ref} if you need to ask an administrator what happened.",
             status=int(HTTPStatus.BAD_REQUEST),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — an unauthenticated browser landing
+        # spot must answer, never 500 with a default error page. The catch was
+        # always blind; ruff only stops seeing that as handled because the log
+        # call moved into error_reference (which logs with exc_info, i.e. the
+        # same traceback logger.exception wrote here before).
+        #
         # Same rule for the unexpected half. Not even the exception's class name:
         # it names the library that failed, which is a free version probe.
         ref = error_reference(logger, "install callback failed unexpectedly", exc)

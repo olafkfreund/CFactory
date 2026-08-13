@@ -384,8 +384,8 @@ def _sync_comments(
             # reason reaches an API response, and provider/stdlib exception text
             # names internal hosts and paths (CWE-209, same class as the two
             # CodeQL flagged in routes_install / routes_cards).
-            ref = error_reference(logger, f"comment read failed for {project}", exc)
-            reasons.append(f"the provider call failed (reference {ref})")
+            error_id = error_reference(logger, f"comment read failed for {project}", exc)
+            reasons.append(f"the provider call failed (reference {error_id})")
             continue
         synced_at = datetime.now(UTC)
         for number, comments in threads.items():
@@ -495,11 +495,11 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
         # a correlation id is returned and audited by the caller. The exception's
         # own text is not returned: it reaches an API response and names internal
         # hosts and paths (CWE-209).
-        ref = error_reference(logger, f"issue import failed for {target}", exc)
+        error_id = error_reference(logger, f"issue import failed for {target}", exc)
         return _result(
             target,
             ok=False,
-            reason=f"the provider call failed (reference {ref})",
+            reason=f"the provider call failed (reference {error_id})",
             rate_limited=_looks_rate_limited(exc),
         )
 

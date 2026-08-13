@@ -308,8 +308,8 @@ def sync_card(
         # provider code and the stdlib: a DNS failure names an internal host, a
         # file error names a path on disk (CodeQL py/stack-trace-exposure,
         # CWE-209). The id is greppable in the log, where the detail belongs.
-        ref = error_reference(logger, f"issue sync failed for {card.card_key}", exc)
-        reason = f"the provider call failed (reference {ref})"
+        error_id = error_reference(logger, f"issue sync failed for {card.card_key}", exc)
+        reason = f"the provider call failed (reference {error_id})"
         changes: dict[str, Any] = {"github_sync_error": reason}
         if _is_missing(exc):
             # Deleted or transferred on the host (RFC-0020 §3.6). The card is

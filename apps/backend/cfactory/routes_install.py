@@ -163,14 +163,14 @@ def git_install_callback(
         # private-key path on disk, which env vars are unset, the exception type
         # a PEM parse produced. That is CWE-209 disclosure to whoever can reach
         # the callback URL. The caller gets a reference; an operator greps it.
-        ref = error_reference(
+        error_id = error_reference(
             logger, f"install callback refused (setup_action={query.setup_action})", exc
         )
         return _page(
             "Install not completed",
             "The install could not be completed and nothing was stored. "
             "Try again from Settings > Git connections, and quote reference "
-            f"{ref} if you need to ask an administrator what happened.",
+            f"{error_id} if you need to ask an administrator what happened.",
             status=int(HTTPStatus.BAD_REQUEST),
         )
     except Exception as exc:  # noqa: BLE001 — an unauthenticated browser landing
@@ -181,13 +181,13 @@ def git_install_callback(
         #
         # Same rule for the unexpected half. Not even the exception's class name:
         # it names the library that failed, which is a free version probe.
-        ref = error_reference(logger, "install callback failed unexpectedly", exc)
+        error_id = error_reference(logger, "install callback failed unexpectedly", exc)
         _audit(audit, store, ok=False)
         return _page(
             "Install not completed",
             "Something went wrong completing the install and nothing was stored. "
             "Try again from Settings > Git connections, and quote reference "
-            f"{ref} if you need to ask an administrator what happened.",
+            f"{error_id} if you need to ask an administrator what happened.",
             status=int(HTTPStatus.BAD_REQUEST),
         )
 

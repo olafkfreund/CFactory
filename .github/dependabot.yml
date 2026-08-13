@@ -25,8 +25,14 @@
 # Weekly, not daily: unlike the digest-pinned siblings there is no rot window to
 # close here, so the cadence is set for review load rather than for outage risk.
 #
-# Not covered, stated rather than implied: github-actions SHA pinning, and
-# `COPY --from=<image>` pins -- Dependabot's Dockerfile parser only reads FROM,
+# github-actions IS now covered (see the third entry). It was listed here as an
+# uncovered gap until the actions SHA pins landed: a SHA pin freezes the action
+# at a commit, which is the point, but an unwatched frozen pin rots into an
+# unpatched action just as surely as a floating tag drifts. Pinning without an
+# updater trades one supply-chain failure mode for another.
+#
+# Still not covered, stated rather than implied: `COPY --from=<image>` pins --
+# Dependabot's Dockerfile parser only reads FROM,
 # verified 2026-07-30 with dependabot-cli v1.91.0. Neither was covered before.
 # If the Renovate App is ever installed, delete this file rather than let two
 # bots rewrite the same FROM lines.
@@ -46,6 +52,28 @@ updates:
       - dependencies
       - docker
       - base-image
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+
+  # Keeps the SHA pins in .github/workflows/** current. GROUPED deliberately:
+  # this repo pins nine action refs across five distinct actions, and an
+  # ungrouped weekly run opens a PR per action. A five-PR-a-week bot is one that
+  # gets muted, and a muted updater is the same as no updater -- which is the
+  # exact failure this file's header documents for Renovate. One grouped PR is
+  # reviewable, so it gets reviewed.
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - github-actions
     commit-message:
       prefix: "chore(deps)"
     open-pull-requests-limit: 5

@@ -68,7 +68,7 @@ jobs:
       - uses: actions/checkout@v4
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
       # The cfactory / cfactory-frontend GHCR packages are user-owned and NOT
       # linked to this repo, so the repo-scoped GITHUB_TOKEN can't push to them
       # (HEAD blob → 403 Forbidden) despite `packages: write` above. Prefer a
@@ -79,7 +79,7 @@ jobs:
       #     this repo with Write (then GITHUB_TOKEN works, no secret needed), OR
       #   - gh secret set GHCR_PAT --repo olafkfreund/CFactory   (classic PAT,
       #     scope write:packages)
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -87,7 +87,7 @@ jobs:
 
       - name: Build + push backend
         id: build_backend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: .
           file: Dockerfile
@@ -103,7 +103,7 @@ jobs:
 
       - name: Build + push frontend (cockpit)
         id: build_frontend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: apps/frontend-web
           # The app's tsconfig extends the vendored fleet baseline, which lives
@@ -227,7 +227,7 @@ jobs:
       # signature per image covers both :sha-<short> and :latest.
       # ----------------------------------------------------------------------
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da  # v3.7.0
 
       - name: Sign both images (cosign keyless via Sigstore + GitHub OIDC)
         run: |
@@ -249,7 +249,7 @@ jobs:
           done
 
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@v0.17.8
+        uses: anchore/sbom-action/download-syft@55dc4ee22412511ee8c3142cbea40418e6cec693  # v0.17.8
 
       - name: Generate + attest dual SBOMs (SPDX + CycloneDX) for both images
         run: |

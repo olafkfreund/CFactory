@@ -6,6 +6,7 @@ import logging
 from typing import Annotated
 
 import httpx
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
@@ -128,7 +129,7 @@ async def update_service(
             try:
                 probe = await run_in_threadpool(adapter.probe)
             except Exception:  # never fatal — logged and reported as an offline probe
-                logger.exception("[cfactory] probe failed service=%s", name)
+                logger.exception("[cfactory] probe failed service=%s", sanitize_log(name))
                 probe = ServiceProbe(online=False, status="error", detail="probe failed")
         adapter.close()
     return {

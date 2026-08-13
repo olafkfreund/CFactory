@@ -73,6 +73,7 @@ from runners.github.providers.protocol import IssueData
 
 from .cards import Card, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
+from .error_ref import error_reference
 from .git_config import PROJECT_PATTERN, GitTarget
 from .git_providers import IssueProvider, build_provider, run_sync
 
@@ -298,10 +299,17 @@ def sync_card(
         # payload is a KeyError, an unimplemented host surface a
         # NotImplementedError). Naming a list of exception types would mean an
         # unlisted one 500s the board — precisely the outcome this clause exists
-        # to prevent. Nothing is swallowed: the reason lands on the card (so the
-        # board shows it), in the log, and in the return value the caller audits.
-        reason = f"{type(exc).__name__}: {exc}"[:512]
-        logger.warning("issue sync failed for %s: %s", card.card_key, reason)
+        # to prevent. Nothing is swallowed: the FULL failure goes to the log, and
+        # a correlation id lands on the card (so the board shows it) and in the
+        # return value the caller audits.
+        #
+        # The exception's own text used to be that reason. It reaches an API
+        # response (`POST /cards/{key}:sync`), and it is written by third-party
+        # provider code and the stdlib: a DNS failure names an internal host, a
+        # file error names a path on disk (CodeQL py/stack-trace-exposure,
+        # CWE-209). The id is greppable in the log, where the detail belongs.
+        ref = error_reference(logger, f"issue sync failed for {card.card_key}", exc)
+        reason = f"the provider call failed (reference {ref})"
         changes: dict[str, Any] = {"github_sync_error": reason}
         if _is_missing(exc):
             # Deleted or transferred on the host (RFC-0020 §3.6). The card is

@@ -54,6 +54,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .cards import Card, CardComment, CardCreate, CardStatus, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
+from .error_ref import error_reference
 from .git_config import PROJECT_RE
 from .git_providers import IssueProvider, build_provider, run_sync
 from .github_sync import IssueRef, sync_enabled
@@ -379,9 +380,12 @@ def _sync_comments(
             # not abandon the other, and must not take the import down. Reported,
             # never swallowed: nothing is stored and no marker moves, so the cards
             # keep saying "unknown" rather than "no discussion".
-            reason = f"{type(exc).__name__}: {exc}"[:512]
-            logger.warning("comment read failed for %s: %s", project, reason)
-            reasons.append(reason)
+            # The full failure to the log, a correlation id to the caller: this
+            # reason reaches an API response, and provider/stdlib exception text
+            # names internal hosts and paths (CWE-209, same class as the two
+            # CodeQL flagged in routes_install / routes_cards).
+            ref = error_reference(logger, f"comment read failed for {project}", exc)
+            reasons.append(f"the provider call failed (reference {ref})")
             continue
         synced_at = datetime.now(UTC)
         for number, comments in threads.items():
@@ -487,11 +491,12 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
     except Exception as exc:  # noqa: BLE001 — the never-raises contract, same as
         # github_sync.sync_card: behind the protocol sits third-party provider
         # code we do not control, and an unlisted exception type must not take
-        # the board down. Nothing is swallowed — the reason is returned, logged,
-        # and audited by the caller.
-        reason = f"{type(exc).__name__}: {exc}"[:512]
-        logger.warning("issue import failed for %s: %s", target, reason)
-        return _result(target, ok=False, reason=reason)
+        # the board down. Nothing is swallowed — the FULL failure is logged, and
+        # a correlation id is returned and audited by the caller. The exception's
+        # own text is not returned: it reaches an API response and names internal
+        # hosts and paths (CWE-209).
+        ref = error_reference(logger, f"issue import failed for {target}", exc)
+        return _result(target, ok=False, reason=f"the provider call failed (reference {ref})")
 
     # The provider was asked for issues only; asserting it again is one line and
     # covers a host that answers with merge requests anyway.

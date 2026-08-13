@@ -17,6 +17,8 @@ The three properties that carry weight, each with a test named for it:
 
 from __future__ import annotations
 
+import re
+
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -35,6 +37,11 @@ from fastapi.testclient import TestClient
 from runners.github.providers.gitlab_provider import GitLabProvider
 
 from cfactory.api_deps import action_transport_dep  # isort: skip
+
+#: A client-safe failure reason: a correlation id, and nothing that names
+#: an internal host, path or library (CWE-209).
+_REFERENCE_RE = re.compile(r"reference ([0-9a-f]{12})")
+
 
 _TEST_TOKEN = "test-provider-token-not-a-credential"  # noqa: S105 — a fake, not a secret
 _TEST_HMAC = "issue-import-test-hmac"
@@ -193,7 +200,9 @@ def test_an_unreachable_provider_is_reported_not_raised(cards):
     result = _import(cards, host)
 
     assert result["ok"] is False
-    assert "500" in result["reason"]
+    # The reason is a correlation id, not the provider's error text: it
+    # reaches an API response and that text names internal hosts and paths.
+    assert _REFERENCE_RE.search(result["reason"])
     assert cards.list() == []
 
 

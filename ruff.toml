@@ -38,4 +38,9 @@ extend = "standards/ruff.toml"
 #
 # The ratchet reads standards/ruff.toml directly, not this file, so it carries
 # the same exclusion separately in VENDORED_SKIP.
-extend-exclude = ["scripts/ratchet_helpers.py"]
+# apps/backend/factory_common/ is the same arrangement for the hub's
+# shared/factory-common/ layer (the stdlib-only utilities, including the
+# sanitize_log this repo now logs through), pinned by its own .hub-sha. The hub
+# formats at 100 columns; reformatting the copy here breaks byte-exactness
+# against that pin exactly as it would for ratchet_helpers.py above.
+extend-exclude = ["scripts/ratchet_helpers.py", "apps/backend/factory_common/"]

@@ -7,6 +7,7 @@ can thread work across services by correlation key.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import httpx
@@ -120,7 +121,9 @@ _HTTP_REFUSED = 409
 def _refusal(service: str, method: str, path: str, resp: httpx.Response) -> AdapterRefusalError:
     """Build an AdapterRefusalError carrying the upstream's own error text if it sent one."""
     detail: str | None = None
-    try:
+    # The refusal body is not guaranteed to be JSON — probing it is best-effort;
+    # a non-JSON body just means we fall back to resp.reason_phrase below.
+    with contextlib.suppress(ValueError):
         body = resp.json()
         if isinstance(body, dict):
             raw = body.get("error") or body.get("detail")
@@ -128,8 +131,6 @@ def _refusal(service: str, method: str, path: str, resp: httpx.Response) -> Adap
             # (dict/list/number), and .detail is annotated str | None. Without
             # this the annotation quietly lies and the message embeds a repr.
             detail = raw if isinstance(raw, str) else (str(raw) if raw is not None else None)
-    except ValueError:
-        pass
     return AdapterRefusalError(
         f"{service}: {method} {path} refused (409): {detail or resp.reason_phrase}",
         detail=detail,

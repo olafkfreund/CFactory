@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
 
+from factory_common.logsafe import sanitize_log
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -27,6 +29,8 @@ from .models import Service
 from .status_taxonomy import is_stuck
 from .store import WorkItemStore, get_store
 from .ws import ConnectionManager
+
+logger = logging.getLogger(__name__)
 
 _SPLIT_RE = re.compile(r"[\s_\-]+")
 
@@ -154,8 +158,14 @@ def poll_progress_once(
                 store.prune_duplicate_stages(
                     adapter.service, {i.task_id: i.correlation_key for i in live}
                 )
-        except AdapterError:
-            pass
+        except AdapterError as exc:
+            # Best-effort per docstring: a down service is skipped and never
+            # reconciled this cycle rather than taking the whole poll down.
+            logger.warning(
+                "[cfactory] progress poll skipped service=%s error=%s",
+                adapter.service,
+                sanitize_log(str(exc)),
+            )
         finally:
             adapter.close()
     if store is not None:

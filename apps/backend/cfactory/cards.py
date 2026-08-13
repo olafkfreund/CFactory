@@ -1468,7 +1468,7 @@ class CardStore:
     # written any more — that table is read once, by
     # :meth:`adopt_legacy_git_config`, and never again.
 
-    def set_git_config(self, update: GitConfigUpdate, settings: Settings | None = None) -> None:
+    def set_git_config(self, update: GitConfigUpdate, _settings: Settings | None = None) -> None:
         """Replace this tenant's DEFAULT repository, and the connection it is on.
 
         The phase-2 PUT semantics, expressed on the new model: the provider and
@@ -1480,8 +1480,12 @@ class CardStore:
         DEFAULT, so a card that names none is ``unconfigured`` again, and leaves
         every repository (and every card pointing at one) intact — a full-replace
         of one field is not a mandate to destroy the rest of the tenant's setup.
+
+        ``_settings`` is accepted-but-unused: every call site (including sibling
+        shims like :meth:`seed_git_config_from_env`) passes its already-resolved
+        ``Settings`` along for call-signature parity, but nothing in this method's
+        body is environment-dependent, so there is nothing to resolve here.
         """
-        settings = settings or get_settings()
         fields = validated_fields(update)
         connection = self._shim_connection(str(fields["provider"]), fields["base_url"])
         # The phase-2 rule: any configuration write invalidates the verification.

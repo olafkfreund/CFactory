@@ -81,12 +81,12 @@ jobs:
     name: ruff + mypy ratchet (diff-scoped, blocking)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Need history back to the PR base for the diff-scoped ratchet.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -119,8 +119,8 @@ jobs:
     name: ruff format --check (apps/backend/cfactory + scripts, blocking)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - name: Install ruff (pinned)
@@ -155,7 +155,7 @@ jobs:
     # To update either: re-vendor from the hub and bump the corresponding SHA
     # below (contracts also bumps _contracts/__init__.py + the drift test).
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: cfactory
       # Neither hub checkout carries continue-on-error: an unreachable hub is a
@@ -178,13 +178,13 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Check out hub standards at the pinned SHA
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: olafkfreund/Factory
           ref: ${{ steps.pin.outputs.sha }}
           path: factory-hub-standards
       - name: Check out hub at the pinned contracts SHA
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: olafkfreund/Factory
           ref: ${{ env.CONTRACTS_PIN_SHA }}
@@ -238,8 +238,8 @@ jobs:
       run:
         working-directory: apps/frontend-web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm

@@ -11,6 +11,8 @@ so the override keys are identical.
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 from fastapi import Header, HTTPException, WebSocket
 from pydantic import BaseModel
@@ -21,9 +23,12 @@ from .auth import READ, authorize_headers, get_keystore
 from .cards import CardStore, get_cards_store
 from .config import get_settings, resolve_tenant
 from .copilot import Copilot, get_copilot
+from .error_ref import error_reference
 from .live_agent_proxy import ConnectFn
 from .progress import LiveProgressHub, get_progress_hub
 from .store import WorkItemStore, get_store
+
+logger = logging.getLogger(__name__)
 
 
 class AskRequest(BaseModel):
@@ -158,12 +163,15 @@ def fetch_provider_auth(
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPError as exc:
+        # httpx errors name the URL, host and port they could not reach, and
+        # those are internal service endpoints.
+        ref = error_reference(logger, "provider auth check failed", exc)
         return {
             "reachable": False,
             "reported": False,
             "any_configured": False,
             "providers": [],
-            "error": str(exc),
+            "error": f"the provider check failed (reference {ref})",
         }
     pa = data.get("provider_auth") if isinstance(data, dict) else None
     if not isinstance(pa, dict):
@@ -198,7 +206,14 @@ def probe_observe(
         with httpx.Client(base_url=base_url, timeout=timeout, transport=transport) as client:
             resp = client.get(OBSERVE_HEALTH_PATH)
     except httpx.HTTPError as exc:
-        return ServiceProbe(online=False, status="offline", detail=str(exc))
+        # detail reaches the cockpit UI, and an httpx error names the host and
+        # port of the internal service it could not reach.
+        ref = error_reference(logger, "observe health probe failed", exc)
+        return ServiceProbe(
+            online=False,
+            status="offline",
+            detail=f"the service could not be reached (reference {ref})",
+        )
     code = resp.status_code
     if code == _HTTP_OK:
         return ServiceProbe(online=True, status="online")

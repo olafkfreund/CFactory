@@ -8,12 +8,17 @@ can thread work across services by correlation key.
 from __future__ import annotations
 
 import contextlib
+import logging
 from typing import Any
 
 import httpx
 from pydantic import BaseModel
 
+from cfactory.error_ref import error_reference
+
 from ..models import Service, ServiceState
+
+logger = logging.getLogger(__name__)
 
 
 class AdapterItem(BaseModel):
@@ -223,7 +228,14 @@ class BaseHTTPAdapter:
         try:
             resp = self._client.get(self.list_path, timeout=timeout)
         except httpx.HTTPError as exc:
-            return ServiceProbe(online=False, status="offline", detail=str(exc))
+            # Same as the observe probe: detail is rendered in the cockpit and
+            # an httpx error names the internal host and port.
+            ref = error_reference(logger, f"{self.service.value} probe failed", exc)
+            return ServiceProbe(
+                online=False,
+                status="offline",
+                detail=f"the service could not be reached (reference {ref})",
+            )
         code = resp.status_code
         if code in (401, 403):
             return ServiceProbe(

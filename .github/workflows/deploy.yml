@@ -65,7 +65,7 @@ jobs:
       # steps can gate on env.GITOPS_PAT instead.
       GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
@@ -285,7 +285,7 @@ jobs:
           done
 
       - name: Upload SBOMs as workflow artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cfactory-sboms-${{ steps.tags.outputs.sha }}
           path: sbom-*.json
@@ -390,11 +390,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Factory seam harness
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: main
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Require the fleet token (fail closed, rule 4.7)

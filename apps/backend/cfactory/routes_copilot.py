@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -11,6 +12,9 @@ from .api_deps import AskRequest, CopilotSettingsUpdate, copilot_dep
 from .auth import require_scope
 from .config import COPILOT_PROVIDERS, get_settings, resolve_tenant, set_copilot_settings
 from .copilot import Copilot, provider_status, reset_copilot
+from .error_ref import InputRejectedError, client_error
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["copilot"])
 
@@ -67,7 +71,12 @@ async def update_copilot_settings(
     Requires the ``write`` scope when API keys are configured."""
     try:
         await run_in_threadpool(set_copilot_settings, update.provider, update.model)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except InputRejectedError as exc:
+        # set_copilot_settings raises InputRejectedError directly (#718) --
+        # marked at the source, since only the raise site knows its message
+        # is developer-written about the caller's own input.
+        raise HTTPException(
+            status_code=400, detail=client_error(logger, "invalid copilot settings", exc)
+        ) from exc
     reset_copilot()
     return await run_in_threadpool(_settings_payload)

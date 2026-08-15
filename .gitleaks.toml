@@ -1,0 +1,23 @@
+title = "gitleaks config for CFactory"
+
+[extend]
+useDefault = true
+
+# Allowlist entries below are for confirmed false positives found by the
+# baseline full-history scan (Factory#724). Each is a fixture or doc text,
+# not a live credential. See the referenced test/doc file for the comment
+# marking the value as fake.
+
+[[allowlists]]
+description = "Test fixtures use fake gitlab/github token-shaped strings, explicitly commented as not real (see file headers)."
+paths = [
+  '''tests/test_git_install\.py''',
+  '''tests/test_git_credentials\.py''',
+  '''tests/test_git_multi_connection\.py''',
+]
+
+[[allowlists]]
+description = "Docs mention the Helm value name `apiKeys.enabled=true`, which gitleaks' generic-api-key rule misreads as a credential; it is a boolean feature flag, not a secret."
+paths = [
+  '''docs/guides/token-gated-api\.md''',
+]

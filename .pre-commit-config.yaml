@@ -194,3 +194,11 @@ repos:
         language: system
         files: ^apps/frontend-web/.*\.(ts|tsx)$
         pass_filenames: false
+
+  # Gitleaks secret scanning (Factory#724). Same tool, same config
+  # (.gitleaks.toml) as .github/workflows/secret-scan.yml, so a clean
+  # pre-commit run means the CI gate will not surprise you.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e  # v8.30.1
+    hooks:
+      - id: gitleaks

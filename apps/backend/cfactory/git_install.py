@@ -283,7 +283,19 @@ def github_private_key(settings: Settings) -> str | None:
         try:
             return Path(path).read_text(encoding="utf-8")
         except OSError as exc:
-            # The path, never the contents.
+            # The path, never the contents. And note (#718): this specific
+            # InstallError message is the reason InstallError as a TYPE is not
+            # safe to mark verbatim everywhere it's caught -- error_ref.py's
+            # docstring names this exact string as its motivating example of
+            # what must not reach an unauthenticated caller. It IS reachable
+            # from routes_install.py's OAuth callback (unauthenticated), which
+            # correctly redacts via error_reference() rather than str(exc).
+            # It is NOT reachable from routes_git_config.py's start_git_install
+            # route (authenticated, write-scoped) -- that path only calls
+            # install_available()/callback_url(), never this function -- so
+            # marking InstallError safe there is a decision about which raise
+            # sites are reachable from THAT call graph, not about this type in
+            # general. Do not assume the other route's treatment transfers.
             raise InstallError(
                 f"the GitHub App private key file {path!r} could not be read: {exc.strerror}"
             ) from None

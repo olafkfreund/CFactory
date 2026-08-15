@@ -30,9 +30,58 @@ import uuid
 
 from factory_common.logsafe import sanitize_log
 
+__all__ = ["InputRejectedError", "client_error", "error_reference"]
+
 #: Length of the id. 12 hex chars is 48 bits: far beyond collision range for a
 #: log window an operator will ever grep, and short enough to read aloud.
 _REF_CHARS = 12
+
+
+class InputRejectedError(ValueError):
+    """A validation failure whose message is DELIBERATELY safe to hand back.
+
+    ``error_reference`` above solves the "I don't know if this text is safe"
+    case: redact it, log it in full, hand back a correlation id. This class is
+    the other half -- for the sites where the raiser already knows the message
+    is developer-written, about the caller's own input, and names nothing this
+    server holds. GitConfigError/GitResourceNotFoundError/CredentialError raise
+    sites in this package are that shape ("base_url must start with http:// or
+    https://", "no git connection 4 for this tenant") -- fixed, reviewable
+    strings, never an inner exception's rendered text.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep
+    working. The safe sentence lives in :attr:`client_message`, set once at
+    construction -- never re-derived from ``str(exc)``, because
+    ``BaseException.__str__`` renders ``args``, and ``args`` is written by
+    every exception in the process, not just this one's raise sites.
+
+    What this does NOT establish is that a raise site chose its wording
+    wisely: ``InputRejectedError(f"failed: {inner}")`` launders ``inner``
+    straight through. See git_install.py's ``InstallError`` for the case that
+    makes this concrete -- the exact same exception TYPE has one raise site
+    that names a private-key path on disk and others that don't, so marking
+    a type safe here means verifying the *raise sites actually reachable from
+    this call path*, not the type in general.
+    """
+
+    def __init__(self, client_message: str) -> None:
+        super().__init__(client_message)
+        self.client_message = client_message
+
+
+def client_error(logger: logging.Logger, context: str, exc: BaseException) -> str:
+    """Return a caller-safe message: ``exc``'s own text if it is an
+    :class:`InputRejectedError`, otherwise ``context`` plus an
+    :func:`error_reference`.
+
+    The one-liner a route handler reaches for instead of ``detail=str(exc)``.
+    """
+    if isinstance(exc, InputRejectedError):
+        # See InputRejectedError: developer-written text about the caller's
+        # own input. Surfaced verbatim, and not worth a log record either --
+        # a rejected field is validation working, not an incident.
+        return exc.client_message
+    return f"{context} (reference {error_reference(logger, context, exc)})"
 
 
 def error_reference(logger: logging.Logger, context: str, exc: BaseException) -> str:

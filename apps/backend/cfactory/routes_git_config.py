@@ -20,6 +20,7 @@ itself, and it is verified.
 
 from __future__ import annotations
 
+import logging
 from http import HTTPStatus
 from typing import Annotated
 
@@ -37,6 +38,7 @@ from .cards import CardStore
 from .config import get_settings, resolve_tenant
 from .credentials import CredentialError
 from .enterprise import identity_dep
+from .error_ref import InputRejectedError, client_error
 from .git_config import GitConfigError, GitConfigUpdate
 from .git_connections import (
     GitConnectionCreate,
@@ -46,6 +48,8 @@ from .git_connections import (
     GitResourceNotFoundError,
 )
 from .git_install import InstallError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["git-config"])
 
@@ -144,7 +148,10 @@ def put_git_config(
             store, AuditContext(audit, actor, endpoint=REST_ENDPOINT), update
         )
     except GitConfigError as exc:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.post("/api/tenants/{tenant}/git-config:verify")
@@ -223,7 +230,10 @@ def put_git_credential(
             body.credential.get_secret_value(),
         )
     except CredentialError as exc:
-        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.delete("/api/tenants/{tenant}/git-credential")
@@ -315,7 +325,10 @@ def create_git_connection(
     try:
         return git_config_ops.create_git_connection(store, _ctx(audit, actor), body)
     except GitConfigError as exc:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.patch("/api/tenants/{tenant}/git-connections/{connection_id}")
@@ -341,9 +354,15 @@ def update_git_connection(
     try:
         return git_config_ops.update_git_connection(store, _ctx(audit, actor), connection_id, body)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
     except GitConfigError as exc:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.delete("/api/tenants/{tenant}/git-connections/{connection_id}")
@@ -369,7 +388,10 @@ def delete_git_connection(
     try:
         return git_config_ops.delete_git_connection(store, _ctx(audit, actor), connection_id)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.post("/api/tenants/{tenant}/git-connections/{connection_id}:verify")
@@ -400,7 +422,10 @@ def verify_git_connection(
             store, _ctx(audit, actor), connection_id, transport=transport
         )
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.put("/api/tenants/{tenant}/git-connections/{connection_id}/credential")
@@ -432,9 +457,15 @@ def put_connection_credential(
             store, _ctx(audit, actor), connection_id, body.credential.get_secret_value()
         )
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
     except CredentialError as exc:
-        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.delete("/api/tenants/{tenant}/git-connections/{connection_id}/credential")
@@ -455,7 +486,10 @@ def delete_connection_credential(
     try:
         return git_config_ops.clear_connection_credential(store, _ctx(audit, actor), connection_id)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.post("/api/tenants/{tenant}/git-connections/{connection_id}/install:start")
@@ -489,9 +523,15 @@ def start_git_install(
     try:
         return git_config_ops.start_git_install(store, _ctx(audit, actor), connection_id)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
     except InstallError as exc:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.delete("/api/tenants/{tenant}/git-connections/{connection_id}/install")
@@ -517,7 +557,10 @@ def delete_git_install(
     try:
         return git_config_ops.delete_git_install(store, _ctx(audit, actor), connection_id)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.get("/api/tenants/{tenant}/git-repositories")
@@ -561,9 +604,15 @@ def create_git_repository(
     try:
         return git_config_ops.create_git_repository(store, _ctx(audit, actor), connection_id, body)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
     except GitConfigError as exc:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.patch("/api/tenants/{tenant}/git-repositories/{repository_id}")
@@ -585,9 +634,15 @@ def update_git_repository(
     try:
         return git_config_ops.update_git_repository(store, _ctx(audit, actor), repository_id, body)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
     except GitConfigError as exc:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.delete("/api/tenants/{tenant}/git-repositories/{repository_id}")
@@ -609,7 +664,10 @@ def delete_git_repository(
     try:
         return git_config_ops.delete_git_repository(store, _ctx(audit, actor), repository_id)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
 
 
 @router.post("/api/tenants/{tenant}/git-repositories/{repository_id}:default")
@@ -632,4 +690,7 @@ def set_default_git_repository(
     try:
         return git_config_ops.set_default_git_repository(store, _ctx(audit, actor), repository_id)
     except GitResourceNotFoundError as exc:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=str(exc)) from None
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None

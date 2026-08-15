@@ -15,6 +15,8 @@ from pathlib import Path
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .error_ref import InputRejectedError
+
 logger = logging.getLogger(__name__)
 
 # The clearly-labelled dev default for the audit-chain HMAC secret. Anchoring the
@@ -491,13 +493,16 @@ def load_service_overrides(settings: Settings | None = None) -> Settings:
 
 def set_service_url(name: str, url: str, settings: Settings | None = None) -> None:
     """Update one upstream endpoint at runtime and persist it. Raises
-    ``ValueError`` on an unknown service or a malformed URL."""
+    :class:`~cfactory.error_ref.InputRejectedError` (a :class:`ValueError`
+    subclass, so existing ``except ValueError`` handlers keep working) on an
+    unknown service or a malformed URL -- developer-written text about the
+    caller's own request, safe to hand back verbatim (#718)."""
     settings = settings or get_settings()
     if name not in EDITABLE_SERVICES:
-        raise ValueError(f"unknown service: {name!r}")
+        raise InputRejectedError(f"unknown service: {name!r}")
     url = url.strip()
     if not (url.startswith("http://") or url.startswith("https://")):
-        raise ValueError("url must start with http:// or https://")
+        raise InputRejectedError("url must start with http:// or https://")
     setattr(settings, f"{name}_api_url", url)
     path = _overrides_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -536,15 +541,19 @@ def load_copilot_overrides(settings: Settings | None = None) -> Settings:
 
 def set_copilot_settings(provider: str, model: str, settings: Settings | None = None) -> None:
     """Update the copilot provider + model at runtime and persist them. Raises
-    ``ValueError`` on an unknown provider or empty model. The API key is not
-    touched here — it is supplied via the environment/secret only."""
+    :class:`~cfactory.error_ref.InputRejectedError` (a :class:`ValueError`
+    subclass) on an unknown provider or empty model -- developer-written text
+    about the caller's own request, safe to hand back verbatim (#718). The API
+    key is not touched here — it is supplied via the environment/secret only."""
     settings = settings or get_settings()
     provider = (provider or "").strip().lower()
     if provider not in COPILOT_PROVIDERS:
-        raise ValueError(f"unknown provider: {provider!r} (expected one of {COPILOT_PROVIDERS})")
+        raise InputRejectedError(
+            f"unknown provider: {provider!r} (expected one of {COPILOT_PROVIDERS})"
+        )
     model = (model or "").strip()
     if not model:
-        raise ValueError("model must not be empty")
+        raise InputRejectedError("model must not be empty")
     settings.copilot_provider = provider
     settings.copilot_model = model
     path = _copilot_settings_path(settings)

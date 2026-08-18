@@ -17,6 +17,7 @@ import contextlib
 import logging
 import re
 from datetime import UTC, datetime
+from functools import cache
 from typing import Any
 
 from factory_common.logsafe import sanitize_log
@@ -103,19 +104,13 @@ class LiveProgressHub:
         return sorted(self._items.values(), key=lambda p: p.updated_at, reverse=True)
 
 
-_hub: LiveProgressHub | None = None
-
-
+@cache
 def get_progress_hub() -> LiveProgressHub:
-    global _hub
-    if _hub is None:
-        _hub = LiveProgressHub()
-    return _hub
+    return LiveProgressHub()
 
 
 def reset_progress_hub() -> None:
-    global _hub
-    _hub = None
+    get_progress_hub.cache_clear()
 
 
 def poll_progress_once(
@@ -194,8 +189,8 @@ async def _poll_loop(
             await manager.broadcast(
                 {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
             )
-        except Exception:  # noqa: BLE001 — best-effort, never crash the cockpit
-            pass
+        except Exception as exc:  # noqa: BLE001 — best-effort, never crash the cockpit
+            logger.debug("live-progress broadcast failed: %s", type(exc).__name__)
         await asyncio.sleep(interval)
 
 

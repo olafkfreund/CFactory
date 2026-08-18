@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from typing import Annotated
 
 import httpx
 import jwt
@@ -174,10 +175,10 @@ def oidc_actor(id_token: str | None, settings: Settings) -> str | None:
 
 
 def identity_dep(
+    keystore: Annotated[KeyStore, Depends(keystore_dep)],
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     x_forwarded_id_token: str | None = Header(default=None, alias="X-Forwarded-Id-Token"),
-    keystore: KeyStore = Depends(keystore_dep),
 ) -> str:
     """FastAPI dependency returning the caller identity for the audit actor.
 

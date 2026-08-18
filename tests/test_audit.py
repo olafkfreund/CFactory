@@ -412,7 +412,7 @@ def test_compute_entry_hash_is_deterministic():
 FAKE_LIVE_KEY = "cfk_" + "a1b2c3d4" * 4
 
 
-def test_the_audit_endpoint_never_serves_a_live_api_key(store, audit, monkeypatch):
+def test_the_audit_endpoint_never_serves_a_live_api_key(store, audit):
     """A read of the trail must not hand back a working credential (#251).
 
     The audit table is the one most likely to be exported to a SIEM, shown to an
@@ -423,7 +423,7 @@ def test_the_audit_endpoint_never_serves_a_live_api_key(store, audit, monkeypatc
     Recorded here the way a pre-fix row (or a future route that forgets the
     seam) would land it: raw. Nothing reversible may come back.
     """
-    monkeypatch.setattr(auth, "_keystore", auth.KeyStore({FAKE_LIVE_KEY: {"read", "write"}}))
+    auth.set_keys({FAKE_LIVE_KEY: {"read", "write"}})
     audit.record(
         actor=FAKE_LIVE_KEY,
         kind="approve_review",
@@ -441,6 +441,7 @@ def test_the_audit_endpoint_never_serves_a_live_api_key(store, audit, monkeypatc
     assert resp.status_code == 200
     assert FAKE_LIVE_KEY not in resp.text  # not in the actor, and not anywhere else
     assert resp.json()["entries"][0]["actor"] == auth.key_actor(FAKE_LIVE_KEY)
+    auth.reset_keystore()
 
 
 def test_the_trail_says_when_it_cannot_name_a_person(client_with_audit):

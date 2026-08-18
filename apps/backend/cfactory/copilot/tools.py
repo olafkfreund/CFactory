@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from collections import Counter
 
+from cfactory.store import WorkItemStore
 from cfactory.usage import add_usage, empty_bucket
 
-from ..store import WorkItemStore
+# A timeline span needs two endpoints to measure between.
+_SPAN_MIN_EVENTS = 2
 
 
 def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | None:
@@ -30,7 +32,7 @@ def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | Non
         for e in wi.timeline
     ]
     span = None
-    if len(wi.timeline) >= 2:
+    if len(wi.timeline) >= _SPAN_MIN_EVENTS:
         span = (wi.timeline[-1].updated_at - wi.timeline[0].updated_at).total_seconds()
     return {
         "correlation_key": wi.correlation_key,
@@ -62,7 +64,7 @@ def rollups(store: WorkItemStore) -> dict:
             if s.usage:
                 cost += s.usage.cost_usd
         total_events += len(wi.timeline)
-        if len(wi.timeline) >= 2:
+        if len(wi.timeline) >= _SPAN_MIN_EVENTS:
             spans.append((wi.timeline[-1].updated_at - wi.timeline[0].updated_at).total_seconds())
     latency = None
     if spans:
@@ -237,7 +239,7 @@ def token_by_worker(store: WorkItemStore) -> dict:
         workers: list[dict] = []
         for svc in services:
             state = getattr(wi, svc)
-            for wid, w in (state.workers or {}).items():
+            for w in (state.workers or {}).values():
                 wd = w if isinstance(w, dict) else w.model_dump()
                 workers.append({"service": svc, **wd})
             _merge_rollup(by_provider, state.by_provider)

@@ -14,9 +14,15 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 
-from ..config import Settings, get_settings
-from ..store import WorkItemStore, get_store
+import httpx
+
+from cfactory.config import Settings, get_settings
+from cfactory.store import WorkItemStore, get_store
+
+from .anomalies import anomalies_summary_line
+from .tools import rollups_summary_line
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +76,11 @@ def _default_runner(model: str) -> AgentRunner:
     """
 
     def run(question: str, context: str, system_prompt: str) -> str:
-        import anyio  # provided transitively by the SDK
-        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+        import anyio  # noqa: PLC0415 — lazy on purpose, see the docstring above
+        from claude_agent_sdk import (  # noqa: PLC0415 — same
+            ClaudeAgentOptions,
+            ClaudeSDKClient,
+        )
 
         prompt = f"Board snapshot:\n{context}\n\nQuestion: {question}"
 
@@ -105,8 +114,6 @@ def _openai_compatible_runner(base_url: str, api_key: str | None, model: str) ->
     """
 
     def run(question: str, context: str, system_prompt: str) -> str:
-        import httpx
-
         url = base_url.rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         payload = {
@@ -154,8 +161,6 @@ def provider_status(settings: Settings | None = None) -> dict[str, object]:
     out["base_url"] = settings.ollama_cloud_base_url
     out["has_key"] = bool(settings.ollama_api_key)
     try:
-        import httpx
-
         url = settings.ollama_cloud_base_url.rstrip("/") + "/models"
         headers = (
             {"Authorization": f"Bearer {settings.ollama_api_key}"}
@@ -190,9 +195,6 @@ class Copilot:
         self._runner = runner or make_runner(self._settings)
 
     def ask(self, question: str) -> CopilotAnswer:
-        from .anomalies import anomalies_summary_line
-        from .tools import rollups_summary_line
-
         items = self._store.list()
         context = (
             f"{rollups_summary_line(self._store)}\n"
@@ -203,18 +205,12 @@ class Copilot:
         return CopilotAnswer(answer=answer, work_items_considered=len(items))
 
 
-_copilot: Copilot | None = None
-
-
+@cache
 def get_copilot() -> Copilot:
-    global _copilot
-    if _copilot is None:
-        _copilot = Copilot(get_store())
-    return _copilot
+    return Copilot(get_store())
 
 
 def reset_copilot() -> None:
     """Drop the cached copilot so the next ``get_copilot()`` rebuilds its runner
     from current settings — called after the provider/model is changed at runtime."""
-    global _copilot
-    _copilot = None
+    get_copilot.cache_clear()

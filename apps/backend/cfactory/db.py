@@ -9,7 +9,6 @@ JSON column type works on both, so the same models run everywhere.
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -81,7 +80,7 @@ def resolve_database_url(settings: Settings | None = None) -> str:
     settings = settings or get_settings()
     if settings.database_url:
         return settings.database_url
-    workspace = Path(os.path.expanduser(settings.workspace_root))
+    workspace = Path(settings.workspace_root).expanduser()
     workspace.mkdir(parents=True, exist_ok=True)
     return f"sqlite:///{workspace / 'cfactory.db'}"
 
@@ -101,7 +100,7 @@ def make_engine(url: str | None = None) -> Engine:
         # concurrently with a single writer; busy_timeout makes any remaining
         # contention wait rather than raise. Applied on every new connection.
         @event.listens_for(engine, "connect")
-        def _set_sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
+        def _set_sqlite_pragmas(dbapi_conn, _record):
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA journal_mode=WAL")
             cur.execute("PRAGMA busy_timeout=30000")

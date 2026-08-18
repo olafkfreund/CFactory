@@ -111,7 +111,7 @@ def client(cards, audit, upstream, monkeypatch):
     monkeypatch.setattr(card_intake, "get_settings", lambda: Settings(intake_project_id="proj-1"))
     # No legacy full-scope bearer: these tests are about the scoped keystore.
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.set_keys({READER: {"read"}, WRITER: {"read", "write"}})
 
     app = create_app()

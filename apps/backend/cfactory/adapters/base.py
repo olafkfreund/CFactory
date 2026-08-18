@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from http import HTTPStatus
 from typing import Any
 
 import httpx
 from pydantic import BaseModel
 
 from cfactory.error_ref import error_reference
-
-from ..models import Service, ServiceState
+from cfactory.models import Service, ServiceState
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +243,7 @@ class BaseHTTPAdapter:
                 status="unauthorized",
                 detail=f"{code} {resp.reason_phrase} — check CFACTORY_UPSTREAM_TOKEN",
             )
-        if code >= 400:
+        if code >= HTTPStatus.BAD_REQUEST:
             return ServiceProbe(online=False, status="error", detail=f"{code} {resp.reason_phrase}")
         return ServiceProbe(online=True, status="online")
 

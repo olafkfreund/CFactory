@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import warnings
+from functools import cache
 from pathlib import Path
 
 from pydantic import AliasChoices, Field
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # tamper-evident audit chain on this in-repo value makes the chain forgeable by
 # anyone who can read the source, so a hosted/shared deploy MUST override it via
 # CFACTORY_AUDIT_HMAC_SECRET. See check_audit_secret() below (#81).
-DEV_AUDIT_HMAC_SECRET = "dev-insecure-audit-hmac-secret-change-me"
+DEV_AUDIT_HMAC_SECRET = "dev-insecure-audit-hmac-secret-change-me"  # noqa: S105 — the dev default itself, see above
 
 
 class Settings(BaseSettings):
@@ -424,15 +424,21 @@ def resolve_tenant(x_tenant_id: str | None = None, settings: Settings | None = N
     return (x_tenant_id or "").strip() or DEFAULT_TENANT
 
 
-_settings: Settings | None = None
-
-
+@cache
 def get_settings() -> Settings:
     """Return a cached Settings instance."""
-    global _settings
-    if _settings is None:
-        _settings = Settings()
-    return _settings
+    return Settings()
+
+
+_clear_settings_cache = get_settings.cache_clear
+
+
+def reset_settings() -> None:
+    """Drop the cached Settings so the next ``get_settings()`` re-reads the
+    environment (tests, and anything that mutates env at runtime)."""
+    # Bound at import rather than looked up on the module: tests monkeypatch
+    # ``config.get_settings`` with a plain stand-in that has no cache to clear.
+    _clear_settings_cache()
 
 
 def is_local_only(settings: Settings) -> bool:
@@ -473,7 +479,7 @@ EDITABLE_SERVICES = ("aifactory", "pfactory", "tfactory")
 
 
 def _overrides_path(settings: Settings) -> Path:
-    return Path(os.path.expanduser(settings.workspace_root)) / "service-endpoints.json"
+    return Path(settings.workspace_root).expanduser() / "service-endpoints.json"
 
 
 def load_service_overrides(settings: Settings | None = None) -> Settings:
@@ -519,7 +525,7 @@ COPILOT_PROVIDERS = ("claude", "ollama")
 
 
 def _copilot_settings_path(settings: Settings) -> Path:
-    return Path(os.path.expanduser(settings.workspace_root)) / "copilot-settings.json"
+    return Path(settings.workspace_root).expanduser() / "copilot-settings.json"
 
 
 def load_copilot_overrides(settings: Settings | None = None) -> Settings:

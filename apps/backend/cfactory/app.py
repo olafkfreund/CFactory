@@ -70,6 +70,7 @@ from .config import (
 )
 from .db import bootstrap_schema
 from .issue_import import poll_forever
+from .mcp import router as mcp_router
 from .progress import get_progress_hub, start_progress, stop_progress
 from .store import get_store
 from .upstream_ws import start_subscribers
@@ -201,8 +202,6 @@ def create_app() -> FastAPI:
 
     # Read-only MCP server at POST /mcp — the single PARR-pipeline visibility
     # surface for external agents (Claude Code, the /parr-run conductor).
-    from .mcp import router as mcp_router
-
     app.include_router(mcp_router)
 
     # Factory#516 — OTLP distributed tracing. Last, so the FastAPI

@@ -72,7 +72,8 @@ def test_settings_api_get_and_put_roundtrip(monkeypatch, tmp_path):
     # Point the global settings at a temp workspace and a known starting state.
     from cfactory import config as cfg
 
-    monkeypatch.setattr(cfg, "_settings", cfg.Settings(workspace_root=str(tmp_path)))
+    monkeypatch.setenv("CFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    cfg.reset_settings()
     _stub_provider_status(monkeypatch)
 
     client = TestClient(create_app())
@@ -97,7 +98,8 @@ def test_settings_api_get_and_put_roundtrip(monkeypatch, tmp_path):
 def test_settings_api_rejects_bad_provider(monkeypatch, tmp_path):
     from cfactory import config as cfg
 
-    monkeypatch.setattr(cfg, "_settings", cfg.Settings(workspace_root=str(tmp_path)))
+    monkeypatch.setenv("CFACTORY_WORKSPACE_ROOT", str(tmp_path))
+    cfg.reset_settings()
     _stub_provider_status(monkeypatch)
     client = TestClient(create_app())
     resp = client.put("/api/settings/copilot", json={"provider": "nope", "model": "x"})

@@ -16,12 +16,12 @@ from .api_deps import adapters_dep, progress_hub_dep, store_dep
 from .copilot.anomalies import detect_anomalies
 from .copilot.tools import (
     cost_routing,
+    rollups as compute_rollups,
     summarize_timeline,
     token_by_worker,
     token_totals,
     worker_progress,
 )
-from .copilot.tools import rollups as compute_rollups
 from .needs_you import needs_you_count
 from .progress import LiveProgressHub
 from .search import search_workitems

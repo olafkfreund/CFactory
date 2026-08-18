@@ -57,8 +57,8 @@ from runners.github.providers.protocol import (
     to_iso_utc,
 )
 
-from .git_config import ADO_PATH_PARTS as _ADO_PATH_PARTS
 from .git_config import (
+    ADO_PATH_PARTS as _ADO_PATH_PARTS,
     PROVIDER_DEFAULT_BASE_URL,
     SUPPORTED_PROVIDERS,
     GitTarget,

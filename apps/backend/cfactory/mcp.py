@@ -1467,7 +1467,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
 
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:  # json.JSONDecodeError and friends
         return JSONResponse(status_code=400, content=_error(-32700, "Parse error", None))
 
     rpc_id = body.get("id")

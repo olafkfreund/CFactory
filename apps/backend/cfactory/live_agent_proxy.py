@@ -19,6 +19,7 @@ the cockpit socket cleanly rather than raising.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Callable
@@ -159,7 +160,6 @@ async def _bridge(cockpit: WebSocket, upstream: Any) -> None:
 async def _close(cockpit: WebSocket, code: int, reason: str) -> None:
     """Close the cockpit socket if still open (idempotent)."""
     if cockpit.application_state is not WebSocketState.DISCONNECTED:
-        try:
+        # RuntimeError here just means it is already closing/closed.
+        with contextlib.suppress(RuntimeError):
             await cockpit.close(code=code, reason=reason)
-        except RuntimeError:
-            pass  # already closing/closed

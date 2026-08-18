@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
+import re
 
 from fastapi import Depends, Header, HTTPException
 
@@ -32,6 +34,19 @@ WRITE = "write"
 # says so out loud rather than dressing the client up as an identity. The
 # `key-<digest>` suffix keeps two different keys distinguishable in the trail.
 UNATTRIBUTED_ACTOR = "unattributed"
+
+logger = logging.getLogger(__name__)
+
+# The credential shapes this fleet issues: CFactory's own `cfk_…` and the
+# AIFactory-style `acw_…` (the one #251 was filed about). Anchored and demanding
+# real length, so it cannot match the actors the audit seam legitimately produces
+# — `system`, `local`, `user:<email>`, `unattributed:key-<digest>` — none of which
+# is a bare prefixed token. Widen this if a new key prefix is minted.
+#
+# Canonical here rather than in audit.py because this is the shape the *issuing*
+# boundary enforces; :mod:`cfactory.audit` imports it so redaction and validation
+# cannot drift apart.
+KEY_SHAPED = re.compile(r"^(?:acw|cfk)_[A-Za-z0-9]{16,}$")
 
 
 def key_actor(key: str) -> str:
@@ -83,6 +98,20 @@ def parse_api_keys(raw: str | None) -> dict[str, set[str]]:
         if not key:
             continue
         scopes = {s.strip() for s in scope_part.split(",") if s.strip()}
+        if not KEY_SHAPED.match(key):
+            # ponytail: warn, do not reject. Two ways to "reject" and both are
+            # worse than the weak key. Dropping the entry can empty the keystore,
+            # and an empty keystore is OPEN mode (`KeyStore.configured` False) —
+            # a weak key would silently become NO key. Raising kills the process
+            # at import of the settings, so the cockpit that would let an
+            # operator fix the key is exactly what fails to start.
+            logger.warning(
+                "CFACTORY_API_KEYS contains a key that is not fleet-shaped "
+                "(expected `cfk_`/`acw_` + 16+ alphanumerics): %s. Low-entropy "
+                "keys are guessable from the truncated digest published in the "
+                "audit trail (#369). Rotate to a generated key.",
+                key_actor(key),
+            )
         keys[key] = scopes
     return keys
 

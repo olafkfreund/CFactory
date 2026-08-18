@@ -3,21 +3,28 @@ title = "gitleaks config for CFactory"
 [extend]
 useDefault = true
 
-# Allowlist entries below are for confirmed false positives found by the
-# baseline full-history scan (Factory#724). Each is a fixture or doc text,
-# not a live credential. See the referenced test/doc file for the comment
-# marking the value as fake.
-
-[[allowlists]]
-description = "Test fixtures use fake gitlab/github token-shaped strings, explicitly commented as not real (see file headers)."
+# ONE `[allowlist]`, singular, deliberately.
+#
+# gitleaks 8.24.3 -- the version gitleaks-action v3.0.0 installs -- does NOT
+# understand a top-level `[[allowlists]]` array. It parses the file without
+# complaint and applies NO allowlist at all. This config used the plural form,
+# so every entry here was inert: `gitleaks detect --source . --config
+# .gitleaks.toml --no-git` reported 7 findings, and all 7 were in files this
+# allowlist already named. Rewritten as a single `[allowlist]`, it reports 0.
+#
+# If you add an entry, MERGE IT INTO THIS BLOCK. A second `[[allowlists]]`
+# block silently disables everything above it. tests/test_gitleaks_config.py
+# asserts the singular form so this cannot regress unnoticed.
+#
+# Entries are confirmed false positives from the baseline full-history scan
+# (Factory#724). Each is a fixture or doc text, not a live credential; see the
+# referenced file for the comment marking the value as fake. Same defect as
+# AIFactory#1343.
+[allowlist]
+description = "Test fixtures using fake gitlab/github token-shaped strings (commented as not real in the file headers), and one doc that names the Helm value `apiKeys.enabled=true` -- a boolean feature flag that gitleaks' generic-api-key rule misreads as a credential."
 paths = [
   '''tests/test_git_install\.py''',
   '''tests/test_git_credentials\.py''',
   '''tests/test_git_multi_connection\.py''',
-]
-
-[[allowlists]]
-description = "Docs mention the Helm value name `apiKeys.enabled=true`, which gitleaks' generic-api-key rule misreads as a credential; it is a boolean feature flag, not a secret."
-paths = [
   '''docs/guides/token-gated-api\.md''',
 ]

@@ -89,8 +89,8 @@ def parse_api_keys(raw: str | None) -> dict[str, set[str]]:
     keys: dict[str, set[str]] = {}
     if not raw:
         return keys
-    for entry in raw.split(";"):
-        entry = entry.strip()
+    for raw_entry in raw.split(";"):
+        entry = raw_entry.strip()
         if not entry:
             continue
         key, _, scope_part = entry.partition(":")

@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -42,7 +41,7 @@ from sqlalchemy import Boolean, DateTime, Integer, String, event, select, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 
-from .auth import get_keystore, key_actor
+from .auth import KEY_SHAPED, get_keystore, key_actor
 from .config import Settings, get_settings
 from .db import Base, make_engine
 from .models import as_utc
@@ -52,12 +51,8 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-# The credential shapes this fleet issues: CFactory's own `cfk_…` and the
-# AIFactory-style `acw_…` (the one #251 was filed about). Anchored and demanding
-# real length, so it cannot match the actors this seam legitimately produces —
-# `system`, `local`, `user:<email>`, `unattributed:key-<digest>` — none of which
-# is a bare prefixed token. Widen this if a new key prefix is minted.
-_KEY_SHAPED = re.compile(r"^(?:acw|cfk)_[A-Za-z0-9]{16,}$")
+# One regex for the shape, defined at the boundary that validates it (#369).
+_KEY_SHAPED = KEY_SHAPED
 
 
 def redact_actor(actor: str) -> str:

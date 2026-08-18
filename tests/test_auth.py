@@ -10,6 +10,8 @@ is injected via the ``keystore_dep`` dependency override — no real env jugglin
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -17,7 +19,15 @@ from fastapi.testclient import TestClient
 
 from cfactory.app import action_transport_dep, audit_dep, create_app, store_dep
 from cfactory.audit import AuditStore
-from cfactory.auth import READ, WRITE, KeyStore, keystore_dep, parse_api_keys, secret_matches
+from cfactory.auth import (
+    READ,
+    WRITE,
+    KeyStore,
+    key_actor,
+    keystore_dep,
+    parse_api_keys,
+    secret_matches,
+)
 
 # A valid PreparedAction body for the execute endpoint.
 EXECUTE_BODY = {
@@ -73,6 +83,43 @@ def test_parse_api_keys_tolerates_whitespace_and_empty_entries():
 
 def test_parse_api_keys_key_without_scopes_has_empty_set():
     assert parse_api_keys("naked") == {"naked": set()}
+
+
+# --------------------------------------------------------------------------
+# Key entropy at the configuration boundary (#369)
+# --------------------------------------------------------------------------
+
+_STRONG = "acw_" + "a1B2c3D4e5F6g7H8"  # fleet shape: prefix + 16 alphanumerics
+
+
+def test_parse_api_keys_warns_on_low_entropy_key(caplog):
+    """A key below the fleet shape is flagged — its digest is guessable (#369)."""
+    with caplog.at_level(logging.WARNING, logger="cfactory.auth"):
+        parsed = parse_api_keys("devkey:read,write")
+    assert [r.getMessage() for r in caplog.records if "not fleet-shaped" in r.getMessage()]
+    # Warned, NOT dropped: an emptied keystore is OPEN mode, i.e. no auth at all.
+    assert parsed == {"devkey": {"read", "write"}}
+
+
+def test_parse_api_keys_warning_never_contains_the_key(caplog):
+    with caplog.at_level(logging.WARNING, logger="cfactory.auth"):
+        parse_api_keys("devkey:read")
+    assert "devkey" not in caplog.text
+    assert key_actor("devkey") in caplog.text
+
+
+def test_parse_api_keys_accepts_fleet_shaped_key_without_warning(caplog):
+    with caplog.at_level(logging.WARNING, logger="cfactory.auth"):
+        parsed = parse_api_keys(f"{_STRONG}:read,write")
+    assert parsed == {_STRONG: {"read", "write"}}
+    assert not [r for r in caplog.records if "not fleet-shaped" in r.getMessage()]
+
+
+def test_parse_api_keys_rejects_short_suffix_and_unknown_prefix(caplog):
+    """Right prefix but too short, and long enough but wrong prefix, both warn."""
+    with caplog.at_level(logging.WARNING, logger="cfactory.auth"):
+        parse_api_keys("acw_short;" + "xxx_" + "a1B2c3D4e5F6g7H8")
+    assert len([r for r in caplog.records if "not fleet-shaped" in r.getMessage()]) == 2
 
 
 # --------------------------------------------------------------------------

@@ -76,6 +76,17 @@ jobs:
           command -v ruff
           ruff --version
 
+      - name: Assert the pin is really on hub main
+        # HUB_PIN_SHA lives in THIS workflow file, which on a `pull_request`
+        # trigger is the PR's own copy -- so it is as attacker-controlled as a
+        # tracked .hub-sha. A fork commit is a valid 40-hex SHA and is fetchable
+        # by SHA from the hub, so the 40-hex check alone does not stop a fork PR
+        # pinning a hub tree that matches its own drifted copy (CFactory#373).
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/assert-hub-pin-on-main.sh "${HUB_PIN_SHA}" "security-lint HUB_PIN_SHA"
+
       - name: Diff the vendored engine against the pinned hub
         # Fails CLOSED (rule 4.7): a fetch that cannot reach the hub has
         # verified nothing, so it is a failure, not a skip.

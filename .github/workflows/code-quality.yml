@@ -177,6 +177,22 @@ jobs:
           [ -n "$sha" ] || { echo "standards/.hub-sha is empty" >&2; exit 1; }
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
+      - name: Assert both pins are really on hub main
+        # standards/.hub-sha comes from the PR's own tree, and CONTRACTS_PIN_SHA
+        # lives in THIS workflow file, which on a `pull_request` trigger is
+        # equally the PR's own copy. A commit that exists only in a fork of
+        # Factory is a valid 40-hex SHA and is still fetchable by SHA from
+        # Factory itself, so without this a fork PR could pin a hub tree crafted
+        # to match its own drifted vendored copy and both diffs below would go
+        # green (CFactory#373).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cfactory/.github/scripts/assert-hub-pin-on-main.sh "${SHA}" "standards/.hub-sha"
+          cfactory/.github/scripts/assert-hub-pin-on-main.sh "${CONTRACTS_PIN_SHA}" "code-quality CONTRACTS_PIN_SHA"
+
       - name: Check out hub standards at the pinned SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

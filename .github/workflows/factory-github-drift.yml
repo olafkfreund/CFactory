@@ -50,6 +50,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Assert the pin is really on hub main
+        # HUB_SHA lives in THIS workflow file, which on a `pull_request` trigger
+        # is the PR's own copy -- so it is as attacker-controlled as a tracked
+        # .hub-sha. A fork commit is a valid 40-hex SHA and codeload serves any
+        # commit in the hub's fork network, so a fork PR could otherwise pin a
+        # canonical tree that matches its own drifted copy (CFactory#373).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/assert-hub-pin-on-main.sh "${HUB_SHA}" "factory-github-drift HUB_SHA"
+
       - name: Fetch hub drift checker (main) + canonical tree (pinned SHA)
         run: |
           set -euo pipefail

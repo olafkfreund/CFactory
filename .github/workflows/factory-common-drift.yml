@@ -88,6 +88,19 @@ jobs:
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
+      - name: Assert the pin is really on hub main
+        # The 40-hex check above closes ref confusion and argument injection,
+        # not the BYPASS. GitHub keeps every fork in one shared object store, so
+        # a commit that exists only in a fork of Factory is a valid 40-hex SHA
+        # and codeload still serves it from Factory itself -- a fork PR could
+        # pin a canonical tree crafted to match its own drifted vendored copy
+        # and this gate would diff two matching trees and go green
+        # (CFactory#373).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: .github/scripts/assert-hub-pin-on-main.sh "${SHA}" "${VENDORED}/.hub-sha"
+
       - name: Fetch the hub canonical tree at the pinned SHA
         # Passed through env rather than interpolated straight into the script,
         # so the value can never be parsed as shell.

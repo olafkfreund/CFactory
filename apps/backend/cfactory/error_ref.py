@@ -17,15 +17,16 @@ happened to my sync at 14:02?" runs one grep:
     ref = error_reference(logger, f"issue sync failed for {card_key}", exc)
     return {"ok": False, "reason": f"the provider call failed (reference {ref})"}
 
-    # server log:
+    # server log (one line, see error_reference on why the stack is escaped):
     # WARNING cfactory.github_sync issue sync failed for CARD-7 [ref=9f2c1ab04d3e]:
-    #     ConnectError: [Errno -2] Name or service not known
-    #     Traceback (most recent call last): ...
+    #     ConnectError: [Errno -2] Name or service not known | Traceback (most
+    #     recent call last):\n  File "...github_sync.py", line 88, ...
 """
 
 from __future__ import annotations
 
 import logging
+import traceback
 import uuid
 
 from factory_common.logsafe import sanitize_log
@@ -35,6 +36,11 @@ __all__ = ["InputRejectedError", "client_error", "error_reference"]
 #: Length of the id. 12 hex chars is 48 bits: far beyond collision range for a
 #: log window an operator will ever grep, and short enough to read aloud.
 _REF_CHARS = 12
+
+#: Cap on the rendered stack. `sanitize_log`'s 2000-char default is sized for a
+#: single identifier and would cut a real traceback in half; 20k holds a deep
+#: async stack whole while still bounding a recursion-error dump.
+_MAX_TRACEBACK = 20_000
 
 
 class InputRejectedError(ValueError):
@@ -97,11 +103,38 @@ def error_reference(logger: logging.Logger, context: str, exc: BaseException) ->
     """
     ref = uuid.uuid4().hex[:_REF_CHARS]
     logger.warning(
-        "%s [ref=%s]: %s: %s",
+        "%s [ref=%s]: %s | %s",
         sanitize_log(context),
         ref,
-        type(exc).__name__,
-        sanitize_log(str(exc)),
-        exc_info=True,
+        # One sanitize_log per interpolated value, with no exceptions to
+        # remember: `type(exc).__name__` used to be its own unsanitized `%s`.
+        sanitize_log(f"{type(exc).__name__}: {exc}"),
+        # The stack, rendered HERE and pushed through the sanitizer, rather than
+        # handed to logging as `exc_info=`. Two reasons, and the second is why
+        # `exc_info=exc` -- the obvious one-word fix -- is not what landed:
+        #
+        # 1. `exc_info=True` (what this was) means "call sys.exc_info()", which
+        #    is populated only while an `except` block is unwinding. It has no
+        #    relationship to `exc`, so a caller that stashed the exception and
+        #    logged it later recorded "NoneType: None" where the stack should be
+        #    and the correlation id led to a line with nothing under it.
+        #    `traceback.format_exception(exc)` reads the object we were given,
+        #    so it works from a task callback, a retry wrapper or a `finally`.
+        #
+        # 2. Whatever is handed to `exc_info=` is rendered by the logging module
+        #    itself and NEVER passes through `sanitize_log`. So sanitizing the
+        #    message while also passing `exc_info` logs the payload twice -- once
+        #    escaped, once raw -- and the raw copy can carry a newline and forge
+        #    a whole log line (CWE-117), undoing the escaping right next to it.
+        #    Rendering it ourselves means exactly one copy and it is escaped.
+        #
+        # The fleet closes (2) at the formatter instead, by writing one JSON
+        # object per line (AIFactory#1320). This backend configures no handlers
+        # at all -- it inherits uvicorn's line-based stdout format -- so there is
+        # no formatter here to hold that guarantee, and it has to hold in the
+        # helper. Note the escaping costs readability: the stack arrives as one
+        # line with literal \n. That is the trade this repo pays until it grows
+        # a structured formatter, at which point drop this and use `exc_info=exc`.
+        sanitize_log("".join(traceback.format_exception(exc)), max_length=_MAX_TRACEBACK),
     )
     return ref

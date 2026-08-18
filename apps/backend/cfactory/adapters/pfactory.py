@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..models import Service
+from cfactory.models import Service
+
 from .base import AdapterItem, BaseHTTPAdapter, first
 
 

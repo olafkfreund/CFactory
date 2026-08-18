@@ -10,7 +10,7 @@ These are skeleton shapes for #5. Persistence + the full field set land in #6
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, overload
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -55,13 +55,13 @@ def as_utc(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
-class Service(str, Enum):
+class Service(StrEnum):
     PFACTORY = "pfactory"
     AIFACTORY = "aifactory"
     TFACTORY = "tfactory"
 
 
-class Stage(str, Enum):
+class Stage(StrEnum):
     PLAN = "plan"
     CODE = "code"
     TEST = "test"

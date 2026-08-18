@@ -120,7 +120,7 @@ def client(cards, audit, github, _synced, monkeypatch):
     monkeypatch.setattr(mcp, "get_audit_store", lambda: audit)
     monkeypatch.setattr(mcp, "action_transport_dep", github.transport)
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.set_keys({_WRITER: {"read", "write"}})
 
     app = create_app()

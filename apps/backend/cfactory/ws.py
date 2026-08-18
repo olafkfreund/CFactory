@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import cache
 from typing import Any
 
 from fastapi import WebSocket
@@ -35,11 +36,6 @@ class ConnectionManager:
             self.disconnect(ws)
 
 
-_manager: ConnectionManager | None = None
-
-
+@cache
 def get_manager() -> ConnectionManager:
-    global _manager
-    if _manager is None:
-        _manager = ConnectionManager()
-    return _manager
+    return ConnectionManager()

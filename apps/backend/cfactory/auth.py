@@ -20,6 +20,8 @@ import hashlib
 import hmac
 import logging
 import re
+from functools import cache
+from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException
 
@@ -89,8 +91,8 @@ def parse_api_keys(raw: str | None) -> dict[str, set[str]]:
     keys: dict[str, set[str]] = {}
     if not raw:
         return keys
-    for entry in raw.split(";"):
-        entry = entry.strip()
+    for raw_entry in raw.split(";"):
+        entry = raw_entry.strip()
         if not entry:
             continue
         key, _, scope_part = entry.partition(":")
@@ -125,6 +127,16 @@ class KeyStore:
 
     def __init__(self, keys: dict[str, set[str]] | None = None):
         self._keys: dict[str, set[str]] = dict(keys or {})
+
+    def replace(self, keys: dict[str, set[str]] | None = None) -> None:
+        """Swap the whole key set in place, keeping this instance's identity.
+
+        `_keys` is the store's ONLY state -- `configured`, `scopes_for`,
+        `preferred_key` and `authorize` all derive from it -- so this cannot
+        leave the store half-updated, and in particular cannot leave it
+        reporting `configured` while holding a different key set.
+        """
+        self._keys = dict(keys or {})
 
     @property
     def configured(self) -> bool:
@@ -185,27 +197,20 @@ class KeyStore:
             raise HTTPException(status_code=403, detail=f"API key lacks required scope: {scope!r}")
 
 
-_keystore: KeyStore | None = None
-
-
+@cache
 def get_keystore() -> KeyStore:
     """Return the cached process-wide KeyStore, built from settings on first use."""
-    global _keystore
-    if _keystore is None:
-        _keystore = KeyStore(parse_api_keys(get_settings().api_keys))
-    return _keystore
+    return KeyStore(parse_api_keys(get_settings().api_keys))
 
 
 def set_keys(keys: dict[str, set[str]]) -> None:
-    """Test helper: replace the cached keystore with one holding ``keys``."""
-    global _keystore
-    _keystore = KeyStore(keys)
+    """Test helper: replace the cached keystore's keys with ``keys``."""
+    get_keystore().replace(keys)
 
 
 def reset_keystore() -> None:
     """Test helper: drop the cached keystore so it is rebuilt from settings."""
-    global _keystore
-    _keystore = None
+    get_keystore.cache_clear()
 
 
 def keystore_dep() -> KeyStore:
@@ -251,9 +256,9 @@ def require_scope(scope: str):
     """
 
     def dependency(
+        keystore: Annotated[KeyStore, Depends(keystore_dep)],
         authorization: str | None = Header(default=None),
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-        keystore: KeyStore = Depends(keystore_dep),
     ) -> str | None:
         if not keystore.configured:
             return None

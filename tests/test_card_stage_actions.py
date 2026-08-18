@@ -83,7 +83,7 @@ def client(cards, items, audit, upstream, monkeypatch):
     monkeypatch.setattr(mcp, "action_transport_dep", upstream.transport)
     # The legacy full-scope bearer, so the MCP twins are reachable in one line.
     monkeypatch.setenv("CFACTORY_MCP_SECRET", "stage-secret")
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     return build_client(cards, items, audit, upstream)
 
 

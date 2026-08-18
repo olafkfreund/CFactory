@@ -128,7 +128,7 @@ def test_every_provider_on_offer_is_in_every_row():
 def surfaces(monkeypatch):
     """A client with a read-scoped MCP key, so both surfaces can be asked."""
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.set_keys({_READER: {"read"}})
     yield TestClient(create_app())
     auth.reset_keystore()

@@ -115,6 +115,29 @@ jobs:
         # NET-NEW strict-mode type errors to any file it changes.
         run: python scripts/ratchet_lint.py --tool mypy --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package scripts
 
+  lint-check:
+    # #356 CLOSED THE TOLERANCE. Until this job existed the ONLY ruff gate was
+    # the diff-scoped ratchet above, which blocks net-new violations in a
+    # changed file and leaves the backlog alone -- correct while there WAS a
+    # backlog (66 violations over 26 files at #345, per ratchet_lint.py's own
+    # docstring a whole-repo gate "would be instantly red"). That backlog is now
+    # zero, so the reason to tolerate it is gone and this runs the plain,
+    # whole-tree check. The ratchet stays for mypy, which still has debt.
+    #
+    # Same two trees, same config, same pinned version as every other ruff gate
+    # here and as the `ruff-check` hook in .pre-commit-config.yaml.
+    name: ruff check (apps/backend/cfactory + scripts, blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+      - name: Lint
+        run: ruff check --config ruff.toml "${PACKAGE_DIR}" scripts
+
   format-check:
     name: ruff format --check (apps/backend/cfactory + scripts, blocking)
     runs-on: ubuntu-latest

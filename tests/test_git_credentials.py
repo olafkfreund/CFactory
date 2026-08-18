@@ -194,7 +194,7 @@ def client(cards, audit, host, monkeypatch, _settings):
     monkeypatch.setattr(mcp, "get_audit_store", lambda: audit)
     monkeypatch.setattr(mcp, "action_transport_dep", host.transport)
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.set_keys({_WRITER: {"read", "write"}, _READER: {"read"}})
 
     app = create_app()

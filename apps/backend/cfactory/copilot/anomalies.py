@@ -11,11 +11,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
-from cfactory.status_taxonomy import is_done as _is_terminal_ok
-from cfactory.status_taxonomy import is_failure_or_stuck as _is_failure
-
-from ..models import Service, WorkItem
-from ..store import WorkItemStore
+from cfactory.models import Service, WorkItem
+from cfactory.status_taxonomy import is_done as _is_terminal_ok, is_failure_or_stuck as _is_failure
+from cfactory.store import WorkItemStore
 
 # A stage with no new event for this long (and not terminal) is "stuck".
 _DEFAULT_STALE_SECONDS = 86_400  # 24h

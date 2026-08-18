@@ -81,8 +81,6 @@ from .git_connections import (
 )
 from .git_install import (
     CREDENTIAL_MISSING as INSTALL_DEGRADED,
-)
-from .git_install import (
     INSTALLED,
     GitInstallRow,
     InstallStateRow,

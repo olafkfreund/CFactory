@@ -20,6 +20,30 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Apply Debian security updates to the base layer (CFactory#396).
+#
+# `python:3.14-slim` is a floating tag, so this is NOT a stale-pin problem that
+# a digest bump fixes: the tag was already resolving to the newest published
+# build and that build still carried util-linux 2.41-5. Debian had already
+# shipped the fix — 2.41.5-0+deb13u1 in trixie's security suite, for
+# CVE-2026-53615 — across nine binary packages (bsdutils, libblkid1,
+# liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux),
+# which is precisely the nine fixable HIGHs the Trivy gate was failing on. The
+# upstream image simply had not been rebuilt against it yet. Upstream rebuild
+# lag is normal and recurring; pulling the fix ourselves is the fix.
+#
+# `upgrade`, not a hand-listed set of packages: the finding is base-OS lag, so
+# the remediation is "do not ship a base layer behind Debian security", not
+# "chase whichever package Trivy named this week". On the base as of this
+# commit it installs exactly those nine and nothing else (`apt-get -s upgrade`).
+#
+# No `--no-install-recommends`: `upgrade` never adds packages, only replaces
+# installed ones. The apt lists are removed in the same layer so they are not
+# baked into the image.
+RUN apt-get update \
+    && apt-get upgrade --yes \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install runtime dependencies first so the layer caches across code changes.
 #
 # Then remove pip itself. This is CVE remediation, not tidying: pip vendors a

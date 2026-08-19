@@ -53,7 +53,7 @@ def _make_client(store, keys: dict[str, set[str]] | None) -> TestClient:
     a configured keystore. ``keys=None`` leaves the keystore OPEN (local mode)."""
     app = create_app()
     app.dependency_overrides[store_dep] = lambda: store
-    app.dependency_overrides[action_transport_dep] = lambda: _OkTransport()
+    app.dependency_overrides[action_transport_dep] = _OkTransport
     # Hermetic in-memory audit store so execute never touches the workspace DB.
     app.dependency_overrides[audit_dep] = lambda: AuditStore("sqlite://")
     if keys is not None:

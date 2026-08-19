@@ -293,7 +293,8 @@ def _install_gitlab(cards: CardStore, ctx: AuditContext, gl: FakeGitLab) -> int:
 
 
 def _database_bytes(db: str) -> bytes:
-    return open(db.replace("sqlite:///", ""), "rb").read()  # noqa: PTH123
+    with open(db.replace("sqlite:///", ""), "rb") as f:  # noqa: PTH123
+        return f.read()
 
 
 # ── the state check (MUTATION GUARD (a)) ─────────────────────────────────────

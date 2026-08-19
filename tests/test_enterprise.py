@@ -44,7 +44,7 @@ def _client(store, audit, keys):
     app = create_app()
     app.dependency_overrides[store_dep] = lambda: store
     app.dependency_overrides[audit_dep] = lambda: audit
-    app.dependency_overrides[action_transport_dep] = lambda: _OkTransport()
+    app.dependency_overrides[action_transport_dep] = _OkTransport
     app.dependency_overrides[keystore_dep] = lambda: KeyStore(keys)
     return TestClient(app)
 

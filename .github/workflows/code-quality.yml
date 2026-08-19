@@ -80,6 +80,7 @@ jobs:
   ratchet:
     name: ruff + mypy ratchet (diff-scoped, blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -128,6 +129,7 @@ jobs:
     # here and as the `ruff-check` hook in .pre-commit-config.yaml.
     name: ruff check (apps/backend/cfactory + scripts, blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -141,6 +143,7 @@ jobs:
   format-check:
     name: ruff format --check (apps/backend/cfactory + scripts, blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -154,6 +157,7 @@ jobs:
   drift:
     name: hub drift gates (shared-baseline configs + factory-contracts)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # NAMED, not inlined into the `ref:` below (Factory#547). The standards
       # half of this job reads its pin from standards/.hub-sha, which any tool
@@ -344,6 +348,7 @@ jobs:
   frontend-quality:
     name: frontend lint + format + unit tests (blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: apps/frontend-web

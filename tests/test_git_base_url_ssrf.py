@@ -20,6 +20,7 @@ why a scheme test is not registered as a barrier in this fleet's CodeQL packs.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import http.server
@@ -28,11 +29,12 @@ import logging
 import socket
 import threading
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
-from cfactory import config, git_config, git_config_ops, git_install
-from cfactory import cards as cards_module
+import runners.github.providers
+from cfactory import cards as cards_module, config, git_config, git_config_ops, git_install
 from cfactory.card_ops import AuditContext
 from cfactory.cards import CardStore
 from cfactory.config import Settings
@@ -43,6 +45,9 @@ from cfactory.git_install import CallbackClaim, InstallError
 from cfactory.git_providers import build_provider
 from cryptography.hazmat.primitives import hashes, serialization  # noqa: F401 — see app_pem
 from cryptography.hazmat.primitives.asymmetric import rsa
+from runners.github.providers.azure_devops_provider import AzureDevOpsProvider
+from runners.github.providers.gitlab_provider import GitLabProvider
+from runners.github.providers.http_github_provider import HttpGitHubProvider
 
 from cfactory.audit import AuditStore  # isort: skip
 
@@ -267,13 +272,13 @@ def _serve(handler: type[http.server.BaseHTTPRequestHandler]) -> http.server.HTT
 def test_a_302_to_another_host_does_not_re_send_the_credential():
     """Two real servers, not a mock. Hop 1 answers 302; hop 2 records what it got.
 
-    LATENT rather than live today: httpx does not follow redirects by default,
-    so it raises on the 302 and hop 2 is never called. Asserted anyway because
-    that default lives in the vendored, byte-gated ``providers/factory.py``
-    shared by four repos -- one upstream change flips this from latent to live
-    everywhere at once (Factory#825). Note httpx strips ``Authorization``
-    across origins but does NOT strip GitLab's ``PRIVATE-TOKEN``, which is the
-    header this provider sends and the one asserted on here.
+    No longer latent: since Factory#825 (re-vendored here in #415) every
+    credentialed client STATES ``follow_redirects=False`` rather than inheriting
+    httpx's default, so the client raises on the 302 and hop 2 is never called.
+    The two tests below keep that stated at every site. Note httpx strips
+    ``Authorization`` across origins but does NOT strip GitLab's
+    ``PRIVATE-TOKEN``, which is the header this provider sends and the one
+    asserted on here.
     """
     _Recorder.received = []
     _Redirector.received = []
@@ -293,6 +298,64 @@ def test_a_302_to_another_host_does_not_re_send_the_credential():
     finally:
         hop1.shutdown()
         hop2.shutdown()
+
+
+# ── the posture is STATED, not inherited (CFactory#416 / Factory#825) ─────────
+#
+# The two-hop test above proves the behaviour end to end for ONE provider on one
+# code path. These two prove the property is written down at every credentialed
+# client site, which is what stops an upstream edit from silently un-proving it:
+# httpx's no-redirect default was the only thing holding the line before #825.
+
+
+def test_every_provider_client_declines_redirects():
+    """Attribute check on each live ``_client()`` factory.
+
+    ``_patch_client()`` is the Azure DevOps write path and builds its own client,
+    so ``_client()`` alone does not cover it (Factory#825 collapsed four inline
+    write-path clients onto it).
+    """
+    azure = AzureDevOpsProvider(_repo="o/r", _pat="t")
+    for label, client in (
+        ("GitLab", GitLabProvider(_repo="o/r", _token="t")._client()),  # noqa: S106 — fake
+        ("AzureDevOps", azure._client()),
+        ("AzureDevOps._patch_client", azure._patch_client()),
+        ("HttpGitHub", HttpGitHubProvider(_repo="o/r", _token="t")._client()),  # noqa: S106
+    ):
+        assert client.follow_redirects is False, label
+
+
+def test_no_provider_http_client_omits_a_redirect_posture():
+    """AST sweep: every ``httpx.AsyncClient`` site must STATE the flag.
+
+    An attribute check cannot see the GitLab Duo POST, which is constructed
+    inline inside an ``async with``. And a test that only rejects an explicit
+    ``True`` passes on a tree where no site states anything at all -- which was
+    exactly this repo's state before #416, and exactly the hole #825 closed. So
+    a missing kwarg is asserted as the defect, not as a not-yet-wrong default.
+    """
+    providers_dir = Path(runners.github.providers.__file__).parent
+    checked = 0
+    for module in sorted(providers_dir.glob("*_provider.py")):
+        for node in ast.walk(ast.parse(module.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "AsyncClient"):
+                continue
+            checked += 1
+            flag = next((kw for kw in node.keywords if kw.arg == "follow_redirects"), None)
+            assert flag is not None, (
+                f"{module.name}:{node.lineno} states no redirect posture while carrying "
+                "a credential -- the canonical must set follow_redirects=False"
+            )
+            assert flag.value.value is False, (
+                f"{module.name}:{node.lineno} follows redirects while carrying a credential"
+            )
+    # 5 sites in this repo's vendored tree, verified by reading them: GitLab
+    # _client() + the inline Duo POST, AzureDevOps _client() + _patch_client(),
+    # HttpGitHub _client(). github_provider.py shells out to `gh` and has none.
+    assert checked >= 5, f"expected the 5 known client sites, found {checked}"
 
 
 # ── the message the caller gets back (CFactory#414 / Factory#831) ─────────────

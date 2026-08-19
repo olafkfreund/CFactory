@@ -29,6 +29,25 @@ import logging
 import traceback
 import uuid
 
+# InputRejectedError now lives in the hub and is RE-EXPORTED here, so that
+# `from .error_ref import InputRejectedError` and the `isinstance` check in
+# `client_error` below keep working unchanged.
+#
+# It moved (Factory#831, CFactory#414) because `factory_common.url_safety` --
+# the SSRF guard `git_base_url.safe_git_base_url` calls -- has to be able to
+# raise it. A guard in the hub that can only raise `ValueError` forces every
+# consumer wanting the marked behaviour to keep a FORK of the guard, which is
+# the divergence TFactory#1111 was filed about. Two classes of the same name is
+# the same trap one level down: `client_error` tests `isinstance`, so a hub-
+# raised rejection reaching it against a locally-defined class would silently
+# fall through to the correlation-id branch. One class, hub-owned, closes both.
+#
+# The class kept its name, its `client_message` attribute, its single-argument
+# constructor and its `ValueError` base, so this is a move, not a behaviour
+# change. The full rationale is in `factory_common/client_errors.py`; what that
+# docstring adds over the text this replaces is nothing -- it is the same
+# argument, written once.
+from factory_common.client_errors import InputRejectedError
 from factory_common.logsafe import sanitize_log
 
 __all__ = ["InputRejectedError", "client_error", "error_reference"]
@@ -43,44 +62,19 @@ _REF_CHARS = 12
 _MAX_TRACEBACK = 20_000
 
 
-class InputRejectedError(ValueError):
-    """A validation failure whose message is DELIBERATELY safe to hand back.
-
-    ``error_reference`` above solves the "I don't know if this text is safe"
-    case: redact it, log it in full, hand back a correlation id. This class is
-    the other half -- for the sites where the raiser already knows the message
-    is developer-written, about the caller's own input, and names nothing this
-    server holds. GitConfigError/GitResourceNotFoundError/CredentialError raise
-    sites in this package are that shape ("base_url must start with http:// or
-    https://", "no git connection 4 for this tenant") -- fixed, reviewable
-    strings, never an inner exception's rendered text.
-
-    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep
-    working. The safe sentence lives in :attr:`client_message`, set once at
-    construction -- never re-derived from ``str(exc)``, because
-    ``BaseException.__str__`` renders ``args``, and ``args`` is written by
-    every exception in the process, not just this one's raise sites.
-
-    What this does NOT establish is that a raise site chose its wording
-    wisely: ``InputRejectedError(f"failed: {inner}")`` launders ``inner``
-    straight through. See git_install.py's ``InstallError`` for the case that
-    makes this concrete -- the exact same exception TYPE has one raise site
-    that names a private-key path on disk and others that don't, so marking
-    a type safe here means verifying the *raise sites actually reachable from
-    this call path*, not the type in general.
-    """
-
-    def __init__(self, client_message: str) -> None:
-        super().__init__(client_message)
-        self.client_message = client_message
-
-
 def client_error(logger: logging.Logger, context: str, exc: BaseException) -> str:
     """Return a caller-safe message: ``exc``'s own text if it is an
     :class:`InputRejectedError`, otherwise ``context`` plus an
     :func:`error_reference`.
 
     The one-liner a route handler reaches for instead of ``detail=str(exc)``.
+
+    Marking a type safe means verifying the raise sites actually reachable from
+    THIS call path, not the type in general. ``git_install.InstallError`` is the
+    case that makes it concrete: the same exception type has one raise site that
+    names a private-key path on disk and others that name nothing -- which is why
+    only ``InputRejectedError`` is trusted here and every other type, whatever
+    its name, gets the reference id.
     """
     if isinstance(exc, InputRejectedError):
         # See InputRejectedError: developer-written text about the caller's

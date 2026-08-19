@@ -24,6 +24,8 @@ import asyncio
 import base64
 import http.server
 import ipaddress
+import logging
+import socket
 import threading
 from datetime import UTC, datetime, timedelta
 
@@ -34,6 +36,7 @@ from cfactory import cards as cards_module
 from cfactory.card_ops import AuditContext
 from cfactory.cards import CardStore
 from cfactory.config import Settings
+from cfactory.error_ref import InputRejectedError, client_error
 from cfactory.git_config import GitConfigError, target_from_settings
 from cfactory.git_connections import GitConnectionCreate, GitConnectionUpdate, GitRepositoryCreate
 from cfactory.git_install import CallbackClaim, InstallError
@@ -290,3 +293,70 @@ def test_a_302_to_another_host_does_not_re_send_the_credential():
     finally:
         hop1.shutdown()
         hop2.shutdown()
+
+
+# ── the message the caller gets back (CFactory#414 / Factory#831) ─────────────
+#
+# `safe_git_base_url` interpolates the guard's exception into a `GitConfigError`,
+# and `routes_git_config` hands that string back VERBATIM as a 400 detail (it
+# rewraps `exc.args[0]` as an `InputRejectedError`, which `client_error` trusts).
+# So the guard's wording is client-facing, and "an error was returned" is not
+# enough to assert -- these two lock the TEXT.
+
+
+def _refuse_dns(monkeypatch):
+    """Make every lookup fail, deterministically, with a resolver-written string."""
+
+    def _boom(*_args, **_kwargs):
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+
+
+def test_a_resolve_failure_does_not_leak_the_resolver_text_to_the_caller(monkeypatch):
+    """CWE-209 at a real read site.
+
+    Before the .hub-sha bump the canonical raised
+    ``cannot resolve host 'x': [Errno -2] Name or service not known`` and that
+    whole string reached the caller. The host is the caller's own input and
+    stays; the resolver's text is third-party wording nobody here reviewed.
+    """
+    _refuse_dns(monkeypatch)
+    host = "gitlab.internal.example.com"
+
+    with pytest.raises(GitConfigError) as caught:
+        build_provider(_target(f"http://{host}"), _PROJECT)
+
+    detail = client_error(
+        logging.getLogger(__name__), "invalid request", InputRejectedError(caught.value.args[0])
+    )
+    # Asserted whole rather than as `host in detail`: an equality check is the
+    # stronger claim (nothing ELSE reached the caller either), and a substring
+    # test against a hostname is what py/incomplete-url-substring-sanitization
+    # exists to flag -- a false positive here, but not one worth teaching a
+    # barrier to ignore when the better assertion is also the shorter one.
+    assert detail == f"refusing this git base_url: cannot resolve host '{host}'"
+    assert "Name or service not known" not in detail
+    assert "Errno" not in detail
+
+
+def test_a_guard_rejection_reaches_the_caller_verbatim_not_as_a_reference_id():
+    """One InputRejectedError, not two classes of the same name.
+
+    ``client_error`` gates on ``isinstance``. The guard now raises the HUB's
+    class; ``error_ref`` re-exports it rather than defining its own, so this
+    holds. Define a second class here and the assert flips to a reference id --
+    silently, with the response still a 400.
+    """
+    from factory_common.client_errors import InputRejectedError as HubInputRejectedError
+
+    assert InputRejectedError is HubInputRejectedError
+
+    with pytest.raises(GitConfigError) as caught:
+        build_provider(_target(_METADATA), _PROJECT)
+
+    rejection = InputRejectedError(caught.value.args[0])
+    assert isinstance(rejection, InputRejectedError)
+    detail = client_error(logging.getLogger(__name__), "invalid request", rejection)
+    assert "169.254.169.254" in detail
+    assert "reference" not in detail

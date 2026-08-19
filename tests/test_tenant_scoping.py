@@ -99,8 +99,10 @@ def test_unscoped_write_stamps_default_tenant(store):
 
 def test_scoped_delete_cannot_cross_tenants(store):
     store.scoped("acme").upsert_from_event(_event("42"))
-    assert store.scoped("globex").delete("42") is False
-    assert store.scoped("acme").delete("42") is True
+    crossed = store.scoped("globex").delete("42")
+    assert crossed is False
+    owned = store.scoped("acme").delete("42")
+    assert owned is True
 
 
 # ── filter on read, flag ON ──────────────────────────────────────────────────

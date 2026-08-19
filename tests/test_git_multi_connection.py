@@ -581,7 +581,8 @@ def test_the_mcp_twins_operate_on_the_same_connections(client, cards):
 
 
 def test_an_unknown_connection_is_a_404_over_rest_and_an_error_over_mcp(client):
-    assert client.delete(f"{_connections_url()}/4242").status_code == _HTTP_NOT_FOUND
+    deleted = client.delete(f"{_connections_url()}/4242")
+    assert deleted.status_code == _HTTP_NOT_FOUND
     assert client.post(f"{_connections_url()}/4242:verify").status_code == _HTTP_NOT_FOUND
 
     payload = _tool_payload(client, "cfactory_delete_git_connection", {"connection_id": 4242})
@@ -971,7 +972,8 @@ def test_a_pre_phase_8_tenant_is_adopted_and_still_resolves_and_verifies(
     _write_legacy_config(cards, verified_at=None)
     _write_legacy_credential(cards, _GH_SECRET, keyring)
 
-    assert cards.adopt_legacy_git_config(settings) == 1
+    adopted = cards.adopt_legacy_git_config(settings)
+    assert adopted == 1
 
     # One connection, one repository, marked default, every field preserved.
     resolved = cards.default_repository()
@@ -1014,7 +1016,8 @@ def test_adoption_is_idempotent_and_never_overwrites_an_edit(cards, keyring, set
     cards.create_repository(connection.id, GitRepositoryCreate(project=_GH_OTHER))
     cards.set_default_repository(cards.repositories()[1].id)
 
-    assert cards.adopt_legacy_git_config(settings) == 0
+    adopted = cards.adopt_legacy_git_config(settings)
+    assert adopted == 0
 
     assert len(cards.connections()) == 1
     assert [repo.project for repo in cards.repositories()] == [_GH_PROJECT, _GH_OTHER]
@@ -1027,7 +1030,8 @@ def test_every_tenant_is_adopted_not_only_the_stores_own(cards, keyring, setting
     _write_legacy_config(cards, tenant="globex", project="globex/gadgets")
     _write_legacy_credential(cards, _GH_SECRET, keyring, tenant="globex")
 
-    assert cards.adopt_legacy_git_config(settings) == 2
+    adopted = cards.adopt_legacy_git_config(settings)
+    assert adopted == 2
 
     assert cards.scoped("acme").default_repository().repository.project == "acme/widgets"
     globex = cards.scoped("globex")
@@ -1154,7 +1158,8 @@ def test_an_old_schema_database_gains_the_new_columns_at_boot(tmp_path, keyring,
     store = CardStore(url)
     _write_legacy_config(store, project="acme/live")
     _write_legacy_credential(store, _GH_SECRET, keyring)
-    assert store.adopt_legacy_git_config(settings) == 1
+    adopted = store.adopt_legacy_git_config(settings)
+    assert adopted == 1
 
     resolved = store.default_repository()
     assert resolved.repository.project == "acme/live"

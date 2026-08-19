@@ -767,7 +767,8 @@ def test_a_read_scoped_key_cannot_store_or_clear_a_credential(client):
     reader = {"Authorization": f"Bearer {_READER}"}
 
     assert client.put(_url(), json={"credential": _SECRET}, headers=reader).status_code == 403
-    assert client.delete(_url(), headers=reader).status_code == 403
+    deleted = client.delete(_url(), headers=reader)
+    assert deleted.status_code == 403
     assert (
         _call_tool(client, "cfactory_set_git_credential", {"credential": _SECRET}, key=_READER)
     ).status_code == 403

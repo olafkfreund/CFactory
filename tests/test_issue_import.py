@@ -562,7 +562,8 @@ def test_a_deleted_card_is_not_resurrected_by_the_next_import(cards, host):
     _import(cards, host)
     card = next(c for c in cards.list() if c.title == "Issue 1")
 
-    assert cards.delete(card.card_key) is True
+    deleted = cards.delete(card.card_key)
+    assert deleted is True
 
     result = _import(cards, host, full=True)
 

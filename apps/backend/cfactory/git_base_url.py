@@ -14,12 +14,14 @@ that module, which is what CFactory#414 was filed about before #412 wired it up.
 
 A note on what does NOT hold here, because this docstring used to claim it did:
 the canonical's own module docstring says the public name is registered BY NAME
-as a CodeQL barrier in each consumer, and TFactory and PFactory do carry such a
-pack. **CFactory has no ``.github/codeql/`` directory at all** -- ``codeql.yml``
-runs the default setup with no custom queries -- so nothing here is cleared by a
-barrier, and renaming the function would cost this repo nothing analytically.
-What holds this guard honest here is ``tests/test_git_base_url_ssrf.py``, which
-drives the three real read sites rather than this helper.
+as a CodeQL barrier "in each consumer". That is true of AIFactory
+(``SsrfBarriers.qll``) and PFactory (``PartialSsrfSanitized.ql``); TFactory
+deliberately registers its per-route helpers instead; and **CFactory has no
+``.github/codeql/`` directory at all** -- ``codeql.yml`` runs the default setup
+with no custom queries. So nothing here is cleared by a barrier, and renaming
+this function would cost this repo nothing analytically. What holds this guard
+honest here is ``tests/test_git_base_url_ssrf.py``, which drives the three real
+read sites rather than this helper. (Factory#838 tracks the canonical's wording.)
 
 Ports TFactory#1116 / PFactory#611, which closed the identical defect in the two
 sibling backends.

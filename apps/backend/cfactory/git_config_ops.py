@@ -24,11 +24,13 @@ import httpx
 from .card_ops import AuditContext
 from .cards import CardStore
 from .config import Settings, get_settings
+from .git_base_url import safe_git_base_url
 from .git_config import (
     CREDENTIAL_MISSING,
     GITHUB,
     GITLAB,
     UNCONFIGURED,
+    GitConfigError,
     GitConfigUpdate,
     GitTarget,
     config_view,
@@ -594,7 +596,13 @@ def complete_git_install(
     scoped = store.scoped(claimed.tenant_id)
     connection = scoped.connection(claimed.connection_id)
     provider = claimed.provider
-    base_url = resolved_base_url(provider, connection.base_url or "")
+    # SSRF (#412). This host receives the deployment's GitLab client secret and a
+    # GitHub App JWT below, and it came from a connection row any write-scoped
+    # caller can set. Refused as an InstallError so the callback answers 400.
+    try:
+        base_url = safe_git_base_url(resolved_base_url(provider, connection.base_url or "")) or ""
+    except GitConfigError as exc:
+        raise InstallError(str(exc)) from exc
 
     account: str | None = None
     if provider == GITHUB:

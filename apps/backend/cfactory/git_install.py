@@ -77,6 +77,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .config import DEFAULT_TENANT, Settings
 from .db import Base
+from .git_base_url import safe_git_base_url
 from .git_config import GITHUB, GITLAB
 
 logger = logging.getLogger(__name__)
@@ -814,11 +815,18 @@ class InstallTokenSource:
         return minted.token
 
     def _mint(self) -> MintedToken:
+        # SSRF (#412). ``base_url`` came from the connection row, which any
+        # write-scoped caller sets, and both branches below POST a real secret to
+        # it -- an App JWT, or the sealed refresh token. Checked here rather than
+        # where the source is built, because that happens on every panel poll and
+        # a connection with a bad URL must still be listable (and fixable).
+        # ``token()`` turns the refusal into an InstallError and degrades.
+        base_url = safe_git_base_url(self.base_url) or ""
         if self.provider == GITHUB:
             if not self.installation_id:
                 raise InstallError("this install carries no installation id")
             return mint_installation_token(
-                self.installation_id, self.base_url, self.settings, transport=HTTP_TRANSPORT
+                self.installation_id, base_url, self.settings, transport=HTTP_TRANSPORT
             )
         if self.provider == GITLAB:
             stored = self.read_secret()
@@ -827,7 +835,7 @@ class InstallTokenSource:
                     "no refresh token is stored for this connection, so no access token can "
                     "be obtained — reconnect it in Settings > Git connections"
                 )
-            tokens = refresh_tokens(stored, self.base_url, self.settings, transport=HTTP_TRANSPORT)
+            tokens = refresh_tokens(stored, base_url, self.settings, transport=HTTP_TRANSPORT)
             # GitLab rotates on every exchange: the one just used is spent, so the
             # new one is written back before the access token is handed out.
             if tokens.refresh and tokens.refresh != stored:

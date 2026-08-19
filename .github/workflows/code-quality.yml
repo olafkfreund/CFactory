@@ -193,11 +193,23 @@ jobs:
         id: pin
         run: |
           set -euo pipefail
-          sha="$(cat cfactory/standards/.hub-sha)"
-          # An empty or missing pin must fail here rather than resolve to the
-          # default branch, which would compare against a MOVING target and call
-          # it a match (standards rule 4.7).
-          [ -n "$sha" ] || { echo "standards/.hub-sha is empty" >&2; exit 1; }
+          sha="$(tr -d '[:space:]' < cfactory/standards/.hub-sha)"
+          # Shape-checked HERE, not only inside assert-hub-pin-on-main.sh below.
+          # This file comes from the PR's own tree, so on a fork PR its contents
+          # are attacker-controlled, and `cat` + a bare `-n` test accepted a
+          # MULTI-LINE value: a .hub-sha holding "<40-hex>\nfoo=bar" wrote two
+          # lines into $GITHUB_OUTPUT and set an arbitrary second output on this
+          # step. Nothing reads a second output today, which is the only reason
+          # that was not exploitable -- an unwanted dependency on a fact about
+          # the rest of the file. Rejecting anything that is not a bare
+          # 40-character commit id closes it at the source, and matches the
+          # sibling gates in PFactory / TFactory / AIFactory (Factory#711).
+          # An empty or missing pin fails here too, rather than resolving to the
+          # default branch and comparing against a MOVING target (rule 4.7).
+          if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "standards/.hub-sha is not a 40-character commit SHA: '${sha}'" >&2
+            exit 1
+          fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Assert both pins are really on hub main
@@ -216,18 +228,27 @@ jobs:
           cfactory/.github/scripts/assert-hub-pin-on-main.sh "${SHA}" "standards/.hub-sha"
           cfactory/.github/scripts/assert-hub-pin-on-main.sh "${CONTRACTS_PIN_SHA}" "code-quality CONTRACTS_PIN_SHA"
 
+      # Both hub trees are only ever diffed (and standards/ruff.toml is read as
+      # a ruff --config), never executed, and nothing runs git against them
+      # afterwards. persist-credentials: false so the job token is not left
+      # behind in factory-hub-*/.git/config, sitting next to a checked-out ref
+      # the PR chose -- the same reason the sibling gates in PFactory,
+      # TFactory and AIFactory set it. These two checkouts were the only ones
+      # in the fleet still persisting it (CodeQL actions/untrusted-checkout).
       - name: Check out hub standards at the pinned SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: ${{ steps.pin.outputs.sha }}
           path: factory-hub-standards
+          persist-credentials: false
       - name: Check out hub at the pinned contracts SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: ${{ env.CONTRACTS_PIN_SHA }}
           path: factory-hub-contracts
+          persist-credentials: false
       - name: Diff vendored configs against the pinned hub baseline
         run: |
           set -euo pipefail

@@ -91,7 +91,7 @@ def test_services_includes_observe_entry_and_reports_up_on_200():
 def test_services_observe_down_when_unreachable():
     app = create_app()
     app.dependency_overrides[adapters_dep] = _three_adapters_up
-    app.dependency_overrides[observe_transport_dep] = lambda: _offline()
+    app.dependency_overrides[observe_transport_dep] = _offline
     client = TestClient(app)
 
     by_name = {s["name"]: s for s in client.get("/api/services").json()["services"]}

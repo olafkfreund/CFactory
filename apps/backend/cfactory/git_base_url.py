@@ -9,9 +9,17 @@ would otherwise need (TID252 / PLC0415).
 This adds no SSRF logic of its own. It calls
 ``factory_common.url_safety.assert_safe_outbound_url``, the fleet canonical
 guard this backend already vendors (cf. TFactory#1111, which is about not
-growing a second dialect of this check). The public name of that function is
-registered BY NAME as a barrier in the repo's CodeQL pack, so calling it -- and
-using the value it returns -- is what clears the taint, here and to the analyser.
+growing a second dialect of this check) -- and it is this repo's ONLY caller of
+that module, which is what CFactory#414 was filed about before #412 wired it up.
+
+A note on what does NOT hold here, because this docstring used to claim it did:
+the canonical's own module docstring says the public name is registered BY NAME
+as a CodeQL barrier in each consumer, and TFactory and PFactory do carry such a
+pack. **CFactory has no ``.github/codeql/`` directory at all** -- ``codeql.yml``
+runs the default setup with no custom queries -- so nothing here is cleared by a
+barrier, and renaming the function would cost this repo nothing analytically.
+What holds this guard honest here is ``tests/test_git_base_url_ssrf.py``, which
+drives the three real read sites rather than this helper.
 
 Ports TFactory#1116 / PFactory#611, which closed the identical defect in the two
 sibling backends.
@@ -51,8 +59,9 @@ def safe_git_base_url(base_url: str | None) -> str | None:
     it only asserts the string starts with ``http://`` or ``https://``. A scheme
     says nothing about where the host resolves, and
     ``http://169.254.169.254/latest/meta-data/`` passes it. That is also why a
-    scheme test is deliberately NOT registered as a barrier in this fleet's
-    CodeQL packs.
+    scheme test is deliberately NOT registered as a barrier in the fleet's CodeQL
+    packs -- TFactory's and PFactory's; see the module docstring on why that
+    sentence is about them and not about this repo.
 
     The check sits at each read, and NOT in
     ``runners/github/providers/factory.py`` or in ``factory_common/url_safety``:
@@ -81,4 +90,17 @@ def safe_git_base_url(base_url: str | None) -> str | None:
     try:
         return assert_safe_outbound_url(base_url, allow_private=True)
     except ValueError as exc:
+        # `InputRejectedError` since the hub bump; it subclasses ValueError, so
+        # this clause is unchanged.
+        #
+        # Interpolating a caught exception into a client-facing message is the
+        # laundering shape `error_ref` exists to stop, and it is safe HERE for
+        # one specific reason: the canonical's rejections are developer-written
+        # about the caller's own URL, and it does not interpolate the
+        # `socket.gaierror` (Factory#831). Before the .hub-sha bump in
+        # CFactory#414 it DID, and the resolver's "[Errno -2] Name or service
+        # not known" reached the caller verbatim through the 400 that
+        # routes_git_config builds from `exc.args[0]`. If a future canonical
+        # embeds an inner exception again, this line must become
+        # `exc.client_message`.
         raise GitConfigError(f"refusing this git base_url: {exc}") from exc

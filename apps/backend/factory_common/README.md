@@ -12,6 +12,13 @@ issue Factory#161):
 - `factory_common.secrets` - the canonical secret-pattern table + `redact()` /
   `scan()` / `contains_secret()`.
 - `factory_common.http` - the Cloudflare-friendly typed `urllib` JSON client.
+- `factory_common.url_safety` - `assert_safe_outbound_url()`, the fleet's one
+  SSRF guard for an outbound URL a caller chose.
+- `factory_common.client_errors` - `InputRejectedError`, the exception
+  `assert_safe_outbound_url` raises. `cfactory/error_ref.py` RE-EXPORTS this
+  class rather than defining its own: `client_error()` gates on `isinstance`,
+  so two same-named classes would silently downgrade a safe message to a
+  correlation id (CFactory#414).
 
 It sits beside `cfactory/` rather than inside it because the modules use
 absolute imports (`from factory_common.http import ...`), so the package must be
@@ -41,3 +48,10 @@ See `.hub-sha`.
 `sanitize_log` guards the untrusted values interpolated into log messages in
 `cfactory/issue_import.py`, `cfactory/mcp.py` and `cfactory/routes_services.py`;
 see `apps/backend/tests/test_logsafe_vendored.py` for the behaviour lock.
+
+`assert_safe_outbound_url` has exactly one caller, `cfactory/git_base_url.py`,
+which the three git-connection read sites route through -- the provider
+factory, the install callback and the install-token mint. See
+`tests/test_git_base_url_ssrf.py`, which drives those read sites rather than
+the helper. `InputRejectedError` is re-exported by `cfactory/error_ref.py` and
+used across the routes layer.

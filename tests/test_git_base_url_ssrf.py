@@ -322,14 +322,20 @@ def test_a_resolve_failure_does_not_leak_the_resolver_text_to_the_caller(monkeyp
     stays; the resolver's text is third-party wording nobody here reviewed.
     """
     _refuse_dns(monkeypatch)
+    host = "gitlab.internal.example.com"
 
     with pytest.raises(GitConfigError) as caught:
-        build_provider(_target("http://gitlab.internal.example.com"), _PROJECT)
+        build_provider(_target(f"http://{host}"), _PROJECT)
 
     detail = client_error(
         logging.getLogger(__name__), "invalid request", InputRejectedError(caught.value.args[0])
     )
-    assert "gitlab.internal.example.com" in detail
+    # Asserted whole rather than as `host in detail`: an equality check is the
+    # stronger claim (nothing ELSE reached the caller either), and a substring
+    # test against a hostname is what py/incomplete-url-substring-sanitization
+    # exists to flag -- a false positive here, but not one worth teaching a
+    # barrier to ignore when the better assertion is also the shorter one.
+    assert detail == f"refusing this git base_url: cannot resolve host '{host}'"
     assert "Name or service not known" not in detail
     assert "Errno" not in detail
 

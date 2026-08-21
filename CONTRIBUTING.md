@@ -91,13 +91,15 @@ just test              # backend pytest
 just ui-build          # frontend typecheck + production build
 ```
 
-Two checks are required on both `dev` and `main`, and both come from
-`.github/workflows/test.yml`:
+Three checks are required on both `dev` and `main`. Two come from
+`.github/workflows/test.yml`; the third comes from
+`.github/workflows/verification-core-drift.yml`:
 
-| Check | What it runs |
-|-------|--------------|
-| `Backend pytest` | `PYTHONPATH=apps/backend pytest -v` |
-| `Frontend typecheck + build` | `npm run typecheck` then `npm run build` |
+| Check | Workflow | What it runs |
+|-------|----------|--------------|
+| `Backend pytest` | `test.yml` | `PYTHONPATH=apps/backend pytest -v` |
+| `Frontend typecheck + build` | `test.yml` | `npm run typecheck` then `npm run build` |
+| `vendored copies match the hub canonical (byte-exact)` | `verification-core-drift.yml` | compares this repo's vendored copies against the Factory hub canonical |
 
 `code-quality.yml` additionally runs a per-file ruff + mypy ratchet (a changed
 file may not gain violations against the PR base), a whole-repo
@@ -151,34 +153,40 @@ the repo, because reading branch protection is an admin-only endpoint. A schedul
 job in the hub runs check mode across the fleet daily, so drift surfaces without
 anyone having to remember to look.
 
-What is protected — but read [#351](https://github.com/olafkfreund/CFactory/issues/351)
-first. Three rows of this table do not match what the two branches carry today:
-a third check (`vendored copies match the hub canonical (byte-exact)`) is
-required on both, and `main` has no `required_pull_request_reviews` block at
-all, so neither the approving review nor conversation resolution is in force.
-Reconciling that means deciding what the protection *should* be and re-applying
-it with an admin token, which is why it is a separate issue rather than a
-correction here.
+What is protected, measured against the live settings (#351):
 
 | | `main` | `dev` |
 | --- | --- | --- |
-| Required CI checks | `Backend pytest`, `Frontend typecheck + build` | same |
+| Required CI checks | `Backend pytest`, `Frontend typecheck + build`, `vendored copies match the hub canonical (byte-exact)` | same |
 | Branch must be up to date | yes | no |
-| Approving reviews | 1 | none |
+| Approving reviews | none | none |
 | Code-owner review | no (a `CODEOWNERS` file exists; the setting that would enforce it is off) | no |
 | Conversation resolution | yes | no |
 | Force-push / deletion | blocked | blocked |
+| Admin enforcement | off | off |
 
-`dev` requires no review deliberately. It is the default branch and the one PRs
-target, and a solo maintainer — or one of the factory's own agents — has nobody to
-approve their own PR, so requiring one there would stall every merge; `strict`
-would additionally force a rebase before each one. The CI checks are *not*
-relaxed on `dev`: it is looser about review, never about tests. `main` keeps the
-full set because it is the release branch and only receives promotion merges from
-`dev`.
+**Neither branch requires an approving review**, and that is deliberate rather
+than an omission: `REVIEWS=0` for CFactory in the hub's
+`scripts/apply_branch_protection.sh`, so the live setting and the declared intent
+agree. A solo maintainer — or one of the factory's own agents — has nobody to
+approve their own PR, so requiring one would stall every merge. That is the
+Factory#484 shape: an unsatisfiable requirement turns every merge into an
+`--admin` bypass and produces *less* enforcement, not more.
 
-Note the check names are this repo's own (`Backend pytest`,
+What actually guards `main` beyond `dev` is `strict` (the branch must be up to
+date, forcing a rebase onto anything newly merged) and conversation resolution.
+The CI checks are *not* relaxed on `dev`: it is looser about review, never about
+tests.
+
+**Conversation resolution has teeth.** `required_conversation_resolution` is a
+top-level protection field, NOT part of `required_pull_request_reviews`, so it is
+in force on `main` even with no review requirement — an unresolved review thread
+blocks the merge on its own, which is routinely what a green PR is waiting on.
+
+Note the first two check names are this repo's own (`Backend pytest`,
 `Frontend typecheck + build`) and differ from the Python services'
-(`backend (ruff + pytest)`). That is why the intent is declared per repo in one
+(`backend (ruff + pytest)`); the third comes from `verification-core-drift.yml`,
+not `test.yml`, and is spelled identically across all four consumers so a rename
+cannot be half-applied. That is why the intent is declared per repo in one
 shared script rather than copied into each repo — a copy carrying another repo's
 check names was the subject of Factory#468.

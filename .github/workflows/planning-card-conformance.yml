@@ -111,14 +111,25 @@ jobs:
   conformance:
     name: card models match the hub contract
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Check out this service
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: service
 
+      - name: Assert the pin is really on hub main
+        # HUB_PIN_SHA lives in THIS workflow file, which on a `pull_request`
+        # trigger is the PR's own copy -- so it is as attacker-controlled as a
+        # tracked .hub-sha. A fork commit is a valid 40-hex SHA and is fetchable
+        # by SHA from the hub, so the 40-hex check alone does not stop a fork PR
+        # pinning a hub tree that matches its own drifted copy (CFactory#373).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: service/.github/scripts/assert-hub-pin-on-main.sh "${HUB_PIN_SHA}" "planning-card-conformance HUB_PIN_SHA"
+
       - name: Check out the Factory hub CONTRACT at the pinned SHA
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: ${{ env.HUB_PIN_SHA }}
@@ -135,13 +146,13 @@ jobs:
         # honestly red - the gate genuinely cannot run - and it resolves itself
         # the moment #617 merges. It was observed running GREEN once, from the
         # pin, in CFactory run 31187440916; see the PR body.
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: main
           path: factory-hub-main
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 

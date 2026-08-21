@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from ..config import Settings, get_settings
-from ..store import WorkItemStore
+from cfactory.config import Settings, get_settings
+from cfactory.store import WorkItemStore
+
 from .aifactory import AIFactoryAdapter
 from .base import AdapterError, AdapterItem, BaseHTTPAdapter, ServiceProbe
 from .pfactory import PFactoryAdapter

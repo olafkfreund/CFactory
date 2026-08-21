@@ -17,6 +17,8 @@ The three properties that carry weight, each with a test named for it:
 
 from __future__ import annotations
 
+import re
+
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -35,6 +37,11 @@ from fastapi.testclient import TestClient
 from runners.github.providers.gitlab_provider import GitLabProvider
 
 from cfactory.api_deps import action_transport_dep  # isort: skip
+
+#: A client-safe failure reason: a correlation id, and nothing that names
+#: an internal host, path or library (CWE-209).
+_REFERENCE_RE = re.compile(r"reference ([0-9a-f]{12})")
+
 
 _TEST_TOKEN = "test-provider-token-not-a-credential"  # noqa: S105 — a fake, not a secret
 _TEST_HMAC = "issue-import-test-hmac"
@@ -130,7 +137,7 @@ def client(cards, audit, host, _configured, monkeypatch):
     monkeypatch.setattr(mcp, "get_audit_store", lambda: audit)
     monkeypatch.setattr(mcp, "action_transport_dep", host.transport)
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.set_keys({_WRITER: {"read", "write"}})
 
     app = create_app()
@@ -193,7 +200,9 @@ def test_an_unreachable_provider_is_reported_not_raised(cards):
     result = _import(cards, host)
 
     assert result["ok"] is False
-    assert "500" in result["reason"]
+    # The reason is a correlation id, not the provider's error text: it
+    # reaches an API response and that text names internal hosts and paths.
+    assert _REFERENCE_RE.search(result["reason"])
     assert cards.list() == []
 
 
@@ -553,7 +562,8 @@ def test_a_deleted_card_is_not_resurrected_by_the_next_import(cards, host):
     _import(cards, host)
     card = next(c for c in cards.list() if c.title == "Issue 1")
 
-    assert cards.delete(card.card_key) is True
+    deleted = cards.delete(card.card_key)
+    assert deleted is True
 
     result = _import(cards, host, full=True)
 

@@ -8,7 +8,9 @@ events upsert the matching slice and append to the timeline.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
+from functools import cache
 
 from sqlalchemy import DateTime, Integer, Select, String, select
 from sqlalchemy.engine import Engine
@@ -16,11 +18,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
 
-from .config import DEFAULT_TENANT, Settings, get_settings
+from .config import DEFAULT_TENANT, get_settings
 from .db import Base, add_column_ddl, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem, as_utc
-from .status_taxonomy import is_running
-from .status_taxonomy import is_terminal as _is_terminal
+from .status_taxonomy import is_running, is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,6 @@ _PIPELINE_ORDER = ("pfactory", "aifactory", "tfactory")
 
 def stall_deadline_seconds() -> float:
     """The stall deadline in seconds (env ``CFACTORY_STALL_DEADLINE_SECONDS``)."""
-    import os
-
     raw = os.environ.get("CFACTORY_STALL_DEADLINE_SECONDS")
     if raw is None:
         return _DEFAULT_STALL_DEADLINE_SECONDS
@@ -714,19 +713,12 @@ class WorkItemStore:
         ).first()
 
 
-_store: WorkItemStore | None = None
-
-
-def get_store(settings: Settings | None = None) -> WorkItemStore:
+@cache
+def get_store() -> WorkItemStore:
     """Cached default store, built from settings (lazy)."""
-    global _store
-    if _store is None:
-        settings = settings or get_settings()
-        _store = WorkItemStore(settings.database_url)
-    return _store
+    return WorkItemStore(get_settings().database_url)
 
 
 def reset_store() -> None:
     """Drop the cached store (tests)."""
-    global _store
-    _store = None
+    get_store.cache_clear()

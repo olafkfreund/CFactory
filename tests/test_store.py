@@ -31,14 +31,17 @@ def test_create_then_get(store):
 def test_delete_removes_work_item(store):
     store.upsert_from_event(_event(Service.TFACTORY, "planner_failed", key="bench-1"))
     assert store.get("bench-1") is not None
-    assert store.delete("bench-1") is True
+    deleted = store.delete("bench-1")
+    assert deleted is True
     assert store.get("bench-1") is None
     # Idempotent: deleting an already-gone item is a no-op that reports False.
-    assert store.delete("bench-1") is False
+    deleted_again = store.delete("bench-1")
+    assert deleted_again is False
 
 
 def test_delete_missing_work_item_returns_false(store):
-    assert store.delete("never-existed") is False
+    deleted = store.delete("never-existed")
+    assert deleted is False
 
 
 def test_repeated_snapshot_same_status_preserves_updated_at(store):

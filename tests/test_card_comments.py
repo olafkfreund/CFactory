@@ -32,6 +32,8 @@ what is asserted is the requests a host would actually see.
 
 from __future__ import annotations
 
+import re
+
 import base64
 from datetime import UTC, datetime, timedelta
 
@@ -47,6 +49,11 @@ from cfactory.config import Settings
 from cfactory.git_connections import GitConnectionCreate, GitRepositoryCreate
 from cfactory.issue_import import import_issues
 from fastapi.testclient import TestClient
+
+#: A client-safe failure reason: a correlation id, and nothing that names
+#: an internal host, path or library (CWE-209).
+_REFERENCE_RE = re.compile(r"reference ([0-9a-f]{12})")
+
 
 # Fake key material, pinned so a failure is reproducible. Not a secret: it
 # protects nothing but this module's temp databases.
@@ -271,7 +278,7 @@ def test_a_failed_comment_fetch_never_claims_the_thread_is_empty(cards, host, se
     assert result["imported"] == 1
     # And the comment half reported its failure rather than swallowing it.
     assert result["comments"]["ok"] is False
-    assert "503" in result["comments"]["reason"]
+    assert _REFERENCE_RE.search(result["comments"]["reason"])
 
     card = cards.list()[0]
     assert card.comments_synced_at is None, "a failed fetch claimed the thread was complete"

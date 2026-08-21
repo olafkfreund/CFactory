@@ -272,14 +272,17 @@ def test_chain_never_serves_the_hmac_secret(db_url):
     assert HMAC_KEY not in str(_chain(db_url))
 
 
-def test_chain_requires_the_read_scope_when_keys_are_configured(db_url, monkeypatch):
+def test_chain_requires_the_read_scope_when_keys_are_configured(db_url):
     """Same gate as the rest of /api/*, including on the editor host."""
-    monkeypatch.setattr(auth, "_keystore", auth.KeyStore({"cfk_good": {"read"}}))
-    app = create_app()
-    app.dependency_overrides[audit_dep] = lambda: _store(db_url)
-    api = TestClient(app)
-    assert api.get("/api/audit/chain").status_code == 401
-    assert api.get("/api/audit/chain", headers={"X-API-Key": "cfk_good"}).status_code == 200
+    auth.set_keys({"cfk_good": {"read"}})
+    try:
+        app = create_app()
+        app.dependency_overrides[audit_dep] = lambda: _store(db_url)
+        api = TestClient(app)
+        assert api.get("/api/audit/chain").status_code == 401
+        assert api.get("/api/audit/chain", headers={"X-API-Key": "cfk_good"}).status_code == 200
+    finally:
+        auth.reset_keystore()
 
 
 def test_store_dep_is_untouched_by_this_surface(db_url):

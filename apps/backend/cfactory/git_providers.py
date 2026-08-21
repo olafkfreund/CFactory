@@ -57,8 +57,9 @@ from runners.github.providers.protocol import (
     to_iso_utc,
 )
 
-from .git_config import ADO_PATH_PARTS as _ADO_PATH_PARTS
+from .git_base_url import safe_git_base_url
 from .git_config import (
+    ADO_PATH_PARTS as _ADO_PATH_PARTS,
     PROVIDER_DEFAULT_BASE_URL,
     SUPPORTED_PROVIDERS,
     GitTarget,
@@ -501,7 +502,10 @@ def build_provider(
     """
     kind = (target.provider or ProviderType.GITHUB.value).strip().lower()
     token = target.credential.token()
-    base_url = target.base_url
+    # SSRF (#412). The stored base_url is caller-chosen and every branch below
+    # hands it a real credential, so it is checked HERE, where it is read, and
+    # the checked return value is what flows on.
+    base_url = safe_git_base_url(target.base_url)
 
     if kind == ProviderType.GITHUB.value:
         return HttpGitHubProvider(

@@ -77,41 +77,19 @@ repos:
         args: [--config, ruff.toml]
         files: ^(apps/backend/cfactory|scripts)/.*\.py$
 
-  # `ruff check`, ratcheted - NOT whole-file. This is the hook the issue said
-  # would fail its first run, and it does: a plain `ruff check` over
-  # `apps/backend/cfactory` reports 66 violations spread across 26 files, which
-  # is very nearly every backend module. Those are legacy, they are catalogued in
-  # #356, and `code-quality.yml` tolerates them ON PURPOSE - its gate is
-  # `ratchet_lint.py`, which blocks NET-NEW violations in a changed file and
-  # leaves the existing backlog alone. A whole-file hook here would be a HARSHER
-  # bar than the blocking CI job, failing you for debt someone else wrote in a
-  # file you merely touched. That is not a stricter gate, it is a gate people
-  # start passing with `--no-verify`.
-  #
-  # So it runs the repo's OWN ratchet - the same script, the same arguments CI
-  # uses - rather than a second, different opinion about the same code.
-  #
-  # AT pre-push, NOT pre-commit, and that distinction is load-bearing: the
-  # ratchet diffs `{base}...HEAD` with `git diff`, so it reads COMMITTED content.
-  # Run at commit time it would score the commit BEFORE the one you are making
-  # and cheerfully pass a commit that adds violations. At push time HEAD is
-  # exactly what you are about to send, which is what CI will score.
-  #
-  #     pre-commit install --hook-type pre-push     # needed for this one
-  #
-  # `additional_dependencies` pins ruff INSIDE pre-commit's own venv, so this
-  # hook does not care what `ruff` is on your PATH. It must equal RUFF_VERSION in
-  # code-quality.yml and the `rev` above.
-  - repo: local
-    hooks:
-      - id: ruff-ratchet
-        name: ruff ratchet vs origin/dev (net-new violations only)
-        entry: python scripts/ratchet_lint.py --base origin/dev --package apps/backend/cfactory --package scripts
-        language: python
-        additional_dependencies: ["ruff==0.15.17"]
+      # `ruff check` over the SAME two trees, whole-file. This became possible
+      # at #356: when this config was written the backlog was 66 violations
+      # across 26 files, so a whole-file hook here would have failed you for
+      # debt someone else wrote in a file you merely touched -- a harsher bar
+      # than the blocking CI job, and the kind of gate people start passing with
+      # `--no-verify`. So it ran the repo's ratchet instead. The backlog is now
+      # zero and `ruff check (apps/backend/cfactory + scripts, blocking)` in
+      # code-quality.yml is a required check, so this hook and that job now give
+      # the same verdict on the same code -- which is the whole point of this
+      # file. It replaces the `ruff-ratchet` hook that used to sit below.
+      - id: ruff-check
+        args: [--config, ruff.toml]
         files: ^(apps/backend/cfactory|scripts)/.*\.py$
-        pass_filenames: false
-        stages: [pre-push]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -194,3 +172,11 @@ repos:
         language: system
         files: ^apps/frontend-web/.*\.(ts|tsx)$
         pass_filenames: false
+
+  # Gitleaks secret scanning (Factory#724). Same tool, same config
+  # (.gitleaks.toml) as .github/workflows/secret-scan.yml, so a clean
+  # pre-commit run means the CI gate will not surprise you.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e  # v8.30.1
+    hooks:
+      - id: gitleaks

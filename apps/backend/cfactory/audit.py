@@ -32,9 +32,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from functools import cache
 from typing import Any
 
 from pydantic import BaseModel
@@ -42,8 +42,8 @@ from sqlalchemy import Boolean, DateTime, Integer, String, event, select, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 
-from .auth import get_keystore, key_actor
-from .config import Settings, get_settings
+from .auth import KEY_SHAPED, get_keystore, key_actor
+from .config import get_settings
 from .db import Base, make_engine
 from .models import as_utc
 
@@ -52,12 +52,8 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-# The credential shapes this fleet issues: CFactory's own `cfk_…` and the
-# AIFactory-style `acw_…` (the one #251 was filed about). Anchored and demanding
-# real length, so it cannot match the actors this seam legitimately produces —
-# `system`, `local`, `user:<email>`, `unattributed:key-<digest>` — none of which
-# is a bare prefixed token. Widen this if a new key prefix is minted.
-_KEY_SHAPED = re.compile(r"^(?:acw|cfk)_[A-Za-z0-9]{16,}$")
+# One regex for the shape, defined at the boundary that validates it (#369).
+_KEY_SHAPED = KEY_SHAPED
 
 
 def redact_actor(actor: str) -> str:
@@ -413,7 +409,7 @@ class AuditStore:
         if create:
             Base.metadata.create_all(self._engine)
 
-    def record(
+    def record(  # noqa: PLR0913 — one keyword-only argument per audit-row column
         self,
         *,
         actor: str,
@@ -587,23 +583,17 @@ class AuditStore:
         return [b.id for b in self.check() if b.kind != FORKED]
 
 
-_audit_store: AuditStore | None = None
-
-
-def get_audit_store(settings: Settings | None = None) -> AuditStore:
+@cache
+def get_audit_store() -> AuditStore:
     """Cached default audit store, built from settings (lazy)."""
-    global _audit_store
-    if _audit_store is None:
-        settings = settings or get_settings()
-        _audit_store = AuditStore(
-            settings.database_url,
-            hmac_secret=settings.audit_hmac_secret,
-            acknowledged_forks=parse_acknowledged_forks(settings.audit_acknowledged_forks),
-        )
-    return _audit_store
+    settings = get_settings()
+    return AuditStore(
+        settings.database_url,
+        hmac_secret=settings.audit_hmac_secret,
+        acknowledged_forks=parse_acknowledged_forks(settings.audit_acknowledged_forks),
+    )
 
 
 def reset_audit_store() -> None:
     """Drop the cached audit store (tests)."""
-    global _audit_store
-    _audit_store = None
+    get_audit_store.cache_clear()

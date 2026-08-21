@@ -6,7 +6,8 @@ from typing import Any
 
 import httpx
 
-from ..models import Service
+from cfactory.models import Service
+
 from .base import AdapterError, AdapterItem, BaseHTTPAdapter, first
 
 # The canonical TFactory task/evidence API is mounted under this prefix.

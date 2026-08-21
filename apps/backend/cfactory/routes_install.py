@@ -68,6 +68,7 @@ from .api_deps import action_transport_dep, audit_dep, cards_store_dep
 from .audit import AuditStore
 from .cards import CardStore
 from .config import get_settings
+from .error_ref import error_reference
 from .git_install import CALLBACK_PATH, CallbackClaim, InstallError
 
 logger = logging.getLogger(__name__)
@@ -156,21 +157,37 @@ def git_install_callback(
             transport=transport,
         )
     except InstallError as exc:
-        # The reason is shown because every one of them is actionable by the
-        # person looking at it and none names a secret; a live state, a token or
-        # an installation never appears in an InstallError message.
-        logger.warning("install callback refused (setup_action=%s): %s", query.setup_action, exc)
-        return _page("Install not completed", str(exc), status=int(HTTPStatus.BAD_REQUEST))
-    except Exception as exc:
-        # An unauthenticated endpoint must not return a stack trace or a
-        # provider's error body to whoever reached it. The detail goes to the log;
-        # the caller gets the generic answer.
-        logger.exception("install callback failed unexpectedly")
+        # The reason used to be rendered in full, on the argument that none of
+        # them names a secret. True, and beside the point: this endpoint is
+        # UNAUTHENTICATED, and these messages name deployment internals - the
+        # private-key path on disk, which env vars are unset, the exception type
+        # a PEM parse produced. That is CWE-209 disclosure to whoever can reach
+        # the callback URL. The caller gets a reference; an operator greps it.
+        error_id = error_reference(
+            logger, f"install callback refused (setup_action={query.setup_action})", exc
+        )
+        return _page(
+            "Install not completed",
+            "The install could not be completed and nothing was stored. "
+            "Try again from Settings > Git connections, and quote reference "
+            f"{error_id} if you need to ask an administrator what happened.",
+            status=int(HTTPStatus.BAD_REQUEST),
+        )
+    except Exception as exc:  # noqa: BLE001 — an unauthenticated browser landing
+        # spot must answer, never 500 with a default error page. The catch was
+        # always blind; ruff only stops seeing that as handled because the log
+        # call moved into error_reference (which logs with exc_info, i.e. the
+        # same traceback logger.exception wrote here before).
+        #
+        # Same rule for the unexpected half. Not even the exception's class name:
+        # it names the library that failed, which is a free version probe.
+        error_id = error_reference(logger, "install callback failed unexpectedly", exc)
         _audit(audit, store, ok=False)
         return _page(
             "Install not completed",
-            f"Something went wrong completing the install ({type(exc).__name__}). "
-            "Nothing was stored. Try again from Settings > Git connections.",
+            "Something went wrong completing the install and nothing was stored. "
+            "Try again from Settings > Git connections, and quote reference "
+            f"{error_id} if you need to ask an administrator what happened.",
             status=int(HTTPStatus.BAD_REQUEST),
         )
 

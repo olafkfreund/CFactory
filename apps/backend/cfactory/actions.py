@@ -13,6 +13,7 @@ so they pass the factories' ``TokenAuthMiddleware``.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -20,8 +21,11 @@ import httpx
 from pydantic import BaseModel, field_validator
 
 from .config import Settings, get_settings
+from .error_ref import error_reference
 from .models import Service, WorkItem
 from .store import WorkItemStore, _is_terminal
+
+logger = logging.getLogger(__name__)
 
 # Only safe HTTP verbs for a confirmed write to an internal service.
 _ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
@@ -162,7 +166,7 @@ def _delete_target(wi: WorkItem) -> tuple[str, str] | None:
     return None
 
 
-def propose_approve_plan(store: WorkItemStore, correlation_key: str, note: str | None = None):
+def propose_approve_plan(store: WorkItemStore, correlation_key: str, _note: str | None = None):
     wi = store.get(correlation_key)
     if wi is None or not wi.pfactory.task_id:
         return None
@@ -242,7 +246,7 @@ def propose_reject_review(store: WorkItemStore, correlation_key: str, note: str 
     )
 
 
-def propose_recover(store: WorkItemStore, correlation_key: str, note: str | None = None):
+def propose_recover(store: WorkItemStore, correlation_key: str, _note: str | None = None):
     wi = store.get(correlation_key)
     if wi is None:
         return None
@@ -272,7 +276,7 @@ def propose_recover(store: WorkItemStore, correlation_key: str, note: str | None
     )
 
 
-def propose_delete_task(store: WorkItemStore, correlation_key: str, note: str | None = None):
+def propose_delete_task(store: WorkItemStore, correlation_key: str, _note: str | None = None):
     wi = store.get(correlation_key)
     if wi is None:
         return None
@@ -427,7 +431,14 @@ def execute_action(
                 if not res["ok"]:
                     break  # stop the chain on first failure (don't merge a PR that didn't open)
     except httpx.HTTPError as exc:
-        return {"status_code": 0, "ok": False, "error": str(exc), "steps": results}
+        # httpx errors name the endpoint they could not reach.
+        ref = error_reference(logger, "action chain failed", exc)
+        return {
+            "status_code": 0,
+            "ok": False,
+            "error": f"the request failed (reference {ref})",
+            "steps": results,
+        }
 
     last = results[-1]
     out: dict[str, Any] = {

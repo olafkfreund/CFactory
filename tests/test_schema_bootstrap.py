@@ -260,9 +260,9 @@ def test_the_migrations_are_baked_into_the_image():
     quietly remove the thing that makes migrations reach production."""
     from pathlib import Path
 
-    import cfactory
+    from cfactory import __file__ as _cfactory_file
 
-    backend = Path(cfactory.__file__).resolve().parent.parent
+    backend = Path(_cfactory_file).resolve().parent.parent
     repo = backend.parent.parent
     assert (backend / "alembic.ini").is_file()
     assert list((backend / "migrations" / "versions").glob("*.py"))

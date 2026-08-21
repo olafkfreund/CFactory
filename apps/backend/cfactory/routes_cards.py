@@ -35,13 +35,13 @@ from .card_ops import AuditContext, CardNotFoundError, StageRefusedError, Unknow
 from .cards import (
     Card,
     CardCreate,
+    CardStatus as CardStatusT,
     CardStore,
     CardTier,
     CardUpdate,
     DuplicateCardKeyError,
     DuplicateIssueRefError,
 )
-from .cards import CardStatus as CardStatusT
 from .enterprise import identity_dep
 
 router = APIRouter(tags=["cards"])

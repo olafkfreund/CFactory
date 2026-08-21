@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -70,8 +71,7 @@ from .cards import (
 )
 from .config import get_settings
 from .copilot.anomalies import detect_anomalies
-from .copilot.tools import rollups as compute_rollups
-from .copilot.tools import summarize_timeline
+from .copilot.tools import rollups as compute_rollups, summarize_timeline
 from .credentials import CredentialError
 from .enterprise import identity_dep
 from .git_config import SUPPORTED_PROVIDERS, GitConfigError, GitConfigUpdate
@@ -1467,7 +1467,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
 
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:  # json.JSONDecodeError and friends
         return JSONResponse(status_code=400, content=_error(-32700, "Parse error", None))
 
     rpc_id = body.get("id")
@@ -1496,7 +1496,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         try:
             payload = _dispatch_tool(tool_name, arguments, _tool_context(request))
         except Exception:
-            logger.exception("[cfactory-mcp] tool call failed tool=%s", tool_name)
+            logger.exception("[cfactory-mcp] tool call failed tool=%s", sanitize_log(tool_name))
             return JSONResponse(_error(-32603, "Internal error", rpc_id))
         return JSONResponse(
             _result(

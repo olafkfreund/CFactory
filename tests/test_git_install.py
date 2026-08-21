@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -291,7 +293,8 @@ def _install_gitlab(cards: CardStore, ctx: AuditContext, gl: FakeGitLab) -> int:
 
 
 def _database_bytes(db: str) -> bytes:
-    return open(db.replace("sqlite:///", ""), "rb").read()  # noqa: PTH123
+    with open(db.replace("sqlite:///", ""), "rb") as f:  # noqa: PTH123
+        return f.read()
 
 
 # ── the state check (MUTATION GUARD (a)) ─────────────────────────────────────
@@ -833,12 +836,58 @@ def test_the_callback_is_reachable_without_any_credential(client, cards, ctx, gh
     assert cards.install_row(connection_id) is not None
 
 
-def test_the_callback_returns_400_and_no_detail_for_a_bad_state(client, cards):
+#: What a client-safe failure looks like: a correlation id, nothing else.
+_REFERENCE_RE = re.compile(r"reference ([0-9a-f]{12})")
+
+
+def test_the_callback_returns_400_and_no_detail_for_a_bad_state(client, cards, caplog):
     _connection(cards)
-    response = client.get(CALLBACK_PATH, params={"state": "nope", "installation_id": "1"})
+    with caplog.at_level(logging.WARNING, logger="cfactory.routes_install"):
+        response = client.get(CALLBACK_PATH, params={"state": "nope", "installation_id": "1"})
 
     assert response.status_code == _HTTP_BAD_REQUEST
     assert cards.install_row(cards.connections()[0].id) is None
+
+    # CWE-209: this endpoint is UNAUTHENTICATED, so the page it renders may not
+    # carry the InstallError's own text. Those messages name deployment
+    # internals - the private-key path on disk, which env vars are unset, the
+    # exception type a PEM parse produced. The page carries a correlation id and
+    # the detail is in the log under it.
+    body = response.text
+    match = _REFERENCE_RE.search(body)
+    assert match, body
+    for leak in ("InstallError", "Traceback", "cfactory/", "CFACTORY_", ".pem"):
+        assert leak not in body
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert match.group(1) in logged
+
+
+def test_an_unexpected_callback_failure_leaks_nothing_either(client, cards, ctx, monkeypatch, caplog):
+    """The non-InstallError half. Not even the exception's class name: it names
+    the library that failed, which is a free version probe for a caller who
+    needed no credential to get here."""
+    connection_id = _connection(cards)
+    state = _start(cards, ctx, connection_id)
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("psycopg.OperationalError connecting to db.internal.corp:5432")
+
+    monkeypatch.setattr(git_config_ops, "complete_git_install", _explode)
+
+    with caplog.at_level(logging.WARNING, logger="cfactory.routes_install"):
+        response = client.get(
+            CALLBACK_PATH, params={"state": state, "installation_id": _INSTALLATION}
+        )
+
+    assert response.status_code == _HTTP_BAD_REQUEST
+    body = response.text
+    match = _REFERENCE_RE.search(body)
+    assert match, body
+    for leak in ("RuntimeError", "psycopg", "db.internal.corp", "5432", "Traceback"):
+        assert leak not in body
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert match.group(1) in logged
+    assert "db.internal.corp" in logged
 
 
 def test_the_callback_never_renders_anything_secret(client, cards, ctx, gh, app_pem):

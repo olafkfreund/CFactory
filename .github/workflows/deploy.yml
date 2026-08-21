@@ -60,15 +60,16 @@ jobs:
   build-push-bump:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # secrets context is not allowed in step-level `if:`; expose it here so
       # steps can gate on env.GITOPS_PAT instead.
       GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
       # The cfactory / cfactory-frontend GHCR packages are user-owned and NOT
       # linked to this repo, so the repo-scoped GITHUB_TOKEN can't push to them
       # (HEAD blob → 403 Forbidden) despite `packages: write` above. Prefer a
@@ -79,7 +80,7 @@ jobs:
       #     this repo with Write (then GITHUB_TOKEN works, no secret needed), OR
       #   - gh secret set GHCR_PAT --repo olafkfreund/CFactory   (classic PAT,
       #     scope write:packages)
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -87,7 +88,7 @@ jobs:
 
       - name: Build + push backend
         id: build_backend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
           file: Dockerfile
@@ -103,7 +104,7 @@ jobs:
 
       - name: Build + push frontend (cockpit)
         id: build_frontend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: apps/frontend-web
           # The app's tsconfig extends the vendored fleet baseline, which lives
@@ -138,10 +139,40 @@ jobs:
       # front, and SBOM attestation behind.
       # ----------------------------------------------------------------------
 
+      # Factory#808 - this step used to `curl` aquasecurity/trivy's
+      # contrib/install.sh by commit SHA and `sh` it. The SHA was an `env:` in
+      # THIS workflow file, and on a `pull_request` trigger the workflow file is
+      # the PR's own copy; all forks of a repo share one object store, so a fork
+      # PR could repoint that URL at a commit existing only in its own fork and
+      # the runner would execute it. The SHA-pinned first-party action removes
+      # the class rather than guarding it: the install script it runs comes from
+      # a ref pinned inside the action, which a PR here cannot edit.
+      #
+      # It also replaces the hand-rolled retry loop (a download that failed after
+      # the version resolved, observed once in 37 runs 2026-08-10): the action
+      # fetches the script with actions/checkout, which retries on its own.
+      #
+      # Do NOT add `continue-on-error` - a scan that passes without scanning is
+      # a control that would look identical having done nothing (rule 4.10). The
+      # `--version` step below asserts the binary is runnable, not assumed.
       - name: Install Trivy (P0 CVE gate)
-        uses: aquasecurity/setup-trivy@v0.2.6
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567  # v0.3.1
         with:
-          version: latest
+          # Pinned, not `latest` (Factory#664): `latest` means the scanner
+          # changes without a commit, so a scan verdict is not attributable to
+          # anything in git and a Trivy release can turn the fleet red at once
+          # with no change from us. Bump deliberately, like image digests and
+          # CLI pins.
+          version: v0.73.0
+          # `path` is deliberately unset. The action installs into
+          # `<path>/trivy-bin`, NOT `<path>`, so passing the old
+          # `${HOME}/.local/bin` would not reproduce the old layout - and it is
+          # not needed anyway: the action appends its own bin dir to
+          # $GITHUB_PATH, which is why the manual `echo >> "$GITHUB_PATH"` is
+          # gone from this step.
+
+      - name: Trivy binary is runnable
+        run: trivy --version
 
       # Same policy as the fleet's P0.8 test: fail on FIXABLE HIGH/CRITICAL
       # only (`--ignore-unfixed`). Trivy auto-reads .trivyignore from the repo
@@ -192,7 +223,7 @@ jobs:
       # signature per image covers both :sha-<short> and :latest.
       # ----------------------------------------------------------------------
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
 
       - name: Sign both images (cosign keyless via Sigstore + GitHub OIDC)
         run: |
@@ -213,8 +244,15 @@ jobs:
               "$REF"
           done
 
+      # The self-test above asks cosign about cosign. This asks the question
+      # the CLUSTER asks. See the script header and Factory#804.
+      - name: Assert the signatures are where Kyverno looks (Factory#804)
+        run: |
+          ./.github/scripts/assert-signature-location.sh "${BACKEND_IMAGE}" "${{ steps.build_backend.outputs.digest }}"
+          ./.github/scripts/assert-signature-location.sh "${FRONTEND_IMAGE}" "${{ steps.build_frontend.outputs.digest }}"
+
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@v0.17.8
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
 
       - name: Generate + attest dual SBOMs (SPDX + CycloneDX) for both images
         run: |
@@ -250,7 +288,7 @@ jobs:
           done
 
       - name: Upload SBOMs as workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cfactory-sboms-${{ steps.tags.outputs.sha }}
           path: sbom-*.json
@@ -353,13 +391,14 @@ jobs:
   seam-check:
     needs: build-push-bump
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Factory seam harness
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: main
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Require the fleet token (fail closed, rule 4.7)

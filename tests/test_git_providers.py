@@ -24,6 +24,8 @@ touches the network.
 from __future__ import annotations
 
 import json
+import logging
+import re
 
 import httpx
 import pytest
@@ -130,6 +132,11 @@ def settings():
 def _synced(monkeypatch, settings):
     monkeypatch.setattr(github_sync, "get_settings", lambda: settings)
     return settings
+
+
+#: The client-safe shape a failure reason must have: a correlation id and
+#: nothing else identifying. ``error_reference`` mints the 12 hex chars.
+_REFERENCE_RE = re.compile(r"reference ([0-9a-f]{12})")
 
 
 def _make(cards, ctx, **fields):
@@ -353,7 +360,11 @@ def test_a_gitlab_outage_is_surfaced_not_swallowed(cards, ctx, monkeypatch):
     card = _make(cards, ctx, status="ready")
 
     assert card.issue_ref is None, "a failed sync must not claim an issue exists"
-    assert "500" in (card.github_sync_error or "")
+    # Surfaced, but as a correlation id — not as the provider's own error text.
+    # That text reaches an API response and names internal hosts, paths and
+    # library versions (CWE-209 / py/stack-trace-exposure). The detail is in the
+    # log under this same id; see test_the_sync_error_carries_no_provider_detail.
+    assert _REFERENCE_RE.search(card.github_sync_error or "")
 
 
 def test_a_malformed_provider_payload_never_raises(cards, ctx, monkeypatch):
@@ -371,4 +382,40 @@ def test_a_malformed_provider_payload_never_raises(cards, ctx, monkeypatch):
     card = _make(cards, ctx, status="ready")
 
     assert card.issue_ref is None
-    assert "KeyError" in (card.github_sync_error or "")
+    assert _REFERENCE_RE.search(card.github_sync_error or "")
+
+
+def test_the_sync_error_carries_no_provider_detail(cards, ctx, monkeypatch, caplog):
+    """CWE-209: the failure is reported, its internals are not.
+
+    The reason lands on the card and in the ``:sync`` RESPONSE BODY, so it may
+    not carry what the provider or the stdlib wrote - a DNS failure names an
+    internal host, an OSError names a path on disk. It carries a correlation id,
+    and the full detail is in the server log under that id.
+    """
+    secret_host = "gitlab.internal.corp.example"
+
+    def _explode(_request):
+        raise httpx.ConnectError(f"[Errno -2] Name or service not known: {secret_host}")
+
+    monkeypatch.setattr(
+        GitLabProvider,
+        "_client",
+        lambda _self: httpx.AsyncClient(
+            base_url="https://gitlab.test", transport=httpx.MockTransport(_explode)
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="cfactory.github_sync"):
+        card = _make(cards, ctx, status="ready")
+
+    reason = card.github_sync_error or ""
+    match = _REFERENCE_RE.search(reason)
+    assert match, reason
+    # The response-visible reason names nothing internal.
+    for leak in (secret_host, "ConnectError", "Errno", "Traceback", "/"):
+        assert leak not in reason
+    # ...and the detail is recoverable from the log by the id it handed out.
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert match.group(1) in logged
+    assert secret_host in logged

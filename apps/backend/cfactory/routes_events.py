@@ -6,6 +6,7 @@ WebSocket manager.
 
 from __future__ import annotations
 
+import logging
 from functools import partial
 from typing import Annotated
 
@@ -19,9 +20,12 @@ from .api_deps import action_transport_dep, adapters_dep, audit_dep, cards_store
 from .audit import AuditStore
 from .card_intake import apply_status
 from .cards import CardStore
+from .error_ref import error_reference
 from .models import CompletionEvent
 from .store import WorkItemStore
 from .ws import get_manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["events"])
 
@@ -88,7 +92,14 @@ async def refresh(
                 {"hydrated": hydrated, "cleared": cleared} if cleared else hydrated
             )
         except AdapterError as exc:
-            result[adapter.service.value] = {"error": str(exc)}
+            # AdapterError looks repo-owned and safe, but base.py builds it as
+            # f"{service}: GET {path} failed: {exc}" around the inner httpx
+            # error -- so it launders the upstream host and URL through a
+            # friendly-looking type.
+            ref = error_reference(
+                logger, f"adapter hydrate failed for {adapter.service.value}", exc
+            )
+            result[adapter.service.value] = {"error": f"the provider call failed (reference {ref})"}
         finally:
             adapter.close()
     snapshot = await run_in_threadpool(store.list)

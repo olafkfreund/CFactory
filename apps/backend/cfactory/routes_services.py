@@ -6,6 +6,7 @@ import logging
 from typing import Annotated
 
 import httpx
+from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
@@ -20,6 +21,7 @@ from .api_deps import (
 )
 from .auth import require_scope
 from .config import get_settings, set_service_url
+from .error_ref import InputRejectedError, client_error
 
 logger = logging.getLogger(__name__)
 
@@ -120,15 +122,20 @@ async def update_service(
     settings = get_settings()
     try:
         await run_in_threadpool(set_service_url, name, update.url)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except InputRejectedError as exc:
+        # set_service_url raises InputRejectedError directly (#718) -- marked
+        # at the source, since only the raise site knows its message is
+        # developer-written about the caller's own input.
+        raise HTTPException(
+            status_code=400, detail=client_error(logger, "invalid service update", exc)
+        ) from exc
     probe = ServiceProbe(online=False, status="error", detail=None)
     for adapter in build_adapters():  # fresh — reads the just-updated setting
         if adapter.service.value == name:
             try:
                 probe = await run_in_threadpool(adapter.probe)
             except Exception:  # never fatal — logged and reported as an offline probe
-                logger.exception("[cfactory] probe failed service=%s", name)
+                logger.exception("[cfactory] probe failed service=%s", sanitize_log(name))
                 probe = ServiceProbe(online=False, status="error", detail="probe failed")
         adapter.close()
     return {

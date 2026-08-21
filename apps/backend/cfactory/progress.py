@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 from datetime import UTC, datetime
+from functools import cache
 from typing import Any
 
+from factory_common.logsafe import sanitize_log
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -27,6 +30,8 @@ from .models import Service
 from .status_taxonomy import is_stuck
 from .store import WorkItemStore, get_store
 from .ws import ConnectionManager
+
+logger = logging.getLogger(__name__)
 
 _SPLIT_RE = re.compile(r"[\s_\-]+")
 
@@ -99,19 +104,13 @@ class LiveProgressHub:
         return sorted(self._items.values(), key=lambda p: p.updated_at, reverse=True)
 
 
-_hub: LiveProgressHub | None = None
-
-
+@cache
 def get_progress_hub() -> LiveProgressHub:
-    global _hub
-    if _hub is None:
-        _hub = LiveProgressHub()
-    return _hub
+    return LiveProgressHub()
 
 
 def reset_progress_hub() -> None:
-    global _hub
-    _hub = None
+    get_progress_hub.cache_clear()
 
 
 def poll_progress_once(
@@ -154,8 +153,14 @@ def poll_progress_once(
                 store.prune_duplicate_stages(
                     adapter.service, {i.task_id: i.correlation_key for i in live}
                 )
-        except AdapterError:
-            pass
+        except AdapterError as exc:
+            # Best-effort per docstring: a down service is skipped and never
+            # reconciled this cycle rather than taking the whole poll down.
+            logger.warning(
+                "[cfactory] progress poll skipped service=%s error=%s",
+                adapter.service,
+                sanitize_log(str(exc)),
+            )
         finally:
             adapter.close()
     if store is not None:
@@ -184,8 +189,8 @@ async def _poll_loop(
             await manager.broadcast(
                 {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
             )
-        except Exception:  # noqa: BLE001 — best-effort, never crash the cockpit
-            pass
+        except Exception as exc:  # noqa: BLE001 — best-effort, never crash the cockpit
+            logger.debug("live-progress broadcast failed: %s", type(exc).__name__)
         await asyncio.sleep(interval)
 
 

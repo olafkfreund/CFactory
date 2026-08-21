@@ -80,13 +80,14 @@ jobs:
   ratchet:
     name: ruff + mypy ratchet (diff-scoped, blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Need history back to the PR base for the diff-scoped ratchet.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
@@ -115,12 +116,37 @@ jobs:
         # NET-NEW strict-mode type errors to any file it changes.
         run: python scripts/ratchet_lint.py --tool mypy --base "${{ steps.base.outputs.ref }}" --package "${PACKAGE_DIR}" --package scripts
 
+  lint-check:
+    # #356 CLOSED THE TOLERANCE. Until this job existed the ONLY ruff gate was
+    # the diff-scoped ratchet above, which blocks net-new violations in a
+    # changed file and leaves the backlog alone -- correct while there WAS a
+    # backlog (66 violations over 26 files at #345, per ratchet_lint.py's own
+    # docstring a whole-repo gate "would be instantly red"). That backlog is now
+    # zero, so the reason to tolerate it is gone and this runs the plain,
+    # whole-tree check. The ratchet stays for mypy, which still has debt.
+    #
+    # Same two trees, same config, same pinned version as every other ruff gate
+    # here and as the `ruff-check` hook in .pre-commit-config.yaml.
+    name: ruff check (apps/backend/cfactory + scripts, blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+      - name: Lint
+        run: ruff check --config ruff.toml "${PACKAGE_DIR}" scripts
+
   format-check:
     name: ruff format --check (apps/backend/cfactory + scripts, blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
       - name: Install ruff (pinned)
@@ -131,6 +157,7 @@ jobs:
   drift:
     name: hub drift gates (shared-baseline configs + factory-contracts)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # NAMED, not inlined into the `ref:` below (Factory#547). The standards
       # half of this job reads its pin from standards/.hub-sha, which any tool
@@ -155,7 +182,7 @@ jobs:
     # To update either: re-vendor from the hub and bump the corresponding SHA
     # below (contracts also bumps _contracts/__init__.py + the drift test).
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: cfactory
       # Neither hub checkout carries continue-on-error: an unreachable hub is a
@@ -170,25 +197,62 @@ jobs:
         id: pin
         run: |
           set -euo pipefail
-          sha="$(cat cfactory/standards/.hub-sha)"
-          # An empty or missing pin must fail here rather than resolve to the
-          # default branch, which would compare against a MOVING target and call
-          # it a match (standards rule 4.7).
-          [ -n "$sha" ] || { echo "standards/.hub-sha is empty" >&2; exit 1; }
+          sha="$(tr -d '[:space:]' < cfactory/standards/.hub-sha)"
+          # Shape-checked HERE, not only inside assert-hub-pin-on-main.sh below.
+          # This file comes from the PR's own tree, so on a fork PR its contents
+          # are attacker-controlled, and `cat` + a bare `-n` test accepted a
+          # MULTI-LINE value: a .hub-sha holding "<40-hex>\nfoo=bar" wrote two
+          # lines into $GITHUB_OUTPUT and set an arbitrary second output on this
+          # step. Nothing reads a second output today, which is the only reason
+          # that was not exploitable -- an unwanted dependency on a fact about
+          # the rest of the file. Rejecting anything that is not a bare
+          # 40-character commit id closes it at the source, and matches the
+          # sibling gates in PFactory / TFactory / AIFactory (Factory#711).
+          # An empty or missing pin fails here too, rather than resolving to the
+          # default branch and comparing against a MOVING target (rule 4.7).
+          if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "standards/.hub-sha is not a 40-character commit SHA: '${sha}'" >&2
+            exit 1
+          fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
+      - name: Assert both pins are really on hub main
+        # standards/.hub-sha comes from the PR's own tree, and CONTRACTS_PIN_SHA
+        # lives in THIS workflow file, which on a `pull_request` trigger is
+        # equally the PR's own copy. A commit that exists only in a fork of
+        # Factory is a valid 40-hex SHA and is still fetchable by SHA from
+        # Factory itself, so without this a fork PR could pin a hub tree crafted
+        # to match its own drifted vendored copy and both diffs below would go
+        # green (CFactory#373).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cfactory/.github/scripts/assert-hub-pin-on-main.sh "${SHA}" "standards/.hub-sha"
+          cfactory/.github/scripts/assert-hub-pin-on-main.sh "${CONTRACTS_PIN_SHA}" "code-quality CONTRACTS_PIN_SHA"
+
+      # Both hub trees are only ever diffed (and standards/ruff.toml is read as
+      # a ruff --config), never executed, and nothing runs git against them
+      # afterwards. persist-credentials: false so the job token is not left
+      # behind in factory-hub-*/.git/config, sitting next to a checked-out ref
+      # the PR chose -- the same reason the sibling gates in PFactory,
+      # TFactory and AIFactory set it. These two checkouts were the only ones
+      # in the fleet still persisting it (CodeQL actions/untrusted-checkout).
       - name: Check out hub standards at the pinned SHA
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: ${{ steps.pin.outputs.sha }}
           path: factory-hub-standards
+          persist-credentials: false
       - name: Check out hub at the pinned contracts SHA
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: olafkfreund/Factory
           ref: ${{ env.CONTRACTS_PIN_SHA }}
           path: factory-hub-contracts
+          persist-credentials: false
       - name: Diff vendored configs against the pinned hub baseline
         run: |
           set -euo pipefail
@@ -219,6 +283,56 @@ jobs:
             fi
           done
           echo "No drift: vendored standards match the pinned hub baseline."
+
+      # Factory#730: the step above compares FILE BYTES. standards/ruff.toml
+      # can be byte-identical to the hub while the EFFECTIVE config a plain
+      # `ruff check` resolves is not -- a per-file-ignores table that a local
+      # override replaces rather than merges, or a target-version that never
+      # reaches the root config, reopen exactly what the vendored file closes,
+      # and no byte diff sees either. This asserts on resolved behaviour.
+      #
+      # The probe lives under tests/ so it must earn the shared S101/PLR2004
+      # test carve-out (standards/ruff.toml's per-file-ignores), and it sorts
+      # stdlib `tomllib` ahead of a third-party import -- clean only under
+      # target-version >= py311 (tomllib is stdlib since 3.11; an older or
+      # unset target classifies it third-party and demands the opposite
+      # order). The hub baseline is clean on this probe by construction, so
+      # this repo's ORDINARY `ruff check` (no --config override) must be too.
+      - name: Install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+
+      - name: Effective config matches the hub baseline (not just file bytes)
+        working-directory: cfactory
+        run: |
+          set -euo pipefail
+          probe_dir="tests/__ruff_drift_probe__"
+          probe="${probe_dir}/test_probe.py"
+          mkdir -p "${probe_dir}"
+          cat > "${probe}" <<'PY'
+          import tomllib
+
+          import requests
+
+          assert requests and tomllib
+          PY
+          trap 'rm -rf "${probe_dir}"' EXIT
+
+          repo_verdict="$(ruff check --select S,I,UP --output-format concise "${probe}" 2>&1 || true)"
+          hub_verdict="$(ruff check --select S,I,UP --output-format concise --config ../factory-hub-standards/standards/ruff.toml "${probe}" 2>&1 || true)"
+
+          if [ "${repo_verdict}" != "${hub_verdict}" ]; then
+            echo "::error::Effective ruff config has drifted from the hub baseline (Factory#730)."
+            echo "--- this repo, ordinary \`ruff check\` (no --config override) ---"
+            echo "${repo_verdict}"
+            echo "--- hub baseline (standards/ruff.toml) ---"
+            echo "${hub_verdict}"
+            echo "File bytes can match while the EFFECTIVE config (per-file-ignores reach, target-version)"
+            echo "does not. Fix the root ruff.toml (extend / target-version / per-file-ignores); this is"
+            echo "not a standards/ruff.toml byte diff."
+            exit 1
+          fi
+          echo "Effective config matches the hub baseline for the S101/target-version probe."
+
       - name: Diff vendored module against the pinned hub source
         run: |
           set -euo pipefail
@@ -234,12 +348,13 @@ jobs:
   frontend-quality:
     name: frontend lint + format + unit tests (blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: apps/frontend-web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm

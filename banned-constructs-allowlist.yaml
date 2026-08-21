@@ -1,0 +1,8 @@
+# Allowlist for scripts/check_banned_constructs.py (Factory hub, vendored gate;
+# see olafkfreund/Factory#718). Each entry needs a `reason` and an `issue` --
+# an entry with no issue is itself a gate failure (an unreviewed grandfather
+# is not a grandfather).
+#
+# Keyed (path, rule), so a NEW occurrence of the same rule added later to an
+# allowlisted file still fails the gate.
+

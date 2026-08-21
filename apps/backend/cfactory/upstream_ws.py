@@ -153,7 +153,7 @@ def _auth_headers(settings: Settings) -> dict[str, str]:
     return {}
 
 
-async def subscribe(
+async def subscribe(  # noqa: PLR0913 — flat params for the one subscriber entry point
     service: Service,
     ws_url: str,
     store: WorkItemStore,

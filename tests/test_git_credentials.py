@@ -63,7 +63,6 @@ from cfactory.cards import CardCreate, CardStore
 from cfactory.config import Settings
 from cfactory.credentials import (
     CredentialError,
-    GitCredentialRow,
     KeyRing,
     load_keyring,
     rewrap,
@@ -80,7 +79,6 @@ from cfactory.git_config import (
 from cfactory.git_providers import HttpGitHubProvider, build_provider
 from fastapi.testclient import TestClient
 from runners.github.providers.gitlab_provider import GitLabProvider
-from sqlalchemy import select
 
 # Fake key material, generated once and pinned here so a failure is reproducible.
 # Not a secret: it protects nothing but this test module's temp databases.
@@ -196,7 +194,7 @@ def client(cards, audit, host, monkeypatch, _settings):
     monkeypatch.setattr(mcp, "get_audit_store", lambda: audit)
     monkeypatch.setattr(mcp, "action_transport_dep", host.transport)
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.set_keys({_WRITER: {"read", "write"}, _READER: {"read"}})
 
     app = create_app()
@@ -769,7 +767,8 @@ def test_a_read_scoped_key_cannot_store_or_clear_a_credential(client):
     reader = {"Authorization": f"Bearer {_READER}"}
 
     assert client.put(_url(), json={"credential": _SECRET}, headers=reader).status_code == 403
-    assert client.delete(_url(), headers=reader).status_code == 403
+    deleted = client.delete(_url(), headers=reader)
+    assert deleted.status_code == 403
     assert (
         _call_tool(client, "cfactory_set_git_credential", {"credential": _SECRET}, key=_READER)
     ).status_code == 403

@@ -56,7 +56,7 @@ def mcp_client(seeded_store, monkeypatch):
     # from the patched environment.
     monkeypatch.setenv("CFACTORY_MCP_SECRET", "test-secret")
     monkeypatch.delenv("CFACTORY_API_KEYS", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.reset_keystore()  # /mcp now consults the scoped keystore too
     yield TestClient(create_app())
     auth.reset_keystore()
@@ -156,8 +156,6 @@ def test_initialize_and_tools_list(mcp_client):
 
 
 def test_list_workitems_summarizes_each_factory(mcp_client):
-    import json
-
     r = _call(mcp_client, "cfactory_list_workitems")
     payload = json.loads(r.json()["result"]["content"][0]["text"])
     assert payload["count"] == 1
@@ -169,8 +167,6 @@ def test_list_workitems_summarizes_each_factory(mcp_client):
 
 
 def test_get_workitem_full_state(mcp_client):
-    import json
-
     r = _call(mcp_client, "cfactory_get_workitem", {"correlation_key": "142"})
     payload = json.loads(r.json()["result"]["content"][0]["text"])
     assert payload["correlation_key"] == "142"
@@ -178,8 +174,6 @@ def test_get_workitem_full_state(mcp_client):
 
 
 def test_get_workitem_missing_key(mcp_client):
-    import json
-
     r = _call(mcp_client, "cfactory_get_workitem", {"correlation_key": "999"})
     payload = json.loads(r.json()["result"]["content"][0]["text"])
     assert "error" in payload
@@ -203,7 +197,7 @@ def scoped_client(seeded_store, monkeypatch):
     monkeypatch.setattr(mcp, "get_store", lambda: seeded_store)
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
     monkeypatch.setenv("CFACTORY_API_KEYS", "reader-key:read;writer-key:read,write")
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.reset_keystore()
     yield TestClient(create_app())
     auth.reset_keystore()
@@ -270,7 +264,7 @@ def test_unconfigured_denies_instead_of_opening(seeded_store, monkeypatch):
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
     monkeypatch.delenv("CFACTORY_API_KEYS", raising=False)
     monkeypatch.delenv("CFACTORY_MCP_DEV_OPEN", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.reset_keystore()
     try:
         client = TestClient(create_app())
@@ -287,7 +281,7 @@ def test_dev_open_flag_restores_open_mode(seeded_store, monkeypatch):
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
     monkeypatch.delenv("CFACTORY_API_KEYS", raising=False)
     monkeypatch.setenv("CFACTORY_MCP_DEV_OPEN", "true")
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.reset_keystore()
     try:
         client = TestClient(create_app())

@@ -97,7 +97,8 @@ def test_crud_round_trip(client):
     assert patched.json()["title"] == "Ship it"
     assert patched.json()["correlation_key"] == "302"  # now joins work_items
 
-    assert client.delete("/api/cards/FCT-42").json()["deleted"] is True
+    deleted = client.delete("/api/cards/FCT-42")
+    assert deleted.json()["deleted"] is True
     assert client.get("/api/cards/FCT-42").status_code == 404
     assert client.get("/api/cards").json()["count"] == 0
 
@@ -105,7 +106,8 @@ def test_crud_round_trip(client):
 def test_unknown_card_is_404(client):
     assert client.get("/api/cards/nope").status_code == 404
     assert client.patch("/api/cards/nope", json={"status": "done"}).status_code == 404
-    assert client.delete("/api/cards/nope").status_code == 404
+    deleted = client.delete("/api/cards/nope")
+    assert deleted.status_code == 404
 
 
 def test_duplicate_card_key_is_409(client):
@@ -300,7 +302,8 @@ def test_tenant_cannot_read_or_modify_another_tenants_card(monkeypatch, cards, a
     # Modify: neither PATCH nor DELETE can reach across the partition.
     patched = client.patch("/api/cards/FCT-1", json={"title": "pwned"}, headers=globex)
     assert patched.status_code == 404
-    assert client.delete("/api/cards/FCT-1", headers=globex).status_code == 404
+    refused = client.delete("/api/cards/FCT-1", headers=globex)
+    assert refused.status_code == 404
 
     # The owner still sees it, unmodified.
     owned = client.get("/api/cards/FCT-1", headers=acme)
@@ -354,7 +357,8 @@ def test_write_key_may_mutate(client):
     created = client.post("/api/cards", json={"card_key": "FCT-1", "title": "t"}, headers=rw)
     assert created.status_code == 201
     assert client.patch("/api/cards/FCT-1", json={"status": "done"}, headers=rw).status_code == 200
-    assert client.delete("/api/cards/FCT-1", headers=rw).status_code == 200
+    deleted = client.delete("/api/cards/FCT-1", headers=rw)
+    assert deleted.status_code == 200
 
 
 def test_no_key_at_all_is_401(client):

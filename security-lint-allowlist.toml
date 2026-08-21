@@ -1,0 +1,28 @@
+# Grandfathered security-sink findings for THIS repo.
+#
+# Read by `security-lint/security_lint.py`, which is vendored byte-exact from
+# the Factory hub. See that file's header for the full design.
+#
+# THIS FILE IS NOT AN IGNORE LIST. Four rules make that stick, all enforced by
+# the gate itself, not by convention:
+#
+#   * `issue` is REQUIRED and must look like `Repo#123`. An entry without one
+#     fails the gate. A grandfathered security finding with nobody's name on it
+#     is a permanent exception wearing a temporary hat.
+#   * An entry that matches NOTHING fails the gate. Fix the finding and you must
+#     delete the entry — so this list can only ratchet down.
+#   * `count` (default 1) is a ceiling, not a per-file waiver. A SECOND
+#     `pickle.load` in an already-listed file is a new finding and turns the
+#     gate red.
+#   * `expires` is optional and enforced when present.
+#
+# ONE ENTRY. This repo's Python surface is small (173 files scanned) and it is
+# the cleanest in the fleet on this rule set. That is worth recording: the list
+# starting at one is what makes a second entry conspicuous.
+
+[[allow]]
+path = "apps/backend/runners/github/providers/azure_devops_provider.py"
+rule = "S608"
+count = 1
+reason = "The injection is FIXED (Factory#721): the project name goes through the canonical `_wiql_literal`, which doubles every single quote, so a tenant-supplied name can only ever be compared as data. The finding remains because WIQL has no parameter binding at all -- the endpoint takes one opaque query string -- so ruff still sees interpolation and cannot see the escaping. That leaves it in the Factory#723 class: unavoidable interpolation, checked at the interpolation point."
+issue = "Factory#723"

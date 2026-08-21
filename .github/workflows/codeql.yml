@@ -18,6 +18,7 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       security-events: write
       packages: read
@@ -27,20 +28,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [python, javascript-typescript]
+        # `actions` added 2026-08-13. AIFactory, TFactory and factory-gitops
+        # scanned it; this repo did not, so its workflows were unexamined and
+        # reported ZERO Actions alerts by not looking. Found because a new
+        # factory-common-drift workflow raised untrusted-checkout on TFactory
+        # and stayed silent here on a byte-identical file.
+        # This is the Factory#711 defect one level down: there it was a narrow
+        # query SUITE, here it is an omitted LANGUAGE. Expect the count to rise
+        # on the first scan; that is the change working.
+        language: [python, javascript-typescript, actions]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: ${{ matrix.language }}
+          # security-and-quality, not CodeQL's default suite (Factory#711). The
+          # fleet survey found CFactory reporting 3 open alerts against
+          # AIFactory's ~1470, and the gap was mostly which questions were being
+          # asked: the rules behind most of that volume (py/log-injection,
+          # py/stack-trace-exposure, py/empty-except, js/* quality rules) live
+          # in this suite only. Passed as an input rather than a config file
+          # because this repo has no custom query pack; if one is ever added
+          # this MUST move into the config, since a config-file replaces this
+          # input and the suite would be silently dropped.
+          queries: security-and-quality
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/language:${{ matrix.language }}"

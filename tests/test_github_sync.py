@@ -27,6 +27,8 @@ Contract points covered:
 
 from __future__ import annotations
 
+import re
+
 import httpx
 import pytest
 from cfactory import auth, card_ops, config, github_sync, mcp
@@ -39,6 +41,11 @@ from cfactory.github_sync import IssueRef, sync_card
 from fastapi.testclient import TestClient
 
 from cfactory.api_deps import action_transport_dep  # isort: skip
+
+#: A client-safe failure reason: a correlation id, and nothing that names
+#: an internal host, path or library (CWE-209).
+_REFERENCE_RE = re.compile(r"reference ([0-9a-f]{12})")
+
 
 # Not a credential: a fake token so `sync_enabled` is on inside these tests.
 _TEST_TOKEN = "test-github-token-not-a-credential"  # noqa: S105 — a fake, not a secret
@@ -113,7 +120,7 @@ def client(cards, audit, github, _synced, monkeypatch):
     monkeypatch.setattr(mcp, "get_audit_store", lambda: audit)
     monkeypatch.setattr(mcp, "action_transport_dep", github.transport)
     monkeypatch.delenv("CFACTORY_MCP_SECRET", raising=False)
-    monkeypatch.setattr(config, "_settings", None)
+    config.reset_settings()
     auth.set_keys({_WRITER: {"read", "write"}})
 
     app = create_app()
@@ -282,7 +289,7 @@ def test_github_failure_marks_the_card_and_reports_not_ok(cards, ctx):
     card = _make(cards, ctx, broken, status="ready")
 
     assert card.issue_ref is None, "a failed sync must not claim an issue exists"
-    assert "500" in (card.github_sync_error or "")
+    assert _REFERENCE_RE.search(card.github_sync_error or "")
 
 
 def test_github_outage_does_not_500_the_board(client, cards):
@@ -298,7 +305,10 @@ def test_github_outage_does_not_500_the_board(client, cards):
 
     assert resp.status_code == 200
     assert resp.json()["sync"]["ok"] is False
-    assert "connection refused" in resp.json()["card"]["github_sync_error"]
+    # CWE-209: the RESPONSE BODY carries the id, not what httpx wrote.
+    assert _REFERENCE_RE.search(resp.json()["card"]["github_sync_error"])
+    for leak in ("connection refused", "ConnectError", "Traceback"):
+        assert leak not in resp.text
 
 
 def test_a_failed_sync_is_audited_as_not_ok(cards, ctx, audit):

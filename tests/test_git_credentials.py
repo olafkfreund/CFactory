@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from http import HTTPStatus
 
 import httpx
 import pytest
@@ -69,6 +70,7 @@ from cfactory.credentials import (
     seal,
     unseal,
 )
+from cfactory.enterprise import identity_dep
 from cfactory.git_config import (
     CONFIGURED,
     CREDENTIAL_MISSING,
@@ -640,6 +642,36 @@ def test_a_card_sync_opens_its_issue_with_the_tenants_credential(cards, ctx, set
     assert host.auth_headers() == [f"Bearer {_SECRET}"]
     # And the sync path's read is chained too, on the store's own audit chain.
     assert [e.kind for e in cards.audit_store().list()] == ["read_git_credential"]
+
+
+def test_a_humans_card_write_names_the_human_on_the_credential_it_reads(client, cards, audit):
+    """#334: the OIDC subject must survive the hop from the route to the
+    credential read.
+
+    ``identity_dep`` resolves a verified ID token to ``user:<email>`` and the
+    card mutation entry has always carried it. The credential access the SAME
+    request performs did not: the actor was dropped at ``maybe_sync`` /
+    ``maybe_dispatch`` and the read defaulted to ``SYSTEM_ACTOR``, so the
+    dominant kind in the live trail says ``system`` for a button a person
+    pressed, and no reader can separate that from a background poll.
+
+    Asserted on the ACTOR of ``read_git_credential`` specifically, not on the
+    card entry, because the card entry was already right — a test on it stays
+    green with the bug present.
+    """
+    client.app.dependency_overrides[identity_dep] = lambda: "user:alice@example.com"
+    client.put(_config_url(), json={"provider": "github", "project": _PROJECT})
+    client.put(_url(), json={"credential": _SECRET})
+
+    resp = client.post("/api/cards", json={"title": "planned", "status": "ready", "tier": "low"})
+    assert resp.status_code == HTTPStatus.CREATED, resp.text
+    # The other human-triggered credential read on the board: "import issues".
+    assert client.post("/api/cards/import").status_code == HTTPStatus.OK
+
+    reads = [(e.kind, e.actor) for e in audit.list() if e.kind == "read_git_credential"]
+    assert len(reads) >= 2, "the sync hook and the import must each have read the credential"
+    assert reads == [("read_git_credential", "user:alice@example.com")] * len(reads)
+    assert audit.verify() == [], "the tamper-evident chain must still be intact"
 
 
 # ── status, and the board that keeps serving ─────────────────────────────────

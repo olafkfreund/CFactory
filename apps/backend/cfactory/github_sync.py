@@ -71,7 +71,8 @@ from typing import Any
 import httpx
 from runners.github.providers.protocol import IssueData
 
-from .cards import Card, CardStore, DuplicateIssueRefError
+from .audit import AuditStore
+from .cards import SYSTEM_ACTOR, Card, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
 from .error_ref import error_reference
 from .git_config import PROJECT_PATTERN, GitTarget
@@ -261,12 +262,16 @@ def _mirror(card: Card, ref: IssueRef, issue: IssueData) -> dict[str, Any]:
     return {field: v for field, v in changes.items() if getattr(card, field) != v}
 
 
-def sync_card(
+def sync_card(  # noqa: PLR0913 — keyword-only seams: which settings, which transport, and
+    # WHO the call is for (#334). An options object would hide the actor at the call
+    # sites, which is the one thing this signature exists to make visible.
     store: CardStore,
     card: Card,
     *,
     settings: Settings | None = None,
     transport: httpx.BaseTransport | None = None,
+    actor: str = SYSTEM_ACTOR,
+    audit: AuditStore | None = None,
 ) -> dict[str, Any]:
     """Open-or-adopt the card's issue and mirror it back down. Never raises.
 
@@ -282,7 +287,7 @@ def sync_card(
     # repo therefore syncs back to GitLab even when the tenant's default repository
     # is on GitHub — the provider, the host and the credential all come from that
     # repository's connection.
-    target = store.git_target_for_card(card, settings)
+    target = store.git_target_for_card(card, settings, actor=actor, audit=audit)
     if not sync_enabled(target):
         return {"synced": False, "ok": True, "reason": "github sync not configured"}
 
@@ -338,12 +343,16 @@ def sync_card(
     }
 
 
-def maybe_sync(
+def maybe_sync(  # noqa: PLR0913 — keyword-only seams: which settings, which transport, and
+    # WHO the call is for (#334). An options object would hide the actor at the call
+    # sites, which is the one thing this signature exists to make visible.
     store: CardStore,
     card: Card,
     *,
     settings: Settings | None = None,
     transport: httpx.BaseTransport | None = None,
+    actor: str = SYSTEM_ACTOR,
+    audit: AuditStore | None = None,
 ) -> dict[str, Any] | None:
     """Sync hook for the card write path (RFC-0019 §3.5).
 
@@ -361,9 +370,9 @@ def maybe_sync(
     MCP tool) still says plainly that no project is configured.
     """
     settings = settings or get_settings()
-    target = store.git_target_for_card(card, settings)
+    target = store.git_target_for_card(card, settings, actor=actor, audit=audit)
     if not sync_enabled(target):
         return None
     if not card.issue_ref and not (card.status == "ready" and target.project):
         return None
-    return sync_card(store, card, settings=settings, transport=transport)
+    return sync_card(store, card, settings=settings, transport=transport, actor=actor, audit=audit)

@@ -52,7 +52,16 @@ import httpx
 from runners.github.providers.protocol import IssueData, IssueFilters
 from starlette.concurrency import run_in_threadpool
 
-from .cards import Card, CardComment, CardCreate, CardStatus, CardStore, DuplicateIssueRefError
+from .audit import AuditStore
+from .cards import (
+    SYSTEM_ACTOR,
+    Card,
+    CardComment,
+    CardCreate,
+    CardStatus,
+    CardStore,
+    DuplicateIssueRefError,
+)
 from .config import Settings, get_settings
 from .error_ref import error_reference
 from .git_config import PROJECT_RE
@@ -438,6 +447,8 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
     project: str | None = None,
     repository_id: int | None = None,
     full: bool = False,
+    actor: str = SYSTEM_ACTOR,
+    audit: AuditStore | None = None,
 ) -> dict[str, Any]:
     """Import ONE REPOSITORY's issues as cards. Never raises.
 
@@ -458,7 +469,9 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
     returns ``ok=False`` with the reason, rather than 500ing the board.
     """
     settings = settings or get_settings()
-    git = store.git_target_for(settings, repository_id=repository_id, project=project)
+    git = store.git_target_for(
+        settings, repository_id=repository_id, project=project, actor=actor, audit=audit
+    )
     if not sync_enabled(git):
         return _result(project or "", ok=True, reason="git provider sync not configured")
 

@@ -154,8 +154,20 @@ export const VerificationBlockSchema = z.object({
   target_level: z.string().optional(),
   achieved_level: z.string(),
   claim: z.string(),
+  // `reason` is null, not absent, when a level carries no explanation — a
+  // producer serializing a dataclass emits the key with a null value rather
+  // than omitting it. `.optional()` alone rejects that, and because this schema
+  // guards the whole board payload, ONE null reason on ONE item blanked Mission
+  // Control entirely with a Zod error. Matches the `.nullable().optional()`
+  // shape already used for every other nullable reason in this file.
   levels: z
-    .array(z.object({ level: z.string(), status: z.string(), reason: z.string().optional() }))
+    .array(
+      z.object({
+        level: z.string(),
+        status: z.string(),
+        reason: z.string().nullable().optional(),
+      }),
+    )
     .optional(),
 });
 export type VerificationBlock = z.infer<typeof VerificationBlockSchema>;

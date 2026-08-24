@@ -254,6 +254,14 @@ def prepare_stage(
                 "body": _brief(card),
                 # The tier label AIFactory's classifier reads (RFC-0011 §2).
                 "labels": [f"factory:{card.tier}"],
+                # RFC-0001 correlation. AIFactory keys the completion event on
+                # the ISSUE NUMBER and falls back to a synthetic `af-<spec_id>`
+                # when it has none -- a key nothing else uses, so the usage block
+                # lands on a THIRD work item and the cockpit's cost rollup reads
+                # the two rows without it. Every card dispatched from the board
+                # reported $0.00 for exactly this reason (#1418). The card knows
+                # the number: it is the tail of `issue_ref`.
+                **_issue_number_payload(card.issue_ref),
             },
             "auto_continue": True,
             **qualified,
@@ -263,6 +271,24 @@ def prepare_stage(
             "classifier label and the model picks (RFC-0011 §2)."
         ),
     )
+
+
+def _issue_number_payload(issue_ref: str | None) -> dict[str, int]:
+    """``{"number": N}`` from an ``owner/repo#123`` reference, or ``{}``.
+
+    Returns a MAPPING rather than an int so the caller can splat it: a card with
+    no issue (one created on the board rather than imported) sends no `number`
+    key at all, which is what AIFactory's synthetic fallback is legitimately for.
+    Passing an explicit ``None`` would look like a supplied-but-empty value.
+
+    Mirrors :func:`cfactory.cards._issue_project`, which takes the other half of
+    the same string. Parsed here rather than imported for the same reason it
+    gives: the import would go the wrong way.
+    """
+    if not issue_ref or "#" not in issue_ref:
+        return {}
+    tail = issue_ref.rsplit("#", 1)[1].strip()
+    return {"number": int(tail)} if tail.isdigit() else {}
 
 
 def prepare_dispatch(

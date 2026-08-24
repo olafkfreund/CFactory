@@ -8,6 +8,7 @@ import {
   FeedMessageSchema,
   HealthSchema,
   ProcessDetailSchema,
+  VerificationBlockSchema,
   ServiceStateSchema,
   ServiceStatusSchema,
   TokenTotalsSchema,
@@ -385,5 +386,32 @@ describe("BillingSummarySchema by_mode keys are open (#353)", () => {
   it("carries the unrecognised mode through instead of erasing it", () => {
     const parsed = BillingSummarySchema.parse(withBedrock);
     expect(parsed.by_mode.bedrock?.total_tokens).toBe(7);
+  });
+});
+
+describe("VerificationBlockSchema", () => {
+  // A producer serializing a dataclass emits `reason: null` rather than omitting
+  // the key. `.optional()` alone rejects that, and this schema guards the whole
+  // board payload — so ONE null reason on ONE item blanked Mission Control with
+  // a raw Zod error instead of rendering the other items.
+  it("accepts a level whose reason is null", () => {
+    const parsed = VerificationBlockSchema.safeParse({
+      achieved_level: "VAL-2",
+      claim: "unit + api lanes green; browser lane not run",
+      levels: [
+        { level: "VAL-1", status: "achieved", reason: null },
+        { level: "VAL-2", status: "achieved", reason: "8/8 lanes committed" },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("still rejects a reason that is neither string nor null", () => {
+    const parsed = VerificationBlockSchema.safeParse({
+      achieved_level: "VAL-1",
+      claim: "x",
+      levels: [{ level: "VAL-1", status: "achieved", reason: 42 }],
+    });
+    expect(parsed.success).toBe(false);
   });
 });

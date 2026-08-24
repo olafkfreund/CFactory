@@ -183,7 +183,7 @@ def _github(
     Runs BEFORE the intake dispatch, so a card that enters the factory does so
     with GitHub's title rather than a local one the sync is about to overwrite.
     """
-    result = maybe_sync(store, card, transport=transport)
+    result = maybe_sync(store, card, transport=transport, actor=ctx.actor, audit=ctx.audit)
     if result is None:
         return card
     _record_sync(ctx, card.card_key, result)
@@ -387,7 +387,7 @@ def sync_card_github(
     an unreachable GitHub is not a board error.
     """
     card = get_card(store, card_key)
-    result = sync_card(store, card, transport=transport)
+    result = sync_card(store, card, transport=transport, actor=ctx.actor, audit=ctx.audit)
     _record_sync(ctx, card_key, result)
     return {"sync": result, "card": (store.get(card_key) or card).model_dump(mode="json")}
 
@@ -484,7 +484,13 @@ def import_cards(  # noqa: PLR0913 — keyword-only, independent seams (which
     gap in it and not a 500.
     """
     result = import_issues(
-        store, project=project, repository_id=repository_id, full=full, transport=transport
+        store,
+        project=project,
+        repository_id=repository_id,
+        full=full,
+        transport=transport,
+        actor=ctx.actor,
+        audit=ctx.audit,
     )
     ctx.audit.record(
         actor=ctx.actor,

@@ -182,6 +182,14 @@ answer, and two settings make the trail say it.
 Nothing else changes: authorization is still the keystore's, the API key is
 still what gates the request, and no schema migration is involved.
 
+**Which entries this covers.** Both halves of a confirmed action: the card
+mutation itself (`create_card`, `sync_card_github`, `import_cards`, …) *and* the
+`read_git_credential` entry that action's provider call appends when it unseals
+the tenant credential. The second one used to say `system` regardless of who
+pressed the button (#334) — the actor was resolved at the route and then dropped
+before the credential read. Background work (the event ingress advancing a
+sequence, a poll) still says `system`, which is what it is.
+
 ### Enable it
 
 ```

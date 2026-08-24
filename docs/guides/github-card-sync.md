@@ -225,6 +225,113 @@ already labelled `factory:low`, so an importer able to produce `ready` would fir
 a build per issue from one click. This is a safety property with a test named
 after it, not a default you can configure away.
 
+### Getting an imported card to actually build
+
+The section above says an imported card never dispatches, and means it. What it
+does not say is what to do next, and the answer is three settings that fail one
+at a time with a different error each. Every one of them is deliberate. None of
+them is discoverable from the board.
+
+Walked end to end on 24 August 2026, importing `olafkfreund/aifactory-demo` and
+pushing one card through to a build:
+
+**1. The issue body needs criteria the planner can read.**
+
+Only if you intend to send the card to `plan`. PFactory's ingest wants a
+`## Acceptance Criteria` heading — title case — followed by plain `-` bullets:
+
+```markdown
+## Acceptance Criteria
+
+- Clicking an empty cell places the current player's mark
+- A win is detected on all eight lines
+```
+
+Not `## Acceptance criteria`, and not `- [ ] ` task-list items. Both parse to
+nothing and the dispatch returns:
+
+```
+HTTP 400  no acceptance criteria found — add an '## Acceptance Criteria'
+          section with bullets, or 'AC#N: ...' lines.
+```
+
+**2. The card's `acceptance_criteria` field is separate from the body, and
+import leaves it empty.**
+
+This is the one that surprises people, because the body clearly contains the
+criteria. Import will not parse them out — deriving testable statements from
+prose would fabricate the thing the factory verifies against, so the field stays
+`[]` and the card is honestly not dispatch-ready.
+
+The dispatch brief is built from the FIELD, not the description. Set it
+yourself, from the board or the API:
+
+```bash
+curl -X PATCH "$CFACTORY/api/cards/FCT-4" \
+  -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"acceptance_criteria": ["Clicking an empty cell places the mark",
+                               "A win is detected on all eight lines"]}'
+```
+
+Reading them out of your own issue body is fine — a person deciding those
+statements are the contract is exactly the step being protected. What is not
+fine is a machine doing it silently.
+
+**3. The repository needs an AIFactory project, or `code` has no target.**
+
+Import records the repo; it does not connect it to a builder. Without the
+mapping:
+
+```
+HTTP 409  no_intake_project — no AIFactory project configured, so the code
+          stage has no target — set it in Settings > Git integration.
+```
+
+Set it on the repository row, not the tenant default — `git_target_for_card`
+resolves per card, so a project id on a *different* repository does not help
+however correct it looks:
+
+```bash
+curl -X PATCH "$CFACTORY/api/tenants/default/git-repositories/2" \
+  -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  -d '{"aifactory_project_id": "5d78d4b9-..."}'
+```
+
+#### Which stage to send it to
+
+`Run all` starts at `plan`, but tier routing may not agree. A `factory:low` card
+routes to `code` by default, and the response says so rather than silently doing
+something else:
+
+```
+warnings: ["tier_override: tier 'low' routes to 'code' by default;
+            this action sends it to 'plan' instead."]
+```
+
+If you only want a build, `POST /api/cards/{key}/actions/code` skips planning
+and its criteria parser entirely — step 1 above stops mattering. Read the
+warning before assuming `Run all` is the neutral choice.
+
+#### Scoping what imports at all
+
+`CFACTORY_IMPORT_LABELS` narrows the backfill to a comma-separated label list.
+Empty (the default) imports everything open, which for a real repository means
+hundreds of cards. Setting it to `demo` on a repo with 144 open issues left
+exactly the four labelled ones on the board. The incremental pass still tracks
+all issues for closures and reopenings, so this narrows what arrives, not what
+stays correct.
+
+#### The order that works
+
+1. Set `CFACTORY_IMPORT_LABELS` if you do not want the whole backlog
+2. Import the repo
+3. Map the repository to its AIFactory project
+4. Set `acceptance_criteria` on the cards you actually intend to build
+5. Dispatch — `actions/code` for a build, `actions/run` for the full chain
+
+Steps 3 and 4 are per-repository and per-card respectively. Step 3 is once;
+step 4 is every card, by design.
+
 ### Re-running is safe
 
 Import is an upsert against a UNIQUE `(tenant_id, issue_ref)` index, so running

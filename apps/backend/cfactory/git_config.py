@@ -75,6 +75,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Boolean, DateTime, Index, Integer, String
@@ -342,6 +343,33 @@ def qualify_repo(provider: str | None, project: str | None) -> str | None:
         return None
     kind = (provider or GITHUB).strip().lower()
     return project if kind == GITHUB else f"{kind}{_QUALIFIER}{project}"
+
+
+def clone_url(provider: str | None, base_url: str | None, project: str | None) -> str | None:
+    """HTTPS clone URL for ``project`` on its own host, or ``None``.
+
+    TFactory's ``specs/ingest`` self-registers an unknown ``project_id`` when it
+    is given a clone URL, and CFactory sends it an AIFactory project id -- the
+    two services keep separate registries, so without this the test stage is
+    unreachable through a card (CFactory#438).
+
+    ``base_url`` is the tenant's API root, which is not always the clone host:
+    github.com's API lives on ``api.github.com`` while its repos do not. A GitHub
+    Enterprise or GitLab API root shares its host with the repos, so its netloc is
+    used as-is. ``None`` in, ``None`` out, like :func:`qualify_repo` -- inventing a
+    host would send the run at the wrong server.
+    """
+    if not project:
+        return None
+    kind = (provider or GITHUB).strip().lower()
+    netloc = urlsplit((base_url or "").strip()).netloc
+    if kind == GITHUB:
+        host = netloc if netloc and netloc != "api.github.com" else "github.com"
+    elif netloc:
+        host = netloc
+    else:
+        return None
+    return f"https://{host}/{project.strip('/')}.git"
 
 
 def parse_repo_ref(ref: str | None) -> tuple[str, str] | None:

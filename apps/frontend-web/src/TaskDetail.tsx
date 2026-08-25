@@ -240,10 +240,23 @@ export default function TaskDetail({
   // Stage-level completion, keyed by the DAG's stage vocabulary (plan/code/test)
   // — the flow diagram tints its frame green when its stage is done, while its
   // per-node states stay honest below (#planflow-green).
+  // #431: a TFactory task reports "done" once it has triaged, whether or not a
+  // single lane executed — so a spec with 0 committed tests and 0/8 acceptance
+  // criteria verified rendered "STAGE COMPLETE" to a reader looking at a
+  // dashboard. The lane nodes now carry execution state, so require at least one
+  // lane that actually ran before making the loudest claim on the page.
+  //
+  // When the graph has no nodes at all we fall back to the task status: absence
+  // of a diagram is not evidence that nothing ran, and refusing to ever mark the
+  // stage done would be its own dishonesty.
+  const testLanes = proc?.graphs?.test?.nodes ?? [];
+  const someLaneRan = testLanes.some((n) => n.status === "completed");
   const stageDone = {
     plan: stageState(wi.pfactory.status) === "done",
     code: stageState(wi.aifactory.status) === "done",
-    test: stageState(wi.tfactory.status) === "done",
+    test:
+      stageState(wi.tfactory.status) === "done" &&
+      (testLanes.length === 0 || someLaneRan),
   };
 
   const procAvailable = proc != null && proc.available !== false;

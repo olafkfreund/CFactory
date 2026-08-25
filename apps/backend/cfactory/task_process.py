@@ -244,7 +244,47 @@ def _lane_status(statuses: list[str]) -> str | None:
     return None
 
 
-def _build_test_graph(raw_subs: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _lane_node(lane: str, members: list[dict[str, Any]], executed: str | None) -> dict[str, Any]:
+    """One lane's node, honest about generated versus executed (#431).
+
+    ``executed`` is that lane's entry in the run's ``lane_progress`` — the only
+    field that says whether the lane RAN. The subtask statuses rolled up below
+    come from the test PLAN, where "completed" means the test was generated and
+    evaluated. A spec with every lane pending therefore rendered as
+    "Browser (8/8)" in the position that reads as passed.
+
+    ``None`` means the run predates the field or its status was unreadable, and
+    the lane keeps its previous rollup: reporting "nothing ran" on missing data
+    would repaint healthy lanes red, which is the same bug pointing the other
+    way.
+    """
+    status = _lane_status([m.get("status") for m in members])
+    done_count = sum(1 for m in members if "complet" in str(m.get("status") or "").lower())
+    label = f"{lane.capitalize()} ({done_count}/{len(members)})"
+    if executed is not None and executed != "executed":
+        # The lane did not run. "error" is a lane that tried and could not (no
+        # flake, no sandbox); anything else is a lane nobody reached. Neither is
+        # completed, however many tests were generated for it.
+        status = "failed" if executed == "error" else None
+        label = f"{lane.capitalize()} (0/{len(members)} run)"
+    starts = [m.get("started_at") for m in members if m.get("started_at")]
+    completes = [m.get("completed_at") for m in members if m.get("completed_at")]
+    return {
+        "id": lane,
+        "label": label,
+        "kind": lane,
+        "status": status,
+        "started_at": min(starts) if starts else None,
+        # Only call a lane finished (latest completion) when all its
+        # subtasks are done — else the timer should keep running.
+        "completed_at": max(completes) if completes and status == "completed" else None,
+        "deps": [],
+    }
+
+
+def _build_test_graph(
+    raw_subs: list[dict[str, Any]], lane_progress: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """Aggregate TFactory's lane-tagged subtasks into the test-stage diagram: one
     node per lane (unit→browser→api→integration→mutation), spine-ordered with
     lane→lane edges, each lane's status rolled up from its subtasks and its timing
@@ -268,27 +308,14 @@ def _build_test_graph(raw_subs: list[dict[str, Any]]) -> dict[str, Any] | None:
         ln for ln in order if ln not in _LANE_SPINE
     ]
 
+    progress = lane_progress if isinstance(lane_progress, dict) else {}
     nodes: list[dict[str, Any]] = []
     prev: str | None = None
     for lane in ordered:
-        members = lanes[lane]
-        status = _lane_status([m.get("status") for m in members])
-        starts = [m.get("started_at") for m in members if m.get("started_at")]
-        completes = [m.get("completed_at") for m in members if m.get("completed_at")]
-        done_count = sum(1 for m in members if "complet" in str(m.get("status") or "").lower())
-        nodes.append(
-            {
-                "id": lane,
-                "label": f"{lane.capitalize()} ({done_count}/{len(members)})",
-                "kind": lane,
-                "status": status,
-                "started_at": min(starts) if starts else None,
-                # Only call a lane finished (latest completion) when all its
-                # subtasks are done — else the timer should keep running.
-                "completed_at": max(completes) if completes and status == "completed" else None,
-                "deps": [prev] if prev else [],
-            }
-        )
+        executed = progress.get(lane) if progress else None
+        node = _lane_node(lane, lanes[lane], str(executed) if executed else None)
+        node["deps"] = [prev] if prev else []
+        nodes.append(node)
         prev = lane
 
     return {"stage": "test", "nodes": nodes}
@@ -356,7 +383,7 @@ def _normalize_test(correlation_key: str, d: dict[str, Any]) -> dict[str, Any] |
     """Test-stage process detail from a TFactory task — the lane pipeline diagram.
     ``None`` when there are no lane subtasks to aggregate."""
     raw_subs = d.get("subtasks") if isinstance(d.get("subtasks"), list) else []
-    graph = _build_test_graph(raw_subs)
+    graph = _build_test_graph(raw_subs, d.get("lane_progress"))
     if graph is None:
         return None
     return {

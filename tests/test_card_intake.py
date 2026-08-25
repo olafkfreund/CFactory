@@ -16,6 +16,7 @@ Contract points covered:
 from __future__ import annotations
 
 import pytest
+from cards_harness import Upstream, build_client
 from cfactory import card_intake
 from cfactory.audit import AuditStore
 from cfactory.auth import reset_keystore
@@ -24,8 +25,6 @@ from cfactory.cards import CardStore
 from cfactory.config import Settings
 from cfactory.models import ServiceState, WorkItem
 from cfactory.store import WorkItemStore
-
-from cards_harness import Upstream, build_client
 
 # Not a credential: the HMAC anchor for the temp audit chain in these tests.
 _TEST_HMAC = "card-intake-test-hmac"
@@ -271,3 +270,102 @@ def test_a_finished_plan_is_not_a_finished_card():
     assert card_status_for(_item(aifactory="completed", tfactory="failed")) == "blocked"
     # No stage state at all yet -> nothing honest to say.
     assert card_status_for(WorkItem(correlation_key="k")) is None
+
+
+# ── #434: the card BODY must reach the producers, not just its criteria ───────
+#
+# _brief renders the card for all three intake doors. It used to emit title plus
+# acceptance criteria and nothing else, so the planner, the coder and the
+# verifier all worked from the criteria alone and never saw the description.
+#
+# Measured on FCT-4: a 2004-byte card describing a Goal, What to build (naming
+# the exact functions to export), Acceptance Criteria and Out of scope reached
+# the coder as 1000 bytes of acceptance criteria. AIFactory#1421 recorded the
+# result as the coder "paraphrasing an enumerated API" -- 0/4 names at low tier,
+# 1/4 at medium. It was never told; a better model just guessed better names.
+
+
+class _Card:
+    """The three fields _brief reads. Not the ORM Card: this exercises the
+    rendering, and a real Card would need a store, a tenant and a status."""
+
+    def __init__(self, title="T", description=None, acceptance_criteria=()):
+        self.title = title
+        self.description = description
+        self.acceptance_criteria = list(acceptance_criteria)
+
+
+def test_the_body_reaches_the_producer() -> None:
+    """The headline: what the card says must survive the trip."""
+    brief = card_intake._brief(
+        _Card(
+            title="Tic tac toe",
+            description=(
+                "## What to build\n\n"
+                "- `emptyBoard()` a fresh board\n"
+                "- `winner(board)` X, O or null\n"
+            ),
+            acceptance_criteria=["playable in a browser"],
+        )
+    )
+
+    assert "emptyBoard" in brief
+    assert "winner(board)" in brief
+    assert "playable in a browser" in brief
+
+
+def test_criteria_are_appended_not_substituted() -> None:
+    """The bug was substitution. Both must be present when the body has no
+    criteria section of its own."""
+    brief = card_intake._brief(
+        _Card(description="## Goal\n\nSomething useful.\n", acceptance_criteria=["AC one"])
+    )
+
+    assert "Something useful." in brief
+    assert "## Acceptance Criteria" in brief
+    assert "- AC one" in brief
+
+
+def test_the_criteria_section_is_not_emitted_twice() -> None:
+    """The description IS the issue body, and the tracked criteria were parsed
+    out of its own Acceptance Criteria section. Appending them again puts two
+    lists in one prompt, and a reader has to decide which governs."""
+    brief = card_intake._brief(
+        _Card(
+            description="## Acceptance Criteria\n\n- it ships\n",
+            acceptance_criteria=["it ships"],
+        )
+    )
+
+    assert brief.lower().count("## acceptance criteria") == 1
+
+
+def test_a_body_with_its_own_heading_does_not_gain_another() -> None:
+    """AIFactory's from-issue prepends `# {title}` to whatever it receives. A
+    heading here as well is how the title arrived three times over."""
+    brief = card_intake._brief(
+        _Card(title="Tic tac toe", description="# Tic tac toe\n\nBody text.\n")
+    )
+
+    assert brief.count("# Tic tac toe") == 1
+    assert brief.startswith("# Tic tac toe")
+
+
+def test_a_body_without_a_heading_gets_the_title() -> None:
+    brief = card_intake._brief(_Card(title="Ship it", description="Just prose.\n"))
+
+    assert brief.startswith("# Ship it")
+    assert "Just prose." in brief
+
+
+def test_a_card_with_neither_body_nor_criteria_still_says_what_it_is() -> None:
+    """An empty brief would dispatch a build with no instructions at all."""
+    assert card_intake._brief(_Card(title="Bare card")) == "# Bare card"
+
+
+def test_criteria_only_still_works() -> None:
+    """The pre-#434 shape must keep working: plenty of cards have no body."""
+    brief = card_intake._brief(_Card(title="Ship it", acceptance_criteria=["AC one"]))
+
+    assert brief.startswith("# Ship it")
+    assert "- AC one" in brief

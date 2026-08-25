@@ -62,7 +62,30 @@ class TFactoryAdapter(BaseHTTPAdapter):
             "status": plan.get("status"),
             "updated_at": plan.get("updated_at"),
             "subtasks": subtasks,
+            "lane_progress": self._lane_progress(task_id),
         }
+
+    def _lane_progress(self, task_id: str) -> dict[str, Any] | None:
+        """Per-lane EXECUTION state from the run's status.json (#431).
+
+        The test plan above describes what was *generated*; nothing in it says
+        whether a lane ever ran. A subtask whose generation completed reports
+        ``completed`` either way, which is how a spec with zero executed lanes
+        came to render as "Browser (8/8) STAGE COMPLETE".
+
+        Best-effort on purpose: ``None`` when the status is unreadable or the
+        field is absent, and the caller then keeps its previous behaviour rather
+        than reporting that nothing ran. A TFactory that predates the field
+        would otherwise repaint every healthy lane as pending — the same bug
+        pointing the other way.
+        """
+        try:
+            data = self._get_json(f"{_TF_PREFIX}/{task_id}")
+        except AdapterError:
+            return None
+        status_json = (data or {}).get("status_json") if isinstance(data, dict) else None
+        progress = (status_json or {}).get("lane_progress")
+        return progress if isinstance(progress, dict) and progress else None
 
     def get_evidence_manifest(self, spec_id: str) -> dict[str, list[str]]:
         """Browser-lane media captured for a spec: screenshot + recording file

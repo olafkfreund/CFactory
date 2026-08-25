@@ -12,6 +12,7 @@ from cfactory.adapters.pfactory import PFactoryAdapter
 from cfactory.adapters.tfactory import TFactoryAdapter
 from cfactory.app import adapters_dep, create_app, store_dep
 from cfactory.models import CompletionEvent, Service
+from cfactory.task_process import _build_test_graph, _normalize_test
 from cfactory.task_process import (
     _extract_artifacts,
     _extract_traceability,
@@ -658,3 +659,86 @@ def test_extract_traceability_drops_rows_without_ac_id_and_handles_absent():
     assert _extract_traceability(None) is None
     assert _extract_traceability({"traceability": []}) is None
     assert _extract_traceability({"traceability": [{"status": "passed"}]}) is None  # no ac_id
+
+
+# ── #431: the badge must not report generated work as executed ────────────────
+#
+# On card #562 the panel rendered "Browser (8/8)  STAGE COMPLETE" while that
+# spec's status.json had committed_count 0, ac_fidelity 0/8 and every lane
+# pending. The 8/8 was the count of tests GENERATED for the lane, shown in the
+# position that reads as passed. Every other "green that measured nothing"
+# defect in this fleet is read by a machine or by someone digging through JSON;
+# this one is read by a person looking at a dashboard.
+
+
+def _subs(lane: str, n: int, status: str = "completed"):
+    return [{"id": f"{lane}-{i}", "lane": lane, "status": status} for i in range(n)]
+
+
+def test_a_lane_that_never_ran_is_not_labelled_as_passing():
+
+    graph = _build_test_graph(_subs("browser", 8), {"browser": "pending"})
+    node = graph["nodes"][0]
+
+    assert node["label"] == "Browser (0/8 run)"
+    assert node["status"] != "completed"
+    assert node["completed_at"] is None
+
+
+def test_a_lane_that_tried_and_could_not_run_reads_as_failed():
+    """error is a lane that tried and could not (no flake, no sandbox). That is
+    a different fact from a lane nobody reached, and worth showing as failure
+    rather than as quiet absence."""
+
+    graph = _build_test_graph(_subs("browser", 8), {"browser": "error"})
+
+    assert graph["nodes"][0]["status"] == "failed"
+    assert graph["nodes"][0]["label"] == "Browser (0/8 run)"
+
+
+def test_a_lane_that_executed_still_reports_its_real_counts():
+    """The fix must not cost a healthy lane its label — that would trade a false
+    green for a false red."""
+
+    graph = _build_test_graph(_subs("browser", 8), {"browser": "executed"})
+    node = graph["nodes"][0]
+
+    assert node["label"] == "Browser (8/8)"
+    assert node["status"] == "completed"
+
+
+def test_absent_lane_progress_keeps_the_previous_behaviour():
+    """A TFactory that predates lane_progress must not repaint every lane. No
+    data is not evidence that nothing ran."""
+
+    for progress in (None, {}):
+        graph = _build_test_graph(_subs("browser", 8), progress)
+        assert graph["nodes"][0]["label"] == "Browser (8/8)"
+        assert graph["nodes"][0]["status"] == "completed"
+
+
+def test_lane_progress_reaches_the_graph_from_the_detail_payload():
+    """The wiring, not just the helper: _normalize_test must forward the field
+    the adapter now fetches, or the fix is inert in production."""
+
+    detail = _normalize_test(
+        "corr-1",
+        {
+            "id": "155",
+            "subtasks": _subs("browser", 8),
+            "lane_progress": {"browser": "pending"},
+        },
+    )
+    assert detail["graph"]["nodes"][0]["label"] == "Browser (0/8 run)"
+
+
+def test_lane_edges_survive_the_refactor():
+    """The spine's lane→lane deps are what order the diagram's columns."""
+
+    graph = _build_test_graph(
+        _subs("unit", 1) + _subs("browser", 1), {"unit": "executed", "browser": "executed"}
+    )
+    ids = [n["id"] for n in graph["nodes"]]
+    assert ids == ["unit", "browser"]
+    assert graph["nodes"][0]["deps"] == []
+    assert graph["nodes"][1]["deps"] == ["unit"]

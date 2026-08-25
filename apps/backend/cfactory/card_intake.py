@@ -39,6 +39,7 @@ never left sitting in ``ready`` as though it had been dispatched, never a 500.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -122,11 +123,54 @@ def parse_stage(value: str) -> Stage | None:
 
 
 def _brief(card: Card) -> str:
-    """The card rendered as the markdown body both intake doors accept."""
-    lines = [f"# {card.title}"]
-    if card.acceptance_criteria:
-        lines += ["", "## Acceptance Criteria", ""]
+    """The card rendered as the markdown body all three intake doors accept.
+
+    Carries the card's DESCRIPTION, not just its acceptance criteria (#434).
+    This used to be title plus criteria and nothing else, which meant every
+    producer -- planner, coder and verifier alike -- worked from the criteria
+    alone and never saw the body.
+
+    Measured on FCT-4: a 2004-byte card describing a Goal, What to build (naming
+    the exact functions to export), Acceptance Criteria and Out of scope reached
+    the coder as 1000 bytes of acceptance criteria. AIFactory#1421 recorded the
+    result as the coder "paraphrasing an enumerated API" -- 0/4 names at low
+    tier, 1/4 at medium. It was not paraphrasing. It was never told, and a
+    better model simply guessed better names from the same criteria.
+
+    Nothing caught it because acceptance criteria are the part a reviewer
+    checks, and they survived. A build that satisfies every criterion while
+    ignoring the design reads as correct everywhere -- including in its own test
+    suite, which the coder also writes.
+    """
+    lines: list[str] = []
+    body = (card.description or "").strip()
+    # The description usually opens with its own `# Title` (it is the issue body),
+    # and AIFactory's from-issue prepends the title again on top of whatever it
+    # receives. Emitting a heading here as well is how the title arrived three
+    # times over. Add one only when the body carries none of its own.
+    # An empty body does not start with "#" either, so a card with no
+    # description still gets its title here -- this branch is what guarantees a
+    # brief is never empty, and a build never dispatches with no instructions.
+    if not body.startswith("#"):
+        lines.append(f"# {card.title}")
+        if body:
+            lines.append("")
+    if body:
+        lines.append(body)
+
+    # Appended, never substituted -- but not duplicated either. The description
+    # is the issue body, and the tracked criteria were parsed out of its own
+    # "Acceptance Criteria" section, so re-appending them emits the same list
+    # twice. Two AC lists in one prompt is worse than either alone: a reader
+    # (human or model) has to decide which governs, and if they ever diverge it
+    # is silent.
+    has_own_acs = re.search(r"^#{1,6}\s*acceptance\s+criteria\b", body, re.I | re.M)
+    if card.acceptance_criteria and not has_own_acs:
+        if lines:
+            lines.append("")
+        lines += ["## Acceptance Criteria", ""]
         lines += [f"- {ac}" for ac in card.acceptance_criteria]
+
     return "\n".join(lines)
 
 

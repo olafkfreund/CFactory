@@ -40,7 +40,17 @@ WORKDIR /app
 # No `--no-install-recommends`: `upgrade` never adds packages, only replaces
 # installed ones. The apt lists are removed in the same layer so they are not
 # baked into the image.
-RUN apt-get update \
+#
+# SECURITY_REFRESH busts THIS layer's cache. CI builds with `cache-from:
+# type=gha`, so without it the upgrade layer is served from cache and never
+# re-runs -- the image keeps shipping whatever Debian shipped the day the
+# layer was first built. That is exactly how CVE-2026-14456 (openssl
+# 3.5.6 -> 3.5.7) reached a gate failure on an image whose Dockerfile already
+# ran `apt-get upgrade`: the upgrade was real, its result was frozen.
+# CI passes the current date, so the layer rebuilds at most once a day.
+ARG SECURITY_REFRESH=0
+RUN echo "security refresh: ${SECURITY_REFRESH}" \
+    && apt-get update \
     && apt-get upgrade --yes \
     && rm -rf /var/lib/apt/lists/*
 

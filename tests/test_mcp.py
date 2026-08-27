@@ -289,3 +289,40 @@ def test_dev_open_flag_restores_open_mode(seeded_store, monkeypatch):
         assert r.status_code == 200
     finally:
         auth.reset_keystore()
+
+
+def test_the_initialized_notification_is_accepted_without_a_body(mcp_client):
+    """`notifications/initialized` is a REQUIRED step of the MCP handshake.
+
+    This server answered it with -32601 + HTTP 400, which aborted the
+    connection for every client -- Claude Code reported the whole server as
+    unreachable. A JSON-RPC notification carries no `id` and MUST NOT receive
+    a response body (JSON-RPC 2.0 s4.1).
+    """
+    r = mcp_client.post(
+        "/mcp", headers=AUTH, json={"jsonrpc": "2.0", "method": "notifications/initialized"}
+    )
+
+    assert r.status_code == 202, r.text
+    assert r.content == b"", "a notification must not get a response body"
+
+
+def test_any_notification_is_accepted_not_just_initialized(mcp_client):
+    """The rule is about the absent `id`, not one method name."""
+    r = mcp_client.post(
+        "/mcp", headers=AUTH, json={"jsonrpc": "2.0", "method": "notifications/cancelled"}
+    )
+
+    assert r.status_code == 202
+    assert r.content == b""
+
+
+def test_an_unknown_request_still_reports_method_not_found(mcp_client):
+    """Only notifications are exempt -- a real request with an `id` must still
+    get -32601, or genuine client bugs would pass silently."""
+    r = mcp_client.post(
+        "/mcp", headers=AUTH, json={"jsonrpc": "2.0", "id": 9, "method": "does/not/exist"}
+    )
+
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == -32601

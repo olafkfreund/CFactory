@@ -50,7 +50,7 @@ import httpx
 from .actions import PreparedAction, execute_action
 from .cards import Card, CardStore
 from .config import Settings, get_settings
-from .git_config import qualify_repo
+from .git_config import clone_url, qualify_repo
 from .models import Service, Stage, WorkItem
 from .status_taxonomy import is_done, is_failure_or_stuck
 
@@ -201,6 +201,16 @@ def repo_ref(store: CardStore, settings: Settings, card: Card) -> str | None:
     return qualify_repo(target.provider, target.project)
 
 
+def card_clone_url(store: CardStore, settings: Settings, card: Card) -> str | None:
+    """The clone URL for the repo this card's work targets (CFactory#438).
+
+    Resolved through the SAME per-card target :func:`repo_ref` uses, so the host
+    TFactory clones from is the card's own host rather than a tenant-wide guess.
+    """
+    target = store.git_target_for_card(card, settings)
+    return clone_url(target.provider, target.base_url, target.project)
+
+
 def aifactory_project_id(
     store: CardStore, settings: Settings, card: Card | None = None
 ) -> str | None:
@@ -221,7 +231,12 @@ def aifactory_project_id(
 
 
 def prepare_stage(
-    card: Card, stage: Stage, *, project_id: str | None, repo: str | None = None
+    card: Card,
+    stage: Stage,
+    *,
+    project_id: str | None,
+    repo: str | None = None,
+    git_url: str | None = None,
 ) -> PreparedAction | None:
     """Build the not-yet-executed intake write that sends ``card`` into ``stage``.
 
@@ -278,6 +293,9 @@ def prepare_stage(
                 # component ("FCT-42").
                 "spec_id": card.card_key,
                 "spec_text": _brief(card),
+                # project_id is AIFactory's; TFactory keeps its own registry and
+                # self-registers from the clone URL rather than 404ing (#438).
+                **({"git_url": git_url} if git_url else {}),
                 **qualified,
             },
             rationale=(
@@ -652,7 +670,13 @@ def dispatch_stage(
     refusal = refuse_reason(card, stage, project_id=project_id)
     if refusal is not None:
         return _refused(refusal, stage)
-    action = prepare_stage(card, stage, project_id=project_id, repo=repo_ref(store, settings, card))
+    action = prepare_stage(
+        card,
+        stage,
+        project_id=project_id,
+        repo=repo_ref(store, settings, card),
+        git_url=card_clone_url(store, settings, card),
+    )
     if action is None:  # refuse_reason already covers every buildable case
         return _refused(
             StageRefusal("no_intake_project", f"no payload can be built for {stage.value}"), stage

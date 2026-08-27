@@ -86,6 +86,14 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
+      # Same reason as image-build.yml: without a daily-changing build arg the
+      # `apt-get upgrade` layer is served from the gha cache forever, so the
+      # DEPLOYED image keeps whatever Debian shipped when that layer was first
+      # built. Fixing only the PR gate would turn the check green while
+      # production still shipped the stale package.
+      - name: Compute security-refresh token
+        run: echo "SECURITY_REFRESH=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
       - name: Build + push backend
         id: build_backend
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
@@ -97,6 +105,8 @@ jobs:
           tags: |
             ${{ env.BACKEND_IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.BACKEND_IMAGE }}:latest
+          build-args: |
+            SECURITY_REFRESH=${{ env.SECURITY_REFRESH }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max
@@ -117,6 +127,8 @@ jobs:
           tags: |
             ${{ env.FRONTEND_IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.FRONTEND_IMAGE }}:latest
+          build-args: |
+            SECURITY_REFRESH=${{ env.SECURITY_REFRESH }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max

@@ -165,6 +165,13 @@ jobs:
             --severity HIGH,CRITICAL --ignore-unfixed \
             --exit-code 1 apps/frontend-web/package-lock.json
 
+      # Rebuild the base-security layer at most once a day. Without this the
+      # `apt-get upgrade` layer is served from the gha cache indefinitely, so a
+      # Debian security fix never reaches the image and Trivy fails on a CVE the
+      # Dockerfile already had remediation for (CVE-2026-14456, openssl).
+      - name: Compute security-refresh token
+        run: echo "SECURITY_REFRESH=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
       # amd64 only, matching deploy.yml — the p510 k3d cluster is amd64.
       - name: Build backend Dockerfile (no push)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
@@ -175,6 +182,8 @@ jobs:
           push: false
           load: true
           tags: ${{ env.BACKEND_TAG }}
+          build-args: |
+            SECURITY_REFRESH=${{ env.SECURITY_REFRESH }}
           cache-from: type=gha,scope=image-build-backend
           cache-to: type=gha,mode=max,scope=image-build-backend
 
@@ -203,6 +212,8 @@ jobs:
           push: false
           load: true
           tags: ${{ env.FRONTEND_TAG }}
+          build-args: |
+            SECURITY_REFRESH=${{ env.SECURITY_REFRESH }}
           cache-from: type=gha,scope=image-build-frontend
           cache-to: type=gha,mode=max,scope=image-build-frontend
 

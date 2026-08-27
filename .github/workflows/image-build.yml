@@ -212,6 +212,8 @@ jobs:
           push: false
           load: true
           tags: ${{ env.FRONTEND_TAG }}
+          build-args: |
+            SECURITY_REFRESH=${{ env.SECURITY_REFRESH }}
           cache-from: type=gha,scope=image-build-frontend
           cache-to: type=gha,mode=max,scope=image-build-frontend
 

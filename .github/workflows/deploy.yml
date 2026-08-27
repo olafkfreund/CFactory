@@ -127,6 +127,8 @@ jobs:
           tags: |
             ${{ env.FRONTEND_IMAGE }}:${{ steps.tags.outputs.sha }}
             ${{ env.FRONTEND_IMAGE }}:latest
+          build-args: |
+            SECURITY_REFRESH=${{ env.SECURITY_REFRESH }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max

@@ -317,7 +317,7 @@ def test_any_notification_is_accepted_not_just_initialized(mcp_client):
     assert r.content == b""
 
 
-def test_an_unknown_REQUEST_still_reports_method_not_found(mcp_client):
+def test_an_unknown_request_still_reports_method_not_found(mcp_client):
     """Only notifications are exempt -- a real request with an `id` must still
     get -32601, or genuine client bugs would pass silently."""
     r = mcp_client.post(

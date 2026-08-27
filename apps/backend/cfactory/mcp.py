@@ -1506,13 +1506,13 @@ async def mcp_endpoint(request: Request) -> Response:
             payload = _dispatch_tool(tool_name, arguments, _tool_context(request))
         except Exception:
             logger.exception("[cfactory-mcp] tool call failed tool=%s", sanitize_log(tool_name))
-            return JSONResponse(_error(-32603, "Internal error", rpc_id))
-        return JSONResponse(
-            _result(
+            content = _error(-32603, "Internal error", rpc_id)
+        else:
+            content = _result(
                 {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]},
                 rpc_id,
             )
-        )
+        return JSONResponse(content)
 
     return JSONResponse(
         status_code=400, content=_error(-32601, f"Method not found: {method}", rpc_id)

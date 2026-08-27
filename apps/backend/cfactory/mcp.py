@@ -53,7 +53,7 @@ from typing import Any
 import httpx
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 
 from . import card_ops, git_config_ops
@@ -1461,7 +1461,7 @@ def _tool_context(request: Request) -> ToolContext:
 
 
 @router.post("/mcp")
-async def mcp_endpoint(request: Request) -> JSONResponse:
+async def mcp_endpoint(request: Request) -> Response:
     """JSON-RPC 2.0 MCP endpoint. Handles initialize, tools/list, tools/call."""
     granted = _authenticate(request)
 
@@ -1473,6 +1473,15 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
     rpc_id = body.get("id")
     method = body.get("method", "")
     params = body.get("params", {})
+
+    # A JSON-RPC *notification* carries no `id` and MUST NOT receive a response
+    # body (JSON-RPC 2.0 s4.1). `notifications/initialized` is a REQUIRED step
+    # of the MCP handshake, so answering it with -32601 + HTTP 400 aborted the
+    # connection for every client -- two spec violations in one reply, and the
+    # reason this server never finished a handshake. Absence of the key is what
+    # marks a notification; an explicit `"id": null` is not the same thing.
+    if "id" not in body:
+        return Response(status_code=202)
 
     if method == "initialize":
         return JSONResponse(
@@ -1497,13 +1506,13 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             payload = _dispatch_tool(tool_name, arguments, _tool_context(request))
         except Exception:
             logger.exception("[cfactory-mcp] tool call failed tool=%s", sanitize_log(tool_name))
-            return JSONResponse(_error(-32603, "Internal error", rpc_id))
-        return JSONResponse(
-            _result(
+            content = _error(-32603, "Internal error", rpc_id)
+        else:
+            content = _result(
                 {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]},
                 rpc_id,
             )
-        )
+        return JSONResponse(content)
 
     return JSONResponse(
         status_code=400, content=_error(-32601, f"Method not found: {method}", rpc_id)

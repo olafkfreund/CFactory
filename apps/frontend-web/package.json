@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 239",
-    "format:check": "prettier --check src/api.ts src/api.test.ts eslint.config.js .prettierrc.json",
+    "format:check": "prettier --check src/api.ts src/api.test.ts src/apiContract.test.ts eslint.config.js .prettierrc.json",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "test": "vitest run"
   },

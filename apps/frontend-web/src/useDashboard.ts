@@ -13,6 +13,7 @@ import {
   type LiveProgress,
   type WorkItem,
 } from "./api";
+import { onReopen } from "./onReopen";
 import { diffEvents } from "./taskEvents";
 import { ensureNotifyPermission, osNotify, type TaskEvent } from "./notify";
 import { stageState, type TaskState } from "./taskState";
@@ -173,6 +174,17 @@ export function useDashboard(): Dashboard {
     void load();
   }, [load]);
 
+  // Read through a ref so the feed effect does not depend on `load`. Putting
+  // `load` in that effect's deps would tear the socket down and reopen it on
+  // every change of identity -- reconnect churn caused by the very code meant
+  // to make reconnects safe.
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  // Held in a ref so the "first open" state survives re-renders; rebuilding
+  // the handler each render would make every open look like the first, and
+  // the refetch would never run.
+  const refetchOnReopen = useRef(onReopen(() => void loadRef.current()));
+
   useEffect(() => {
     const ws = openFeed(
       (msg) => {
@@ -189,7 +201,28 @@ export function useDashboard(): Dashboard {
           ingest([msg.item]);
         }
       },
-      () => setLive(true),
+      () => {
+        setLive(true);
+        // A reconnect must refetch, not just turn the pill green. This feed
+        // has no replay: every frame broadcast while the socket was down is
+        // gone for good, so a cockpit that only sets live=true keeps
+        // rendering pre-drop state underneath a green "live" pill -- stale,
+        // and indistinguishable from current. That is the stale-cockpit bug,
+        // and it is structural rather than a rendering slip.
+        //
+        // Refetch rather than replay from a server-side buffer: every frame
+        // this feed carries (workitem/progress/snapshot) is authoritative
+        // state that can simply be fetched again, and load() already replaces
+        // items wholesale. A replay buffer would need sequence numbers, a
+        // ring and an expiry policy to reconstruct what one load() returns
+        // exactly -- and a buffer can drift from the database, where a
+        // refetch cannot. A feed carrying streaming output that CANNOT be
+        // refetched would need the buffer; this one does not.
+        //
+        // Skipped on the first open because the mount effect above already
+        // loads; without that the cockpit would fetch twice on every start.
+        refetchOnReopen.current();
+      },
       () => setLive(false),
     );
     return () => ws.close();

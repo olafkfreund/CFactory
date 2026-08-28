@@ -46,6 +46,21 @@ jobs:
       - name: Run backend test suite
         run: PYTHONPATH=apps/backend pytest -v
 
+      # Frontend-client drift gate (Factory#1005). apps/frontend-web/src/api.ts
+      # is hand-maintained against these routes; nothing used to notice when the
+      # backend renamed a route or changed a response shape and the client did
+      # not follow. This regenerates the committed contract (in-process, seeded
+      # temp store, no network, no server to boot) and fails if it is stale, so
+      # a route rename, a route removal, a renamed field AND a backend addition
+      # all show up here with the offending lines printed.
+      #
+      # BLOCKING on purpose, with no continue-on-error: an advisory drift gate
+      # is a dark gate. The other half of this runs as
+      # apps/frontend-web/src/apiContract.test.ts in code-quality.yml's vitest
+      # job, which replays the recorded bodies through the client's own schemas.
+      - name: API contract is in sync with the backend (drift gate)
+        run: PYTHONPATH=apps/backend python scripts/dump_api_contract.py --check
+
   frontend:
     name: Frontend typecheck + build
     runs-on: ubuntu-latest

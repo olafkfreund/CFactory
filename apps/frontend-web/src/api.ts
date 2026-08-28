@@ -560,12 +560,15 @@ export async function fetchHealth(): Promise<Health> {
   return HealthSchema.parse(await resp.json());
 }
 
+// The list envelope, EXPORTED rather than inlined at the call site (Factory#1005):
+// src/apiContract.test.ts replays a recorded backend body through this exact
+// schema, and an inlined copy there would be a second contract that can drift
+// from the one the client actually parses with. Same reason for the sibling
+// envelopes below.
+export const ServicesResponseSchema = z.object({ services: z.array(ServiceStatusSchema) });
+
 export async function fetchServices(): Promise<ServiceStatus[]> {
-  const data = await getJson(
-    "/api/services",
-    z.object({ services: z.array(ServiceStatusSchema) }),
-    "services",
-  );
+  const data = await getJson("/api/services", ServicesResponseSchema, "services");
   return data.services ?? [];
 }
 
@@ -964,14 +967,17 @@ export async function fetchActivity(limit = 50): Promise<ActivityEntry[]> {
   return data.activity ?? [];
 }
 
+export const WorkItemsResponseSchema = z.object({
+  count: z.number(),
+  items: z.array(WorkItemSchema),
+});
+
 export async function fetchWorkItems(): Promise<WorkItem[]> {
   const resp = await fetch("/api/workitems");
   if (!resp.ok) {
     throw new Error(`backend returned HTTP ${resp.status}`);
   }
-  const body = z
-    .object({ count: z.number(), items: z.array(WorkItemSchema) })
-    .parse(await resp.json());
+  const body = WorkItemsResponseSchema.parse(await resp.json());
   return body.items;
 }
 
@@ -995,12 +1001,10 @@ export const FeedMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type FeedMessage = z.infer<typeof FeedMessageSchema>;
 
+export const ProgressResponseSchema = z.object({ items: z.array(LiveProgressSchema) });
+
 export async function fetchProgress(): Promise<LiveProgress[]> {
-  const data = await getJson(
-    "/api/progress",
-    z.object({ items: z.array(LiveProgressSchema) }),
-    "progress",
-  );
+  const data = await getJson("/api/progress", ProgressResponseSchema, "progress");
   return data.items;
 }
 

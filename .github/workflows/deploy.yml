@@ -264,7 +264,7 @@ jobs:
           ./.github/scripts/assert-signature-location.sh "${FRONTEND_IMAGE}" "${{ steps.build_frontend.outputs.digest }}"
 
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
 
       - name: Generate + attest dual SBOMs (SPDX + CycloneDX) for both images
         run: |

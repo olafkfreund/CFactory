@@ -69,6 +69,23 @@ branch, because that path runs `git merge <branch>` and needs the branch
 locally. The merge-blocking-file cleanup that runs before it stays on that
 path too.
 
+### 4. Fetch before resolving the branch (amendment, approved 2026-09-23)
+
+The end-to-end check on 3.6.84 failed before reaching (1) and (2): for a
+kubejob build, the control-plane checkout has never fetched the task branch,
+and `resolve_task_branch` only sees refs that are already fetched ("no local or
+origin branch ends with that spec id"). The branch was on origin.
+
+Change: both handlers resolve with `services/task_branch.py`
+`resolve_work_ref(...)` instead of `resolve_task_branch(...)`, and use its
+`branch`. It already fetches `origin` and retries once when plain resolution
+finds nothing, then fetches the resolved branch. All fetches are best-effort,
+so offline it degrades to today's behaviour.
+
+Verification: handler tests on real git repos, where the task branch exists
+only on origin and the project checkout lacks it, must fail on 3.6.84 and pass
+with the change.
+
 ### 3. CFactory: no code change
 
 With (1), the create-pr step succeeds on an existing PR, and CFactory's

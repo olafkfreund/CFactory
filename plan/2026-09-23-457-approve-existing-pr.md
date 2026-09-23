@@ -105,6 +105,27 @@ All code steps run in `/mnt/data/Source-home/GitHub/AIFactory` on branch
    and a second Approve also returning ok (idempotent). Delete the throwaway
    task afterwards through CFactory's `delete_task` action.
 
+## Amendment (approved 2026-09-23): fetch before resolving
+
+10. AIFactory tests first, in a new file
+    `apps/web-server/tests/test_approve_fetches_branch.py`, using real git: a
+    bare origin that has `aifactory/<spec>`, and a project clone without that
+    ref. Cases: `merge` with an OPEN PR (gh faked) succeeds; `create-pr` with
+    an OPEN PR returns it.
+    → verify by running them on 3.6.84 code: both fail with "Could not
+    determine task branch".
+11. `routes/pr.py` and `routes/worktree_merge.py`: replace
+    `resolve_task_branch` with `resolve_work_ref`, taking `[0]` as the branch.
+    Update `test_approve_existing_pr.py` to patch the new name.
+    → verify by the new tests, the #457 tests and `test_create_pr_fetches_branch.py`
+    passing.
+12. Gates as in step 5 (three suites, ruff, `cq_ratchet` ruff and mypy).
+13. AIFactory PR to `dev`, then release `3.6.85` as in step 7, then the deploy.
+14. Step 9 rerun on the existing probe task `020-e2e-457-approve-probe`
+    (human_review, branch pushed, no PR, no worktree): Approve, then Approve
+    again, and check the audit. Then delete the probe task and its demo-repo
+    file if merged.
+
 ## Deviations
 
 - Step 3: the existing-PR shortcut runs only for GitHub projects. `find_pr`
@@ -118,6 +139,23 @@ All code steps run in `/mnt/data/Source-home/GitHub/AIFactory` on branch
   generated `apps/web-server/openapi.yaml`. It was regenerated with
   `scripts/generate-openapi-spec.py` because `techdocs.yml` fails on a stale
   copy.
+- Step 11 (amendment): `resolve_work_ref` could not be used as-is. It also
+  requires the branch to be readable in the project repo, so a branch living
+  only in a separate worktree clone stopped resolving
+  (`test_merge_worktree_does_not_nameerror_on_blocker` failed). Instead, its
+  fetch-and-retry half was extracted into
+  `task_branch.resolve_task_branch_fetching` (which `resolve_work_ref` now
+  calls), and the two handlers use that. Resolution only gains branches, it
+  never loses one.
+- Step 13 (release blockers, approved "do it all"): the 3.6.85 release PR was
+  blocked by two unresolved Copilot threads on other changes already on `dev`,
+  both confirmed real. (1) #1595 moved `syft` into `sbom-attest` but left
+  `Upload SBOM artifacts` in `release`, so every release would fail on missing
+  files and skip attestation. The upload moved into `sbom-attest` (push and
+  dispatch), with `contents: write`. (2) #1594 `techdocs.yml` restored the
+  generator from the index instead of `HEAD`, so the base-branch generator got
+  committed. It now uses `git checkout HEAD --`. Both fixed in one AIFactory PR
+  before re-cutting `release/3.6.85`.
 - Code steps ran in a separate git worktree of AIFactory, because the main
   checkout had unrelated uncommitted work (`openapi.yaml` on
   `fix/qa-approval-needs-evidence`). That work was left untouched.

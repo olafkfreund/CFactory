@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 467
 author: olafkfreund
 ---
@@ -50,6 +50,8 @@ author: olafkfreund
 - Per-file ratchet on the touched Python files; no emojis in docs.
 
 ## Open questions
+
+Resolved 2026-09-23 (approved): 1 = 409; 2 = fix every mention repo-wide.
 
 1. **Status for "exists but nothing to act on":** 409 Conflict (the item's
    state conflicts with the action) or 422? **Recommended:** 409, which

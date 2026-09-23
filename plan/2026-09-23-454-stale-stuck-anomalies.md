@@ -27,10 +27,10 @@ Self-contained summary of the approved decisions:
 ## Steps
 
 1. `tests/test_anomalies.py`: make the fixtures control the store clock.
-   `_ev` gains a `monkeypatch` argument and patches `cfactory.store._now` to
-   return `when` around `store.upsert_from_event`, so `updated_at` lands at the
-   event's time. Update the callers. Add a matching `_snap(store, monkeypatch,
-   key, service, status, when)` helper that calls
+   `_ev` patches `cfactory.store._now` to return `when` around
+   `store.upsert_from_event` (via `pytest.MonkeyPatch.context()`, so callers
+   keep their signature), so `updated_at` lands at the event's time. Add a
+   matching `_snap(store, key, service, status, when)` helper that calls
    `store.upsert_snapshot(key, service, ServiceState(task_id="t", status=status))`
    under the same patch.
    → verify by running `pytest tests/test_anomalies.py` against the current

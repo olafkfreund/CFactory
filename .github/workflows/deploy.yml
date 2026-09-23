@@ -69,7 +69,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: tags
         run: echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003  # v4.4.0
       # The cfactory / cfactory-frontend GHCR packages are user-owned and NOT
       # linked to this repo, so the repo-scoped GITHUB_TOKEN can't push to them
       # (HEAD blob → 403 Forbidden) despite `packages: write` above. Prefer a
@@ -96,7 +96,7 @@ jobs:
 
       - name: Build + push backend
         id: build_backend
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -114,7 +114,7 @@ jobs:
 
       - name: Build + push frontend (cockpit)
         id: build_frontend
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: apps/frontend-web
           # The app's tsconfig extends the vendored fleet baseline, which lives
@@ -264,7 +264,7 @@ jobs:
           ./.github/scripts/assert-signature-location.sh "${FRONTEND_IMAGE}" "${{ steps.build_frontend.outputs.digest }}"
 
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
 
       - name: Generate + attest dual SBOMs (SPDX + CycloneDX) for both images
         run: |

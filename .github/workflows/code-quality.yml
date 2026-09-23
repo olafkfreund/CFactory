@@ -167,7 +167,7 @@ jobs:
       # this workflow. A bare `ref: <sha>` is indistinguishable from any other
       # checkout ref to anything scanning from outside; a named variable is not.
       # scripts/check_pin_freshness.py in the hub reads exactly this name.
-      CONTRACTS_PIN_SHA: "48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9"
+      CONTRACTS_PIN_SHA: "5477f12a2e8436222b7839b61e07cba9e5aaee03"
     # Two drift checks against the pinned hub, each at its own SHA:
     #   1. Vendored standards/ (ruff.toml, mypy.ini, .editorconfig,
     #      coding-standards.md and tsconfig.base.json) vs the baseline. The

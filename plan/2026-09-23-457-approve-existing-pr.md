@@ -147,6 +147,15 @@ All code steps run in `/mnt/data/Source-home/GitHub/AIFactory` on branch
   `task_branch.resolve_task_branch_fetching` (which `resolve_work_ref` now
   calls), and the two handlers use that. Resolution only gains branches, it
   never loses one.
+- Step 13 (release blockers, approved "do it all"): the 3.6.85 release PR was
+  blocked by two unresolved Copilot threads on other changes already on `dev`,
+  both confirmed real. (1) #1595 moved `syft` into `sbom-attest` but left
+  `Upload SBOM artifacts` in `release`, so every release would fail on missing
+  files and skip attestation. The upload moved into `sbom-attest` (push and
+  dispatch), with `contents: write`. (2) #1594 `techdocs.yml` restored the
+  generator from the index instead of `HEAD`, so the base-branch generator got
+  committed. It now uses `git checkout HEAD --`. Both fixed in one AIFactory PR
+  before re-cutting `release/3.6.85`.
 - Code steps ran in a separate git worktree of AIFactory, because the main
   checkout had unrelated uncommitted work (`openapi.yaml` on
   `fix/qa-approval-needs-evidence`). That work was left untouched.

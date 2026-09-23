@@ -46,6 +46,23 @@ CLI — it *consumes* the other services' REST/WebSocket surfaces (see
 | `GET /api/progress` | Live in-flight progress snapshot |
 | `GET /api/anomalies` | Stuck phases, handback loops, gate/test failures |
 
+Each anomaly has a `kind`:
+
+- `failure`: a stage's current status is a failure, rejection or explicit stuck
+  marker from the upstream.
+- `handback_loop`: a failing test was followed by more coding, i.e. test and
+  code are bouncing.
+- `stuck`: the furthest-along stage is active (not done, failed or parked for
+  review) and its **current** status has not changed for 24 hours. It is judged
+  on the stage's present status, not the last timeline event, so a task the
+  poll has since seen finish is never reported (#454).
+
+A stage waiting on a human (`human_review` and other review gates) is not an
+anomaly. It is counted by `GET /api/needs-you/count` instead, so "needs a
+click" and "something is hung" stay separate. There is no setting for the 24h
+threshold; the cockpit's shorter stall pill uses `CFACTORY_STALL_DEADLINE_SECONDS`
+(default 900s) and is unaffected.
+
 ### Live agents (read-only)
 
 | Method & path | Purpose |

@@ -4,7 +4,7 @@ issue: 458
 author: olafkfreund
 ---
 
-# Intent: queued work is not stuck work
+# Intent: queued work is not stuck work, and a discard is not a failure
 
 Follow-up to #454 (`intent/2026-09-23-454-stale-stuck-anomalies.md`).
 
@@ -22,6 +22,14 @@ backlog for over 24h is reported as a hung task. The old detector never
 flagged these only because they had no timeline events. The #454 spec's risk
 list missed this case.
 
+Second case, added 2026-09-23 (approved scope widening): every deploy and
+nightly run of `Factory/scripts/parr_regression.py` creates a PFactory probe
+plan session and closes it on teardown with `/discard`. CFactory's shared
+vocabulary lists `discarded` as a failed status, so each run shows a red
+`failure` / `high` card ("plan stage status='discarded'") until the probe item
+is pruned. A discard is a deliberate close; PFactory itself maps `discarded`
+to `done` (`PFactory/apps/backend/plan/service_helpers.py`).
+
 A queued item has no agent attached. Nothing is hung, so no recovery is
 possible or wanted. Reporting it as stuck overclaims trouble, which is the
 "honest empty state" rule #454 set out to restore.
@@ -33,7 +41,13 @@ possible or wanted. Reporting it as stuck overclaims trouble, which is the
 - `stuck` means an agent-attached stage whose status has not changed for 24h,
   as `techdocs/api.md` already says ("active ... not done, failed or parked
   for review"). The wording gains "or not yet started".
-- On today's prod data, the anomaly feed shows 0 stuck items.
+- A stage whose current status is a discard is never reported as a
+  `failure`. Other failed statuses (failed, rejected, aborted, ...) still are.
+- On today's prod data, the anomaly feed shows 0 stuck items, and a
+  post-deploy regression run leaves no failure card.
+- After the fix ships: the four leftover `backlog` probe sessions
+  (005, 006, 008, 009) and the `002-create-profile-requirements-acceptance-criteria`
+  card are discarded in PFactory, leaving the portal clean.
 
 ## Affected users and systems
 
@@ -44,7 +58,11 @@ possible or wanted. Reporting it as stuck overclaims trouble, which is the
 
 ## Constraints
 
-- No new write path to an upstream.
+- No new write path to an upstream. (The cleanup discards are a one-off
+  operator action, not code.)
+- `_contracts/factory_contracts` is vendored byte-exact from the hub (drift
+  gate). The shared status vocabulary must not be edited here; the change
+  lives in CFactory's own anomaly code.
 - Response shape and the existing `failure` / `handback_loop` kinds unchanged.
 - Per-file ratchet on `anomalies.py` and `tests/test_anomalies.py` must stay
   clean. Both are clean after #455.

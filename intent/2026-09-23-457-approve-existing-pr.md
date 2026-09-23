@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 457
 author: olafkfreund
 ---
@@ -64,6 +64,8 @@ who approved what.
   not special-case around an upstream bug if the upstream can be fixed.
 
 ## Open questions
+
+Resolved 2026-09-23: 1 = (a) AIFactory only; 2 = out of scope.
 
 1. **Where the fix lives.**
    - (a) AIFactory only: create-pr returns the existing open PR as success,

@@ -57,7 +57,8 @@ Self-contained summary of the approved decisions:
    close and is not reported". In the `stuck` bullet, "active (not done, failed
    or parked for review)" becomes "active (not done, failed, parked for review,
    or not yet started)".
-   → verify by grep: both phrases present.
+   → verify by `grep -c "deliberate close\|not yet started" techdocs/api.md`
+   returning 2 (the old sentence wraps across lines, so grep the new phrases).
 
 5. PR to `dev` (`Closes #458`, linking the intent, spec and plan). When CI is
    green, merge. Then open a `sync/dev-to-main-458` PR to `main`, merge it when

@@ -139,6 +139,14 @@ All code steps run in `/mnt/data/Source-home/GitHub/AIFactory` on branch
   generated `apps/web-server/openapi.yaml`. It was regenerated with
   `scripts/generate-openapi-spec.py` because `techdocs.yml` fails on a stale
   copy.
+- Step 11 (amendment): `resolve_work_ref` could not be used as-is. It also
+  requires the branch to be readable in the project repo, so a branch living
+  only in a separate worktree clone stopped resolving
+  (`test_merge_worktree_does_not_nameerror_on_blocker` failed). Instead, its
+  fetch-and-retry half was extracted into
+  `task_branch.resolve_task_branch_fetching` (which `resolve_work_ref` now
+  calls), and the two handlers use that. Resolution only gains branches, it
+  never loses one.
 - Code steps ran in a separate git worktree of AIFactory, because the main
   checkout had unrelated uncommitted work (`openapi.yaml` on
   `fix/qa-approval-needs-evidence`). That work was left untouched.

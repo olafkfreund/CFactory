@@ -49,13 +49,14 @@ CLI — it *consumes* the other services' REST/WebSocket surfaces (see
 Each anomaly has a `kind`:
 
 - `failure`: a stage's current status is a failure, rejection or explicit stuck
-  marker from the upstream.
+  marker from the upstream. A discard is a deliberate close and is not reported
+  (#458).
 - `handback_loop`: a failing test was followed by more coding, i.e. test and
   code are bouncing.
-- `stuck`: the furthest-along stage is active (not done, failed or parked for
-  review) and its **current** status has not changed for 24 hours. It is judged
-  on the stage's present status, not the last timeline event, so a task the
-  poll has since seen finish is never reported (#454).
+- `stuck`: the furthest-along stage is active (not done, failed, parked for
+  review, or not yet started) and its **current** status has not changed for
+  24 hours. It is judged on the stage's present status, not the last timeline
+  event, so a task the poll has since seen finish is never reported (#454).
 
 A stage waiting on a human (`human_review` and other review gates) is not an
 anomaly. It is counted by `GET /api/needs-you/count` instead, so "needs a

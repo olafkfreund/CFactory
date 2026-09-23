@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 457
 spec: spec/2026-09-23-457-approve-existing-pr.md
 ---

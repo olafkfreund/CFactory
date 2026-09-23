@@ -85,6 +85,29 @@ def test_review_is_not_stuck_but_needs_you(store):
     assert wi is not None and needs_human(wi)
 
 
+def test_queued_backlog_is_not_stuck(store):
+    # #458: a card nobody has started has no agent to hang. Not stuck.
+    _snap(store, "1", Service.PFACTORY, "backlog", OLD)
+    assert "stuck" not in _kinds(detect_anomalies(store, now=NOW))
+
+
+def test_downstream_pending_is_not_stuck(store):
+    _snap(store, "1", Service.AIFACTORY, "pending", OLD)
+    assert "stuck" not in _kinds(detect_anomalies(store, now=NOW))
+
+
+def test_discarded_is_not_a_failure(store):
+    # #458: a discard is a deliberate close (e.g. the parr-regression teardown).
+    _ev(store, "1", Service.PFACTORY, "discarded", FRESH)
+    assert "failure" not in _kinds(detect_anomalies(store, now=NOW))
+
+
+def test_rejected_is_still_a_failure(store):
+    # Guards the discard exemption from widening to real failures.
+    _ev(store, "1", Service.PFACTORY, "rejected", FRESH)
+    assert "failure" in _kinds(detect_anomalies(store, now=NOW))
+
+
 def test_anomalies_endpoint(client, store):
     _ev(store, "7", Service.AIFACTORY, "coding", OLD)  # stale -> stuck under real 'now'
     body = client.get("/api/anomalies").json()

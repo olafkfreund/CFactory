@@ -2,10 +2,12 @@
 
 Heuristics over the WorkItem store that flag things worth a human's attention:
 failures/gate rejections, repeated handback loops (test→code bouncing), and
-stuck stages: an active (non-terminal, non-review) stage whose current status
-has not changed for a day. Items parked for review are needs-you, not
-anomalies. Cost-spike detection is deferred — the model carries no cost data
-yet (see #14). Pure functions; ``now`` is injectable for hermetic tests.
+stuck stages: an active (non-terminal, non-review, started) stage whose
+current status has not changed for a day. Items parked for review are
+needs-you, not anomalies; not-yet-started items are backlog, not anomalies.
+A discard is a deliberate close, never a failure. Cost-spike detection is
+deferred — the model carries no cost data yet (see #14). Pure functions;
+``now`` is injectable for hermetic tests.
 """
 
 from __future__ import annotations
@@ -14,11 +16,16 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 from cfactory.models import Service, WorkItem
-from cfactory.status_taxonomy import is_failure_or_stuck as _is_failure, is_review
+from cfactory.status_taxonomy import is_failure_or_stuck as _is_failure, is_queued, is_review
 from cfactory.store import WorkItemStore, compute_liveness
 
 # An active stage whose status has not changed for this long is "stuck".
 _DEFAULT_STALE_SECONDS = 86_400  # 24h
+
+# A discard is a deliberate close (a human, or the parr-regression probe
+# teardown), not a fault; PFactory maps it to done. The shared vocabulary keeps
+# it under "failed", so the exemption lives here (#458).
+_DISCARDED = frozenset({"discard", "discarded"})
 
 
 @dataclass
@@ -35,7 +42,7 @@ def _detect_for_item(wi: WorkItem, now: datetime, stale_seconds: int) -> list[An
 
     # 1. Failure / gate rejection on any stage slice.
     for stage, s in (("plan", wi.pfactory), ("code", wi.aifactory), ("test", wi.tfactory)):
-        if _is_failure(s.status):
+        if _is_failure(s.status) and (s.status or "").strip().lower() not in _DISCARDED:
             found.append(
                 Anomaly(
                     "failure",
@@ -78,8 +85,10 @@ def _detect_for_item(wi: WorkItem, now: datetime, stale_seconds: int) -> list[An
     # event: the poll updates slices without appending events, so the timeline
     # can say human_review long after the task finished (#454). A stage parked
     # for review is waiting on a human, not hung; needs_you counts it instead.
+    # A queued stage has no agent attached yet, so nothing can be hung (#458).
     liveness = compute_liveness(wi, now=now, deadline_seconds=stale_seconds)
-    if liveness.stalled and not is_review(liveness.active_status):
+    status = liveness.active_status
+    if liveness.stalled and not is_review(status) and not is_queued(status):
         hours = int(liveness.last_activity_age_seconds // 3600)
         found.append(
             Anomaly(

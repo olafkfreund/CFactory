@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 458
 author: olafkfreund
 ---
@@ -50,6 +50,8 @@ possible or wanted. Reporting it as stuck overclaims trouble, which is the
   clean. Both are clean after #455.
 
 ## Open questions
+
+Resolved 2026-09-23: option (a), nowhere new.
 
 1. Should a queued item that has sat for a long time (e.g. 7+ days) surface
    anywhere?

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 458
 intent: intent/2026-09-23-458-queued-not-stuck.md
 ---

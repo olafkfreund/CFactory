@@ -108,6 +108,10 @@ Action kinds:
 Every confirmed action is recorded in the HMAC-anchored audit chain before its result
 is returned (see [DEC-005](decisions.md)).
 
+Approving a code task (`approve_review`: AIFactory create-pr, then merge) is safe to
+repeat, and it works after the task's worktree was cleaned up. An existing PR is
+reused and merged instead of failing with "already exists" (#457).
+
 ### Health
 
 | Method & path | Purpose |

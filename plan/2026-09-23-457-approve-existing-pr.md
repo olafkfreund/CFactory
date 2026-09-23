@@ -105,6 +105,23 @@ All code steps run in `/mnt/data/Source-home/GitHub/AIFactory` on branch
    and a second Approve also returning ok (idempotent). Delete the throwaway
    task afterwards through CFactory's `delete_task` action.
 
+## Deviations
+
+- Step 3: the existing-PR shortcut runs only for GitHub projects. `find_pr`
+  speaks `gh`, and `create-pr` also serves GitLab and Azure DevOps through
+  `_use_provider_api` / `_get_project_provider`. Those providers keep today's
+  path. An unknown provider (lookup raises) also keeps today's path.
+- Step 3: the handler's existing lazy `from .github import ...` moved up to
+  before the check, instead of adding a second lazy import (strict-ruff ratchet
+  PLC0415).
+- Step 6: the AIFactory "docs" are the two handler docstrings, which feed the
+  generated `apps/web-server/openapi.yaml`. It was regenerated with
+  `scripts/generate-openapi-spec.py` because `techdocs.yml` fails on a stale
+  copy.
+- Code steps ran in a separate git worktree of AIFactory, because the main
+  checkout had unrelated uncommitted work (`openapi.yaml` on
+  `fix/qa-approval-needs-evidence`). That work was left untouched.
+
 ## Tests
 
 ```bash

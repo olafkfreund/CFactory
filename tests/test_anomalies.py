@@ -2,28 +2,42 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
+import cfactory.store
+import pytest
 from cfactory.copilot.anomalies import detect_anomalies
-from cfactory.models import CompletionEvent, Service
+from cfactory.models import CompletionEvent, Service, ServiceState
+from cfactory.needs_you import needs_human
 
 
 def _ev(store, key, service, status, when):
-    store.upsert_from_event(
-        CompletionEvent(
-            correlation_key=key,
-            service=service,
-            task_id="t",
-            status=status,
-            phase=service.value,
-            updated_at=when,
+    # The store stamps updated_at with its own clock; pin it to ``when`` so the
+    # liveness age is measured from the event's time, not the test's wall clock.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cfactory.store, "_now", lambda: when)
+        store.upsert_from_event(
+            CompletionEvent(
+                correlation_key=key,
+                service=service,
+                task_id="t",
+                status=status,
+                phase=service.value,
+                updated_at=when,
+            )
         )
-    )
 
 
-NOW = datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)
-FRESH = datetime(2026, 6, 5, 11, 50, tzinfo=timezone.utc)  # 10 min ago
-OLD = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)  # days ago
+def _snap(store, key, service, status, when):
+    """A polled snapshot: updates the stage slice with no timeline entry."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cfactory.store, "_now", lambda: when)
+        store.upsert_snapshot(key, service, ServiceState(task_id="t", status=status))
+
+
+NOW = datetime(2026, 6, 5, 12, 0, tzinfo=UTC)
+FRESH = datetime(2026, 6, 5, 11, 50, tzinfo=UTC)  # 10 min ago
+OLD = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)  # days ago
 
 
 def _kinds(anoms):
@@ -53,6 +67,22 @@ def test_not_stuck_when_terminal_or_fresh(store):
     _ev(store, "1", Service.TFACTORY, "triaged", OLD)  # old but terminal-ok
     _ev(store, "2", Service.AIFACTORY, "coding", FRESH)  # fresh
     assert "stuck" not in _kinds(detect_anomalies(store, now=NOW))
+
+
+def test_not_stuck_when_polled_slice_is_done(store):
+    # #454: the last EVENT says human_review, but the poll has since moved the
+    # slice to done. The current status wins; the stale event must not flag it.
+    _ev(store, "1", Service.AIFACTORY, "human_review", OLD)
+    _snap(store, "1", Service.AIFACTORY, "done", OLD)
+    assert "stuck" not in _kinds(detect_anomalies(store, now=NOW))
+
+
+def test_review_is_not_stuck_but_needs_you(store):
+    # #454: parked for a human is not hung. It belongs to needs-you, not anomalies.
+    _ev(store, "1", Service.AIFACTORY, "human_review", OLD)
+    assert "stuck" not in _kinds(detect_anomalies(store, now=NOW))
+    wi = store.get("1")
+    assert wi is not None and needs_human(wi)
 
 
 def test_anomalies_endpoint(client, store):
@@ -92,7 +122,7 @@ def _handback_count(store, key) -> int:
 def _build(store, key, steps):
     """Seed a timeline of (service, status) pairs with strictly increasing times
     so every event lands distinctly in the timeline (idempotency keys on id)."""
-    base = datetime(2026, 6, 5, 10, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 6, 5, 10, 0, tzinfo=UTC)
     for n, (service, status) in enumerate(steps):
         store.upsert_from_event(
             CompletionEvent(
@@ -108,22 +138,22 @@ def _build(store, key, steps):
 
 
 def test_handback_scan_matches_brute_force(store):
-    T, A, P = Service.TFACTORY, Service.AIFACTORY, Service.PFACTORY
+    t, a, p = Service.TFACTORY, Service.AIFACTORY, Service.PFACTORY
     cases = {
-        "none": [(P, "done"), (A, "coding")],  # no test failures
-        "one_then_code": [(T, "rejected"), (A, "coding")],  # 1 bounce
+        "none": [(p, "done"), (a, "coding")],  # no test failures
+        "one_then_code": [(t, "rejected"), (a, "coding")],  # 1 bounce
         "fail_after_last_code": [  # trailing fail: no code after
-            (T, "rejected"),
-            (A, "coding"),
-            (T, "triager_failed"),
+            (t, "rejected"),
+            (a, "coding"),
+            (t, "triager_failed"),
         ],
         "two_bounces": [
-            (T, "rejected"),
-            (A, "coding"),
-            (T, "triager_failed"),
-            (A, "coding"),
+            (t, "rejected"),
+            (a, "coding"),
+            (t, "triager_failed"),
+            (a, "coding"),
         ],
-        "passing_test": [(T, "passed"), (A, "coding")],  # not a failure status
+        "passing_test": [(t, "passed"), (a, "coding")],  # not a failure status
     }
     for key, steps in cases.items():
         _build(store, key, steps)

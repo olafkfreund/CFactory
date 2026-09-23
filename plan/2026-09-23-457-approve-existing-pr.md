@@ -105,6 +105,27 @@ All code steps run in `/mnt/data/Source-home/GitHub/AIFactory` on branch
    and a second Approve also returning ok (idempotent). Delete the throwaway
    task afterwards through CFactory's `delete_task` action.
 
+## Amendment (approved 2026-09-23): fetch before resolving
+
+10. AIFactory tests first, in a new file
+    `apps/web-server/tests/test_approve_fetches_branch.py`, using real git: a
+    bare origin that has `aifactory/<spec>`, and a project clone without that
+    ref. Cases: `merge` with an OPEN PR (gh faked) succeeds; `create-pr` with
+    an OPEN PR returns it.
+    → verify by running them on 3.6.84 code: both fail with "Could not
+    determine task branch".
+11. `routes/pr.py` and `routes/worktree_merge.py`: replace
+    `resolve_task_branch` with `resolve_work_ref`, taking `[0]` as the branch.
+    Update `test_approve_existing_pr.py` to patch the new name.
+    → verify by the new tests, the #457 tests and `test_create_pr_fetches_branch.py`
+    passing.
+12. Gates as in step 5 (three suites, ruff, `cq_ratchet` ruff and mypy).
+13. AIFactory PR to `dev`, then release `3.6.85` as in step 7, then the deploy.
+14. Step 9 rerun on the existing probe task `020-e2e-457-approve-probe`
+    (human_review, branch pushed, no PR, no worktree): Approve, then Approve
+    again, and check the audit. Then delete the probe task and its demo-repo
+    file if merged.
+
 ## Deviations
 
 - Step 3: the existing-PR shortcut runs only for GitHub projects. `find_pr`

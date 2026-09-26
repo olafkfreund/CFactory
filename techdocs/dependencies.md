@@ -41,10 +41,13 @@ CFactory **reads** the other three Factories' state and completion events — it
 Backstage catalog:
 
 - **PFactory** (Plan) — adapter polls its REST plan surface; CFactory can propose
-  `approve_gate` against its human-review gate.
+  `approve_plan`, and `approve_review` / `reject_review` / `recover` against a plan
+  session. Plan sessions cannot be deleted.
 - **AIFactory** (Act) — adapter polls its task surface; CFactory can propose
-  `trigger_handoff` (create-and-run) and `kick_handback` (apply-correction).
-- **TFactory** (Verify) — adapter polls its task/report surface for test verdicts.
+  `approve_review` (create-pr, then merge), `reject_review` (apply-correction),
+  `recover` and `delete_task`.
+- **TFactory** (Verify) — adapter polls its task/report surface for test verdicts;
+  the same review, recover and delete kinds apply to a TFactory task.
 
 How it reads each service:
 

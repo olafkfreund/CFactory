@@ -110,3 +110,10 @@ config change. Callers get 404 again for both cases.
   not: its `onPropose` catch discards the error, so the 409 reason shows only
   in `TaskActions.tsx`. Surfacing it in the Copilot panel is left as a
   follow-up.
+
+- (review, lead) `CopilotPanel.tsx` `onPropose` swallowed every propose error, so
+  the spec's assumption that it renders `error.message` was false. It now posts
+  "Could not propose: <reason>" into the panel's message thread, so the 409
+  reason is visible there too. The file's two pre-existing emojis (repo rule: no
+  emojis in UI copy) were replaced with plain text ("Error: ...", "No
+  anomalies") while the file was being touched.

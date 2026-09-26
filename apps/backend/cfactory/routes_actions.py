@@ -11,12 +11,13 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
-from .actions import PreparedAction, execute_action, propose
+from .actions import PreparedAction, _nothing_to_act_on, execute_action, propose
 from .api_deps import ProposeRequest, action_transport_dep, audit_dep, store_dep
 from .audit import AuditStore, ChainReport
 from .auth import require_scope
 from .config import get_settings
 from .enterprise import identity_dep
+from .models import WorkItem
 from .store import WorkItemStore
 
 router = APIRouter(tags=["actions"])
@@ -30,14 +31,23 @@ async def propose_action(
     """Build (but do NOT execute) a PreparedAction for the given work item.
 
     Advise-only: this never touches an upstream service. 400 for an unknown
-    kind; 404 if there's no work item for the correlation key."""
+    kind; 404 if there's no work item for the correlation key; 409 if the item
+    exists but has nothing to act on for this kind (e.g. every stage is
+    terminal), with the reason in ``detail`` (#467)."""
+
+    def _propose() -> tuple[PreparedAction | None, WorkItem | None]:
+        action = propose(store, req.kind, req.correlation_key, req.note)
+        return action, (store.get(req.correlation_key) if action is None else None)
+
     try:
-        action = await run_in_threadpool(propose, store, req.kind, req.correlation_key, req.note)
+        action, wi = await run_in_threadpool(_propose)
     except KeyError:
         raise HTTPException(status_code=400, detail=f"unknown action kind: {req.kind!r}") from None
-    if action is None:
+    if action is not None:
+        return action
+    if wi is None:
         raise HTTPException(status_code=404, detail=f"no work item for {req.correlation_key!r}")
-    return action
+    raise HTTPException(status_code=409, detail=_nothing_to_act_on(req.kind, wi))
 
 
 @router.post("/api/actions/execute")

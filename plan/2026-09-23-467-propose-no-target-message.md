@@ -96,3 +96,17 @@ cd apps/frontend-web && npm run typecheck && npm test -- --run && npm run build
 
 Revert the implementation commit and promote again. There is no data or
 config change. Callers get 404 again for both cases.
+
+## Deviations
+
+- **`apps/frontend-web/src/CopilotPanel.tsx`** was not in the plan. Its
+  `ACTION_FOR_KIND` map proposed `kick_handback` and `trigger_handoff`, which
+  are not `ActionKind` values, so every anomaly card's Propose button got a 400
+  and the error was swallowed. The step 5 grep covers `*.tsx`, so this surfaced
+  there. The map now uses real kinds: `handback_loop` and `failure` propose
+  `reject_review` (the same `apply-correction` endpoint `kick_handback` named),
+  and `stuck` proposes `recover`.
+- The spec says `CopilotPanel.tsx` already renders `error.message`. It does
+  not: its `onPropose` catch discards the error, so the 409 reason shows only
+  in `TaskActions.tsx`. Surfacing it in the Copilot panel is left as a
+  follow-up.

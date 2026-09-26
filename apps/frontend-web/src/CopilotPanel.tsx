@@ -21,10 +21,11 @@ interface Msg {
 
 // Which action a given anomaly kind proposes. Advise + confirm: clicking only
 // PROPOSES; nothing executes until the human confirms.
+// Values must be ActionKind values the backend's PROPOSERS know (#467).
 const ACTION_FOR_KIND: Record<string, string> = {
-  handback_loop: "kick_handback",
-  failure: "kick_handback",
-  stuck: "trigger_handoff",
+  handback_loop: "reject_review",
+  failure: "reject_review",
+  stuck: "recover",
 };
 
 export default function CopilotPanel({

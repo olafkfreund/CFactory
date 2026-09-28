@@ -92,13 +92,25 @@ an upstream service. Model is set by `CFACTORY_COPILOT_MODEL` (default
 | `POST /api/actions/execute` | Run a CONFIRMED `PreparedAction` (requires `write` scope) |
 | `GET /api/audit` | Recent confirmed actions, newest first — the HITL trail |
 
-Action kinds:
+Action kinds (`ActionKind` in `cfactory/actions.py`). Review, reject and recover act on
+the furthest stage that is still in flight; terminal (done/failed) stages are skipped.
 
-| Kind | Target | Endpoint (best-effort contract) |
+| Kind | Target | Endpoint |
 |---|---|---|
-| `approve_gate` | PFactory | `POST /api/plans/{session}/approve` |
-| `trigger_handoff` | AIFactory | `POST /api/tasks/create-and-run` |
-| `kick_handback` | AIFactory | `POST /api/tasks/{task_id}/apply-correction` |
+| `approve_plan` | PFactory | `POST /api/tasks/{task_id}/approve-plan` |
+| `approve_review` | AIFactory / TFactory | `POST /api/tasks/{task_id}/worktree/create-pr`, then `POST /api/tasks/{task_id}/worktree/merge` |
+| | PFactory (plan stage) | `POST /api/plan/sessions/{sid}/approve` |
+| `reject_review` | AIFactory / TFactory | `POST /api/tasks/{task_id}/apply-correction` |
+| | PFactory (plan stage) | `POST /api/plan/sessions/{sid}/reject` |
+| `recover` | AIFactory / TFactory | `POST /api/tasks/{task_id}/recover` |
+| | PFactory (plan stage) | `POST /api/plan/sessions/{sid}/process` |
+| `delete_task` | AIFactory / TFactory | `DELETE /api/tasks/{task_id}` (also on failed tasks; not for plan sessions) |
+| `dispatch_card` | per card | built by `card_intake` when a card moves to ready; not proposable |
+
+`POST /api/actions/propose` answers **400** for an unknown kind, **404** when no work
+item exists for the correlation key, and **409** when the item exists but there is
+nothing to act on for that kind (for example every stage is done, or `delete_task` on a
+plan session). The 409 `detail` says why, naming each stage's current status.
 
 !!! note "SSRF guard"
     `PreparedAction.endpoint` must be a **root-relative path** (no scheme, no host).

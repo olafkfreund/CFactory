@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   approvalBlockReason,
@@ -7,6 +7,7 @@ import {
   CostRoutingSchema,
   FeedMessageSchema,
   HealthSchema,
+  proposeAction,
   ProcessDetailSchema,
   VerificationBlockSchema,
   ServiceStateSchema,
@@ -413,5 +414,41 @@ describe("VerificationBlockSchema", () => {
       levels: [{ level: "VAL-1", status: "achieved", reason: 42 }],
     });
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("proposeAction error mapping (#467)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const reply = (status: number, body: string) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(body, { status }))),
+    );
+
+  it("throws the server detail on 409", async () => {
+    reply(
+      409,
+      JSON.stringify({ detail: "nothing to approve_review for '42': aifactory is 'done'" }),
+    );
+    await expect(proposeAction("approve_review", "42")).rejects.toThrow(
+      "nothing to approve_review for '42': aifactory is 'done'",
+    );
+  });
+
+  it("falls back when a 409 body has no usable detail", async () => {
+    reply(409, "not json");
+    await expect(proposeAction("approve_review", "42")).rejects.toThrow(
+      "nothing to act on for this item",
+    );
+  });
+
+  it("keeps the 404 message", async () => {
+    reply(404, JSON.stringify({ detail: "no work item for '42'" }));
+    await expect(proposeAction("approve_review", "42")).rejects.toThrow(
+      "no actionable task for this item",
+    );
   });
 });

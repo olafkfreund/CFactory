@@ -327,6 +327,31 @@ def propose(
     return PROPOSERS[kind](store, correlation_key, note)
 
 
+def _nothing_to_act_on(kind: str, wi: WorkItem) -> str:
+    """Why ``propose(kind, ...)`` returned None for an EXISTING work item (#467).
+
+    Mirrors the proposers' own rules: approve_plan needs a pfactory task;
+    delete_task uses :func:`_delete_target` and refuses plan sessions; the rest
+    use :func:`_review_target`, which skips terminal stages.
+    """
+    head = f"nothing to {kind} for {wi.correlation_key!r}"
+    if kind == "approve_plan":
+        return f"{head}: no pfactory plan task"
+    if kind == "delete_task":
+        target = _delete_target(wi)
+        if target is not None and target[0] == _PFACTORY:
+            return f"{head}: pfactory plan sessions cannot be removed; use reject"
+        return f"{head}: no stage holds a task"
+    stages = [
+        f"{attr} is {getattr(wi, attr).status!r}"
+        for attr in ("pfactory", "aifactory", "tfactory")
+        if getattr(wi, attr).task_id
+    ]
+    if not stages:
+        return f"{head}: no stage holds a task"
+    return f"{head}: {', '.join(stages)}, no stage is in flight"
+
+
 def _base_url_for(settings: Settings, target_service: str) -> str:
     return {
         Service.PFACTORY.value: settings.pfactory_api_url,

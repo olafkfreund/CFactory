@@ -21,10 +21,11 @@ interface Msg {
 
 // Which action a given anomaly kind proposes. Advise + confirm: clicking only
 // PROPOSES; nothing executes until the human confirms.
+// Values must be ActionKind values the backend's PROPOSERS know (#467).
 const ACTION_FOR_KIND: Record<string, string> = {
-  handback_loop: "kick_handback",
-  failure: "kick_handback",
-  stuck: "trigger_handoff",
+  handback_loop: "reject_review",
+  failure: "reject_review",
+  stuck: "recover",
 };
 
 export default function CopilotPanel({
@@ -67,8 +68,11 @@ export default function CopilotPanel({
     try {
       const action = await proposeAction(actionKind, correlationKey);
       setPending((p) => ({ ...p, [idx]: action }));
-    } catch {
-      /* surface nothing destructive — proposing is read-only */
+    } catch (err) {
+      // Proposing is read-only, but a refusal still needs a reason (#467): a
+      // 409 carries why there is nothing to act on.
+      const msg = err instanceof Error ? err.message : String(err);
+      setMessages((m) => [...m, { role: "copilot", text: `Could not propose: ${msg}` }]);
     } finally {
       setBusy((b) => ({ ...b, [idx]: false }));
     }
@@ -109,7 +113,7 @@ export default function CopilotPanel({
     } catch (err) {
       setMessages((m) => [
         ...m,
-        { role: "copilot", text: `⚠️ ${err instanceof Error ? err.message : String(err)}` },
+        { role: "copilot", text: `Error: ${err instanceof Error ? err.message : String(err)}` },
       ]);
     } finally {
       setAsking(false);
@@ -129,7 +133,7 @@ export default function CopilotPanel({
           </div>
         )}
         {anomalies.length === 0 ? (
-          <div className="card card--ok">No anomalies 🎉</div>
+          <div className="card card--ok">No anomalies</div>
         ) : (
           anomalies.map((a, i) => {
             const actionKind = ACTION_FOR_KIND[a.kind];

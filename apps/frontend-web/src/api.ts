@@ -1389,6 +1389,14 @@ export async function proposeAction(
     body: JSON.stringify({ kind, correlation_key, note }),
   });
   if (resp.status === 404) throw new Error("no actionable task for this item");
+  if (resp.status === 409) {
+    // #467: the item exists but has nothing to act on; the server says why.
+    const body: unknown = await resp.json().catch(() => null);
+    const detail = (body as { detail?: unknown } | null)?.detail;
+    throw new Error(
+      typeof detail === "string" && detail ? detail : "nothing to act on for this item",
+    );
+  }
   if (!resp.ok) throw new Error(`propose failed: HTTP ${resp.status}`);
   return PreparedActionSchema.parse(await resp.json());
 }

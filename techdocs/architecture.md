@@ -108,8 +108,9 @@ A Claude Agent SDK layer whose tools are CFactory's *own* functions:
 - **Read tools** — query WorkItems, summarise a timeline, compute rollups and token
   totals, detect anomalies. The LLM call is isolated behind a `runner` seam so the
   test suite needs neither the SDK nor `ANTHROPIC_API_KEY`.
-- **Action tools (advise + confirm)** — `propose_approve_gate`,
-  `propose_trigger_handoff`, `propose_kick_handback`. Each builds a `PreparedAction`
+- **Action tools (advise + confirm)** — `propose_approve_plan`,
+  `propose_approve_review`, `propose_reject_review`, `propose_recover`,
+  `propose_delete_task`. Each builds a `PreparedAction`
   (target service · endpoint · payload · rationale) that only executes on an explicit
   `POST /api/actions/execute`. **No autonomous writes.**
 

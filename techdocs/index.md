@@ -19,8 +19,8 @@ click — triggers the services through their existing APIs.
   for stuck phases, handback loops and gate/test failures.
 - **Copilot** — a Claude Agent SDK layer that answers "where is feature #142 and why
   is it stuck" over the live board snapshot. Read-only; never writes.
-- **Advise + confirm** — propose an action (`approve_gate`, `trigger_handoff`,
-  `kick_handback`), review it, then explicitly confirm to execute. **No autonomous
+- **Advise + confirm** — propose an action (`approve_plan`, `approve_review`,
+  `reject_review`, `recover`, `delete_task`), review it, then explicitly confirm to execute. **No autonomous
   writes**; every confirmed action lands in a tamper-evident audit log.
 
 ## Why it matters

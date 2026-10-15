@@ -118,13 +118,19 @@ def poll_progress_once(
                 hub.update(lp)
                 changed.append(lp)
             if store is not None:
-                # A dead task whose issue also has a live task (a re-run) is not
-                # hydrated, or it would overwrite the re-run on the shared row.
+                # Tasks sharing a key share one row. A dead task is hydrated only
+                # when its key has no live task (a re-run), and then only the last
+                # dead one listed, so two writers never flip the row every poll.
                 alive_keys = {i.correlation_key for i in items if i.task_id not in stuck_ids}
+                last_dead = {i.correlation_key: i.task_id for i in items if i.task_id in stuck_ids}
                 live = [
                     i
                     for i in items
-                    if i.task_id not in stuck_ids or i.correlation_key not in alive_keys
+                    if i.task_id not in stuck_ids
+                    or (
+                        i.correlation_key not in alive_keys
+                        and last_dead[i.correlation_key] == i.task_id
+                    )
                 ]
                 hydrate(store, live)
                 store.reconcile_snapshot(adapter.service, {i.task_id for i in live})

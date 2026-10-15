@@ -23,7 +23,7 @@ from sqlalchemy.types import JSON
 from .config import DEFAULT_TENANT, get_settings
 from .db import Base, add_column_ddl, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem, as_utc
-from .status_taxonomy import is_dead_stage, is_terminal as _is_terminal
+from .status_taxonomy import is_dead_stage, is_done, is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
 
 logger = logging.getLogger(__name__)
@@ -573,7 +573,14 @@ class WorkItemStore:
                         and existing.get("phase") == new_slice.get("phase")
                         and (existing.get("usage") or None) == (new_slice.get("usage") or None)
                     )
-                    if unchanged and row is not None:
+                    # A dead task never takes a row back from a different task
+                    # that already finished there (a completed re-run, #479).
+                    superseded = (
+                        is_done(existing.get("status"))
+                        and existing.get("task_id") != new_slice.get("task_id")
+                        and is_dead_stage(new_slice.get("status"))
+                    )
+                    if (unchanged or superseded) and row is not None:
                         return row.to_model()
                     if row is None:
                         row = WorkItemRow(

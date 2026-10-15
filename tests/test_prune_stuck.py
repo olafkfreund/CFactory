@@ -254,3 +254,56 @@ def test_running_row_is_never_removed_however_old():
     s.upsert_snapshot("1", Service.AIFACTORY, ServiceState(task_id="ai:1", status="in_progress"))
     assert s.prune_dead(now=_later(1000)) == 0
     assert s.get("1") is not None
+
+
+def test_two_dead_tasks_on_one_key_still_age_and_are_pruned():
+    # Final review of #483: two dead tasks sharing issue 7 both wrote the row each
+    # poll, so it never aged. Only the last dead one listed is hydrated.
+    a = {
+        "id": "a",
+        "status": "stalled",
+        "phase": "watchdog_stalled",
+        "metadata": {"githubIssueNumber": 7},
+    }
+    b = {"id": "b", "status": "stuck", "phase": "coding", "metadata": {"githubIssueNumber": 7}}
+    store = _store()
+    poll_progress_once(LiveProgressHub(), [_mock_ai([a, b])], store)
+    first = store.get("7").updated_at
+    for _ in range(2):
+        poll_progress_once(LiveProgressHub(), [_mock_ai([a, b])], store)
+    assert store.get("7").updated_at == first
+    assert store.get("7").aifactory.task_id == "b"
+    assert store.prune_dead(now=_later(25)) == 1
+
+
+def test_dead_original_does_not_take_the_row_back_from_a_finished_rerun():
+    # Final review of #483: the upstream drops the completed re-run but still lists
+    # the stalled original. The row stays completed and is not pruned.
+    old = {
+        "id": "old",
+        "status": "stalled",
+        "phase": "watchdog_stalled",
+        "metadata": {"githubIssueNumber": 8},
+    }
+    new = {
+        "id": "new",
+        "status": "completed",
+        "phase": "done",
+        "metadata": {"githubIssueNumber": 8},
+    }
+    store = _store()
+    poll_progress_once(LiveProgressHub(), [_mock_ai([old, new])], store)
+    poll_progress_once(LiveProgressHub(), [_mock_ai([old])], store)
+    row = store.get("8")
+    assert (row.aifactory.status, row.aifactory.task_id) == ("completed", "new")
+    assert store.prune_dead(now=_later(25)) == 0
+
+
+def test_the_poll_itself_removes_an_aged_dead_row(monkeypatch):
+    # The poller, not only a direct prune_dead call, must remove an aged dead row.
+    store = _store()
+    store.upsert_snapshot("1", Service.TFACTORY, ServiceState(task_id="tf:1", status="stalled"))
+    monkeypatch.setenv("CFACTORY_STALLED_PRUNE_HOURS", "0.000001")  # ~3.6 ms
+    time.sleep(0.01)
+    poll_progress_once(LiveProgressHub(), [_mock_ai([])], store)
+    assert store.get("1") is None

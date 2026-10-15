@@ -150,3 +150,22 @@ Test: `test_rerun_of_a_stalled_task_ends_completed`, list orders `[new, old]`
 and `[old, new]`, both end `completed` on task `new`, and repeated polls
 leave `updated_at` unchanged so the row still ages. Without the fix `[new, old]`
 ends `stalled` and `[old, new]` moves `updated_at` every poll.
+
+## Deviation (lead final review of #483): one writer per row, and no takeover
+
+- Two dead tasks on one key (a task and its re-run both dead, different
+  phases) both wrote the row every poll, so it never aged or got pruned.
+  `poll_progress_once` now hydrates only the last dead task listed for a key
+  with no live task.
+- A stalled original could take the row back from its completed re-run once
+  the upstream stopped listing the re-run, and `prune_dead` would then delete
+  the row with its history. `upsert_snapshot` (`store.py`) now skips a write
+  whose status is dead when the stage already holds a done status from a
+  different task_id. Trade-off: a later, different task that stalls after an
+  earlier one completed on the same key keeps showing the completed one.
+- The poller's own `prune_dead` call is now covered by a `poll_progress_once`
+  test.
+
+Tests: `test_two_dead_tasks_on_one_key_still_age_and_are_pruned`,
+`test_dead_original_does_not_take_the_row_back_from_a_finished_rerun`,
+`test_the_poll_itself_removes_an_aged_dead_row`; each fails without its fix.

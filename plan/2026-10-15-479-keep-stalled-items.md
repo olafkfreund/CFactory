@@ -147,4 +147,6 @@ it; the last in the list won, and `updated_at` moved every poll, so the row
 never aged. `poll_progress_once` now drops a dead task from the hydrate and
 reconcile set when the same correlation key also has a task that is not dead.
 Test: `test_rerun_of_a_stalled_task_ends_completed`, list orders `[new, old]`
-and `[old, new]`, both end `completed` on task `new`.
+and `[old, new]`, both end `completed` on task `new`, and repeated polls
+leave `updated_at` unchanged so the row still ages. Without the fix `[new, old]`
+ends `stalled` and `[old, new]` moves `updated_at` every poll.

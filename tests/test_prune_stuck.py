@@ -217,9 +217,13 @@ def test_rerun_of_a_stalled_task_ends_completed(order):
         "new": {"id": "new", "status": "completed", "metadata": {"githubIssueNumber": 7}},
     }
     store = _store()
-    for _ in range(3):
+    poll_progress_once(LiveProgressHub(), [_mock_ai([tasks[k] for k in order])], store)
+    first = store.get("7").updated_at
+    for _ in range(2):
         poll_progress_once(LiveProgressHub(), [_mock_ai([tasks[k] for k in order])], store)
     assert store.get("7").aifactory.status == "completed"
+    # Unchanged polls do not touch the row, so it still ages.
+    assert store.get("7").updated_at == first
     assert store.get("7").aifactory.task_id == "new"
 
 

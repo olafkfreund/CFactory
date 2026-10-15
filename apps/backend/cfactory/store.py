@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from functools import cache
 from typing import cast
@@ -18,6 +19,7 @@ from sqlalchemy import DateTime, Integer, Select, String, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.types import JSON
 
 from .config import DEFAULT_TENANT, get_settings
@@ -27,6 +29,8 @@ from .status_taxonomy import is_dead_stage, is_done, is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
 
 logger = logging.getLogger(__name__)
+
+_QUALIFIED_KEY = re.compile(r"^(.+)#(\d+)$")
 
 
 def _now() -> datetime:
@@ -482,6 +486,10 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, event.correlation_key)
+                    if row is None:
+                        row = self._adopt_legacy_row(
+                            session, event.correlation_key, event.service, event.task_id
+                        )
                     if row is not None and _already_recorded(row.timeline, event):
                         return row.to_model(), False
 
@@ -541,6 +549,10 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, correlation_key)
+                    if row is None:
+                        row = self._adopt_legacy_row(
+                            session, correlation_key, service, state.task_id
+                        )
                     new_slice = state.model_dump()
                     existing = (getattr(row, service.value) if row is not None else None) or {}
                     # A polled snapshot is built from the upstream's LIST row: it
@@ -726,6 +738,32 @@ class WorkItemStore:
         return session.scalars(
             self._select().where(WorkItemRow.correlation_key == correlation_key)
         ).first()
+
+    def _adopt_legacy_row(
+        self, session: Session, key: str, service: Service, task_id: str | None
+    ) -> WorkItemRow | None:
+        """Rename a bare-number row to ``key`` when it is the same task (#484).
+
+        legacy (window, #484 follow-up): producers used to send ``<n>``.
+        """
+        m = _QUALIFIED_KEY.match(key)
+        if m is None:
+            return None
+        row = self._get_row(session, m.group(2))
+        if row is None or (getattr(row, service.value) or {}).get("task_id") != task_id:
+            return None
+        logger.info(
+            "legacy correlation key migrated row %s -> %s",
+            sanitize_log(m.group(2)),
+            sanitize_log(key),
+        )
+        updated_at = row.updated_at
+        row.correlation_key = key
+        # onupdate would re-stamp this and reset the 24 h pruning clock; naming
+        # the column in the UPDATE makes it keep the old value.
+        row.updated_at = updated_at
+        flag_modified(row, "updated_at")
+        return row
 
 
 @cache

@@ -12,6 +12,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 from cfactory import task_process
 from cfactory.adapters import AIFactoryAdapter, TFactoryAdapter
 from cfactory.models import Service, ServiceState, WorkItem
@@ -205,6 +206,21 @@ def test_plan_child_stall_check_is_whole_token():
     # "installed" contains "stalled" as a substring; it must still read completed.
     wi = WorkItem(correlation_key="9", aifactory=ServiceState(status="deps_installed_done"))
     assert task_process._plan_child_state(wi)[0] == "completed"
+
+
+@pytest.mark.parametrize("order", [("new", "old"), ("old", "new")])
+def test_rerun_of_a_stalled_task_ends_completed(order):
+    # Re-review of #483: a stalled task and its completed re-run share issue 7. The
+    # dead one must not be hydrated over the live one, in either list order.
+    tasks = {
+        "old": {"id": "old", "status": "stalled", "metadata": {"githubIssueNumber": 7}},
+        "new": {"id": "new", "status": "completed", "metadata": {"githubIssueNumber": 7}},
+    }
+    store = _store()
+    for _ in range(3):
+        poll_progress_once(LiveProgressHub(), [_mock_ai([tasks[k] for k in order])], store)
+    assert store.get("7").aifactory.status == "completed"
+    assert store.get("7").aifactory.task_id == "new"
 
 
 # ── delayed removal of a dead row (user decision on #483, 2026-10-15) ────────

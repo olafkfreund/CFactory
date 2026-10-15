@@ -118,7 +118,14 @@ def poll_progress_once(
                 hub.update(lp)
                 changed.append(lp)
             if store is not None:
-                live = items
+                # A dead task whose issue also has a live task (a re-run) is not
+                # hydrated, or it would overwrite the re-run on the shared row.
+                alive_keys = {i.correlation_key for i in items if i.task_id not in stuck_ids}
+                live = [
+                    i
+                    for i in items
+                    if i.task_id not in stuck_ids or i.correlation_key not in alive_keys
+                ]
                 hydrate(store, live)
                 store.reconcile_snapshot(adapter.service, {i.task_id for i in live})
                 # Drop orphaned duplicate cards left when an upstream re-keys a

@@ -138,3 +138,13 @@ but only after a delay, instead of immediately (#186/#187) or never.
   for another limit.
 - Tests in `tests/test_prune_stuck.py`: 23 h stalled kept, 25 h stalled
   removed, running row at 1000 h kept.
+
+## Deviation (lead re-review of #483): a re-run is not overwritten by its dead task
+
+Hydrating every listed item (`live = items`, step 2) let a stalled task and
+its completed re-run, which share an issue number and so one row, both write
+it; the last in the list won, and `updated_at` moved every poll, so the row
+never aged. `poll_progress_once` now drops a dead task from the hydrate and
+reconcile set when the same correlation key also has a task that is not dead.
+Test: `test_rerun_of_a_stalled_task_ends_completed`, list orders `[new, old]`
+and `[old, new]`, both end `completed` on task `new`.

@@ -105,3 +105,37 @@ def test_missing_created_at_keeps_the_done_task(store):
         ],
     )
     assert item.aifactory.task_id == "a" and item.aifactory.status == "done"
+
+
+def test_adoption_keeps_the_stall_clock_and_needs_a_task_id(store):
+    store.upsert_snapshot("7", Service.AIFACTORY, ServiceState(task_id="t1", status="coding"))
+    before = store.get("7")
+    assert before is not None
+    # No task id: never adopt (a None match would claim any row lacking the slice).
+    store.upsert_snapshot("b/y#7", Service.PFACTORY, ServiceState(status="draft"))
+    assert store.get("7") is not None
+    # Same task, nothing else changed: renamed, and updated_at (the 24 h pruning clock) kept.
+    store.upsert_snapshot("a/x#7", Service.AIFACTORY, ServiceState(task_id="t1", status="coding"))
+    after = store.get("a/x#7")
+    assert store.get("7") is None and after is not None
+    assert after.updated_at == before.updated_at
+
+
+def test_slice_moves_into_an_existing_qualified_row(store):
+    store.upsert_snapshot("a/x#7", Service.PFACTORY, ServiceState(task_id="p1", status="done"))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="7",
+            service=Service.AIFACTORY,
+            task_id="t1",
+            status="coding",
+            updated_at=datetime(2026, 6, 4, 12, 0, tzinfo=UTC),
+            usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, "cost_usd": 0.01},
+        )
+    )
+    store.upsert_snapshot("a/x#7", Service.AIFACTORY, ServiceState(task_id="t1", status="coding"))
+    item = store.get("a/x#7")
+    assert store.get("7") is None and item is not None
+    assert item.pfactory.task_id == "p1"
+    assert item.aifactory.usage is not None and item.aifactory.usage.total_tokens == 3
+    assert [e.service for e in item.timeline] == [Service.AIFACTORY]

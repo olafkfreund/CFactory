@@ -486,10 +486,9 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, event.correlation_key)
-                    if row is None:
-                        row = self._adopt_legacy_row(
-                            session, event.correlation_key, event.service, event.task_id
-                        )
+                    row = self._adopt_legacy_row(
+                        session, event.correlation_key, event.service, event.task_id, row
+                    )
                     if row is not None and _already_recorded(row.timeline, event):
                         return row.to_model(), False
 
@@ -550,10 +549,9 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, correlation_key)
-                    if row is None:
-                        row = self._adopt_legacy_row(
-                            session, correlation_key, service, state.task_id
-                        )
+                    row = self._adopt_legacy_row(
+                        session, correlation_key, service, state.task_id, row
+                    )
                     new_slice = state.model_dump()
                     existing = (getattr(row, service.value) if row is not None else None) or {}
                     # A polled snapshot is built from the upstream's LIST row: it
@@ -744,29 +742,55 @@ class WorkItemStore:
         ).first()
 
     def _adopt_legacy_row(
-        self, session: Session, key: str, service: Service, task_id: str | None
+        self,
+        session: Session,
+        key: str,
+        service: Service,
+        task_id: str | None,
+        row: WorkItemRow | None,
     ) -> WorkItemRow | None:
-        """Rename a bare-number row to ``key`` when it is the same task (#484).
+        """Carry a bare-number row's slice for this task over to ``key`` (#484).
 
-        legacy (window, #484 follow-up): producers used to send ``<n>``.
+        legacy (window, #484 follow-up): producers used to send ``<n>``. With no
+        row on ``key`` yet, the bare row is renamed. When ``key`` already has a
+        row (e.g. PFactory's qualified origin key), this service's slice and its
+        timeline entries move across instead; otherwise prune_duplicate_stages
+        would clear the bare slice and its usage. Returns the row for ``key``.
         """
         m = _QUALIFIED_KEY.match(key)
-        if m is None:
-            return None
-        row = self._get_row(session, m.group(2))
-        if row is None or (getattr(row, service.value) or {}).get("task_id") != task_id:
-            return None
+        if m is None or task_id is None:
+            return row
+        legacy = self._get_row(session, m.group(2))
+        if legacy is None or (getattr(legacy, service.value) or {}).get("task_id") != task_id:
+            return row
+        if row is not None and (getattr(row, service.value) or {}).get("task_id") not in (
+            None,
+            task_id,
+        ):
+            return row
         logger.info(
             "legacy correlation key migrated row %s -> %s",
             sanitize_log(m.group(2)),
             sanitize_log(key),
         )
-        updated_at = row.updated_at
-        row.correlation_key = key
+        updated_at = legacy.updated_at
+        if row is None:
+            legacy.correlation_key = key
+            row = legacy
+        else:
+            timeline = legacy.timeline or []
+            moved = [e for e in timeline if e.get("service") == service.value]
+            row.timeline = [*moved, *(row.timeline or [])]
+            setattr(row, service.value, getattr(legacy, service.value))
+            legacy.timeline = [e for e in timeline if e.get("service") != service.value]
+            setattr(legacy, service.value, ServiceState().model_dump())
+            if not _row_has_stage_data(legacy):
+                session.delete(legacy)
+                return row
         # onupdate would re-stamp this and reset the 24 h pruning clock; naming
         # the column in the UPDATE makes it keep the old value.
-        row.updated_at = updated_at
-        flag_modified(row, "updated_at")
+        legacy.updated_at = updated_at
+        flag_modified(legacy, "updated_at")
         return row
 
 

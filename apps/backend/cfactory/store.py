@@ -11,7 +11,9 @@ import logging
 import os
 from datetime import UTC, datetime
 from functools import cache
+from typing import cast
 
+from factory_common.logsafe import sanitize_log
 from sqlalchemy import DateTime, Integer, Select, String, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
@@ -48,6 +50,21 @@ def stall_deadline_seconds() -> float:
     except ValueError:
         return _DEFAULT_STALL_DEADLINE_SECONDS
     return val if val > 0 else _DEFAULT_STALL_DEADLINE_SECONDS
+
+
+# How long a dead (stalled/stuck) stage stays on the board before the poller
+# removes its row (#479, #187). Long enough to be seen and counted in needs-you.
+_DEFAULT_STALLED_PRUNE_HOURS = 24.0
+
+
+def stalled_prune_seconds() -> float:
+    """The dead-row removal age in seconds (env ``CFACTORY_STALLED_PRUNE_HOURS``)."""
+    raw = os.environ.get("CFACTORY_STALLED_PRUNE_HOURS")
+    try:
+        hours = float(raw) if raw is not None else _DEFAULT_STALLED_PRUNE_HOURS
+    except ValueError:
+        hours = _DEFAULT_STALLED_PRUNE_HOURS
+    return (hours if hours > 0 else _DEFAULT_STALLED_PRUNE_HOURS) * 3600
 
 
 # `_as_aware` used to live here as a second copy of `db.as_utc`, used only for
@@ -601,6 +618,48 @@ class WorkItemStore:
                     row.updated_at = _now()
                     cleared += 1
         return cleared
+
+    def prune_dead(
+        self, *, now: datetime | None = None, max_age_seconds: float | None = None
+    ) -> int:
+        """Delete work items whose current stage is dead (stalled/stuck) and that
+        have not changed for ``max_age_seconds`` (24 h by default).
+
+        Until then the row stays, so the board, the plan DAG and needs-you show the
+        stall (#479). A row whose current stage is running is never touched here,
+        however old (#480): liveness flags it instead. Returns rows deleted.
+
+        shortcut: if the upstream still lists the dead task, the next poll
+        re-creates the row with a fresh clock, so it reappears for another limit;
+        upgrade by remembering pruned task ids if that proves noisy.
+        """
+        now = now or _now()
+        limit = stalled_prune_seconds() if max_age_seconds is None else max_age_seconds
+        deleted = 0
+        with self._session.begin() as session:
+            # _select() is typed as a tuple Select; the rows are WorkItemRow.
+            rows = cast("list[WorkItemRow]", session.scalars(self._select()).all())
+            for row in rows:
+                frontier = next(
+                    (
+                        data
+                        for svc in reversed(_PIPELINE_ORDER)
+                        if (data := getattr(row, svc) or {}).get("status")
+                    ),
+                    None,
+                )
+                updated = as_utc(row.updated_at)
+                if frontier is None or not is_dead_stage(frontier["status"]) or updated is None:
+                    continue
+                if (now - updated).total_seconds() > limit:
+                    logger.info(
+                        "[cfactory] removed stalled work item key=%s task_id=%s",
+                        sanitize_log(row.correlation_key),
+                        sanitize_log(str(frontier.get("task_id"))),
+                    )
+                    session.delete(row)
+                    deleted += 1
+        return deleted
 
     def prune_duplicate_stages(self, service: Service, task_id_to_key: dict[str, str]) -> int:
         """Drop a service's stage from a work item when that task is now reported

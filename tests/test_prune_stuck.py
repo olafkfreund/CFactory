@@ -9,6 +9,7 @@ The poller never deletes work-item rows.
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from cfactory import task_process
@@ -204,3 +205,32 @@ def test_plan_child_stall_check_is_whole_token():
     # "installed" contains "stalled" as a substring; it must still read completed.
     wi = WorkItem(correlation_key="9", aifactory=ServiceState(status="deps_installed_done"))
     assert task_process._plan_child_state(wi)[0] == "completed"
+
+
+# ── delayed removal of a dead row (user decision on #483, 2026-10-15) ────────
+
+
+def _later(hours: float) -> datetime:
+    return datetime.now(UTC) + timedelta(hours=hours)
+
+
+def test_stalled_row_is_kept_before_the_limit():
+    s = _store()
+    s.upsert_snapshot("1", Service.TFACTORY, ServiceState(task_id="tf:1", status="stalled"))
+    assert s.prune_dead(now=_later(23)) == 0
+    assert s.get("1") is not None
+
+
+def test_stalled_row_is_removed_after_the_limit():
+    s = _store()
+    s.upsert_snapshot("1", Service.AIFACTORY, ServiceState(task_id="ai:1", status="completed"))
+    s.upsert_snapshot("1", Service.TFACTORY, ServiceState(task_id="tf:1", status="stalled"))
+    assert s.prune_dead(now=_later(25)) == 1
+    assert s.get("1") is None
+
+
+def test_running_row_is_never_removed_however_old():
+    s = _store()
+    s.upsert_snapshot("1", Service.AIFACTORY, ServiceState(task_id="ai:1", status="in_progress"))
+    assert s.prune_dead(now=_later(1000)) == 0
+    assert s.get("1") is not None

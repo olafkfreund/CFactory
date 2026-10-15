@@ -137,6 +137,10 @@ def poll_progress_once(
             )
         finally:
             adapter.close()
+    if store is not None:
+        # Once per cycle, after every adapter: a dead stage stays visible for a
+        # while (24 h by default), then its row is removed (#479, #187).
+        store.prune_dead()
     return changed
 
 

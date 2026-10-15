@@ -117,3 +117,24 @@ too. To use the check from `store.py` without an import cycle,
 `_is_dead_stage` moved from `progress.py` to `status_taxonomy.is_dead_stage`
 (`progress.py` keeps the old name as an import alias; `task_process.py` imports
 it from the taxonomy). Test: `test_stalled_stage_survives_the_upstream_dropping_it`.
+
+## Deviation (user decision on #483, 2026-10-15): delayed auto-removal
+
+The user chose option (b): dead stalled cards are still removed automatically,
+but only after a delay, instead of immediately (#186/#187) or never.
+
+- `store.py` `prune_dead(now=, max_age_seconds=)`: deletes a row whose
+  current (furthest) stage is dead (`status_taxonomy.is_dead_stage`) and whose
+  `updated_at` is older than the limit; logs each removal at info with the key
+  and task id. A row whose current stage is running is never removed here,
+  however old.
+- Limit: `stalled_prune_seconds()`, env `CFACTORY_STALLED_PRUNE_HOURS`,
+  default 24 h, same pattern as `CFACTORY_STALL_DEADLINE_SECONDS`; documented
+  in `.env.example` and `techdocs/dependencies.md`.
+- `progress.py` `poll_progress_once` calls `store.prune_dead()` once per cycle,
+  after every adapter, where the old `prune_stalled()` ran.
+- Known limit (shortcut comment in code): if the upstream still lists the dead
+  task, the next poll re-creates the row with a fresh clock, so it shows again
+  for another limit.
+- Tests in `tests/test_prune_stuck.py`: 23 h stalled kept, 25 h stalled
+  removed, running row at 1000 h kept.

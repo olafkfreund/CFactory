@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 479
 also_closes: 480
 spec: spec/2026-10-15-479-keep-stalled-items.md

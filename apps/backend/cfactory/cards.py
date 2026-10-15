@@ -830,16 +830,18 @@ class CardStore:
             if row is None and (m := _QUALIFIED_KEY.match(correlation_key)):
                 # legacy (window, #484 follow-up): a card still keyed on the bare number.
                 legacy = self._select().where(CardRow.correlation_key == m.group(2))
-                row = session.scalars(legacy.order_by(CardRow.created_at.asc())).first()
-                if row is not None:
+                # Any: the stubs type this row differently across SQLAlchemy builds.
+                old: Any = session.scalars(legacy.order_by(CardRow.created_at.asc())).first()
+                if old is not None:
                     logger.info(
                         "legacy correlation key migrated card=%s %s -> %s",
-                        sanitize_log(row.card_key),
+                        sanitize_log(old.card_key),
                         sanitize_log(m.group(2)),
                         sanitize_log(correlation_key),
                     )
-                    row.correlation_key = correlation_key
+                    old.correlation_key = correlation_key
                     session.commit()
+                    return Card.model_validate(old)
             return Card.model_validate(row) if row is not None else None
 
     def get_by_issue_ref(self, issue_ref: str) -> Card | None:

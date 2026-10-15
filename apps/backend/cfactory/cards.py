@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
+from factory_common.logsafe import sanitize_log
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import DateTime, Index, Integer, Select, String, Text, func, select, update
 from sqlalchemy.engine import CursorResult, Engine
@@ -92,6 +94,8 @@ from .git_install import (
 )
 
 logger = logging.getLogger(__name__)
+
+_QUALIFIED_KEY = re.compile(r"^(.+)#(\d+)$")
 
 # The board columns. A card moves between these; there is no other status space.
 CardStatus = Literal["backlog", "ready", "in_progress", "blocked", "done"]
@@ -823,6 +827,19 @@ class CardStore:
         stmt = stmt.order_by(CardRow.created_at.asc())
         with self._session() as session:
             row = session.scalars(stmt).first()
+            if row is None and (m := _QUALIFIED_KEY.match(correlation_key)):
+                # legacy (window, #484 follow-up): a card still keyed on the bare number.
+                legacy = self._select().where(CardRow.correlation_key == m.group(2))
+                row = session.scalars(legacy.order_by(CardRow.created_at.asc())).first()
+                if row is not None:
+                    logger.info(
+                        "legacy correlation key migrated card=%s %s -> %s",
+                        sanitize_log(row.card_key),
+                        sanitize_log(m.group(2)),
+                        sanitize_log(correlation_key),
+                    )
+                    row.correlation_key = correlation_key
+                    session.commit()
             return Card.model_validate(row) if row is not None else None
 
     def get_by_issue_ref(self, issue_ref: str) -> Card | None:

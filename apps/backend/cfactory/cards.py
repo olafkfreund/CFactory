@@ -832,14 +832,10 @@ class CardStore:
                 # Only a card whose issue lives in the key's repo: a bare `7` is
                 # ambiguous, and a card with no issue_ref is skipped, not guessed.
                 legacy = self._select().where(CardRow.correlation_key == m.group(2))
-                # Any: the stubs type this row differently across SQLAlchemy builds.
+                # Any: the stubs type these rows differently across SQLAlchemy builds.
+                candidates: Any = session.scalars(legacy.order_by(CardRow.created_at.asc()))
                 old: Any = next(
-                    (
-                        c
-                        for c in session.scalars(legacy.order_by(CardRow.created_at.asc()))
-                        if _issue_project(c.issue_ref) == m.group(1)
-                    ),
-                    None,
+                    (c for c in candidates if _issue_project(c.issue_ref) == m.group(1)), None
                 )
                 if old is not None:
                     logger.info(

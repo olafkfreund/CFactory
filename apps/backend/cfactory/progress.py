@@ -92,6 +92,15 @@ def reset_progress_hub() -> None:
     get_progress_hub.cache_clear()
 
 
+def _created(item: AdapterItem) -> datetime | None:
+    """The item's creation time, UTC when naive; None when absent or unparseable."""
+    try:
+        t = datetime.fromisoformat(item.created_at or "")
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=UTC)
+
+
 def poll_progress_once(
     hub: LiveProgressHub,
     adapters: list[BaseHTTPAdapter],
@@ -118,21 +127,34 @@ def poll_progress_once(
                 hub.update(lp)
                 changed.append(lp)
             if store is not None:
-                # Tasks sharing a key share one row. A dead task is hydrated only
-                # when its key has no live task (a re-run), and then only the last
-                # dead one listed, so two writers never flip the row every poll.
-                alive_keys = {i.correlation_key for i in items if i.task_id not in stuck_ids}
-                last_dead = {i.correlation_key: i.task_id for i in items if i.task_id in stuck_ids}
-                live = [
+                # Tasks sharing a key share one row. When every task on a key has
+                # a creation time, the newest one owns the row, dead or alive
+                # (#484). Otherwise a dead task is hydrated only when its key has
+                # no live task (a re-run), and then only the last dead one listed,
+                # so two writers never flip the row every poll (#483).
+                groups: dict[str, list[AdapterItem]] = {}
+                for i in items:
+                    groups.setdefault(i.correlation_key, []).append(i)
+                owners: list[AdapterItem] = []
+                rest: list[AdapterItem] = []
+                for group in groups.values():
+                    stamped = [(t, i) for i in group if (t := _created(i)) is not None]
+                    if len(stamped) == len(group):
+                        owners.append(max(stamped, key=lambda p: p[0])[1])
+                    else:
+                        rest.extend(group)
+                alive_keys = {i.correlation_key for i in rest if i.task_id not in stuck_ids}
+                last_dead = {i.correlation_key: i.task_id for i in rest if i.task_id in stuck_ids}
+                live = owners + [
                     i
-                    for i in items
+                    for i in rest
                     if i.task_id not in stuck_ids
                     or (
                         i.correlation_key not in alive_keys
                         and last_dead[i.correlation_key] == i.task_id
                     )
                 ]
-                hydrate(store, live)
+                hydrate(store, live, newest_ids=frozenset(i.task_id for i in owners))
                 store.reconcile_snapshot(adapter.service, {i.task_id for i in live})
                 # Drop orphaned duplicate cards left when an upstream re-keys a
                 # task (fallback id -> real GitHub-issue key); reconcile preserves

@@ -538,6 +538,7 @@ class WorkItemStore:
         state: ServiceState,
         *,
         title: str | None = None,
+        newest: bool = False,
     ) -> WorkItem:
         """Update a service slice from a polled snapshot (no timeline entry).
 
@@ -587,8 +588,11 @@ class WorkItemStore:
                     )
                     # A dead task never takes a row back from a different task
                     # that already finished there (a completed re-run, #479).
+                    # `newest` (#484): the poll found this task is the newest on the
+                    # key, so a later stalled re-run does take the row back.
                     superseded = (
-                        is_done(existing.get("status"))
+                        not newest
+                        and is_done(existing.get("status"))
                         and existing.get("task_id") != new_slice.get("task_id")
                         and is_dead_stage(new_slice.get("status"))
                     )

@@ -26,6 +26,7 @@ import LiveTaskStamp from "./LiveTaskStamp";
 import { StageFlow } from "./TaskFlow";
 import { displayTitle, keySlug } from "./correlationKey";
 import { stageState } from "./taskState";
+import { testStageIsComplete } from "./stageComplete";
 
 const STAGES = [
   { key: "pfactory", label: "Plan", svc: "PFactory" },
@@ -240,10 +241,11 @@ export default function TaskDetail({
   // Stage-level completion, keyed by the DAG's stage vocabulary (plan/code/test)
   // — the flow diagram tints its frame green when its stage is done, while its
   // per-node states stay honest below (#planflow-green).
+  const testLanes = proc?.graphs?.test?.nodes ?? [];
   const stageDone = {
     plan: stageState(wi.pfactory.status) === "done",
     code: stageState(wi.aifactory.status) === "done",
-    test: stageState(wi.tfactory.status) === "done",
+    test: testStageIsComplete(stageState(wi.tfactory.status) === "done", testLanes),
   };
 
   const procAvailable = proc != null && proc.available !== false;

@@ -41,10 +41,13 @@ CFactory **reads** the other three Factories' state and completion events — it
 Backstage catalog:
 
 - **PFactory** (Plan) — adapter polls its REST plan surface; CFactory can propose
-  `approve_gate` against its human-review gate.
+  `approve_plan`, and `approve_review` / `reject_review` / `recover` against a plan
+  session. Plan sessions cannot be deleted.
 - **AIFactory** (Act) — adapter polls its task surface; CFactory can propose
-  `trigger_handoff` (create-and-run) and `kick_handback` (apply-correction).
-- **TFactory** (Verify) — adapter polls its task/report surface for test verdicts.
+  `approve_review` (create-pr, then merge), `reject_review` (apply-correction),
+  `recover` and `delete_task`.
+- **TFactory** (Verify) — adapter polls its task/report surface for test verdicts;
+  the same review, recover and delete kinds apply to a TFactory task.
 
 How it reads each service:
 
@@ -66,7 +69,8 @@ build-time (`VITE_*`). A fresh operator needs nothing beyond this table plus the
 [`.env.example`](https://github.com/dataseeek/cfactory/blob/main/.env.example) at
 the repo root. Every backend variable maps 1:1 to a field on the `Settings` class
 in `apps/backend/cfactory/config.py` (`env_prefix="CFACTORY_"`), except
-`CFACTORY_STALL_DEADLINE_SECONDS`, which is read directly in `store.py`.
+`CFACTORY_STALL_DEADLINE_SECONDS` and `CFACTORY_STALLED_PRUNE_HOURS`, which are
+read directly in `store.py`.
 
 For booleans, "on" is `true`/`1` and "off" is `false`/`0` (pydantic parsing);
 the table gives the effect of each state.
@@ -89,6 +93,7 @@ the table gives the effect of each state.
 | `CFACTORY_LIVE_PROGRESS` | `false` | no | On: poll PFactory/TFactory + subscribe AIFactory progress and broadcast `{type:"progress"}`. Off: no live-progress. | `config.py` `live_progress` | env |
 | `CFACTORY_POLL_INTERVAL_SECONDS` | `3.0` | no | Live-progress poll interval, seconds. Only relevant when `CFACTORY_LIVE_PROGRESS` is on. | `config.py` `poll_interval_seconds` | env |
 | `CFACTORY_STALL_DEADLINE_SECONDS` | `900.0` | no | Idle budget (seconds) before an active, non-terminal stage is flagged stalled (#105). Values `<= 0` or unparseable fall back to the default. | `store.py` `stall_deadline_seconds()` | env only — **no Helm knob** (add via `config.extraEnv`) |
+| `CFACTORY_STALLED_PRUNE_HOURS` | `24` | no | Hours a work item whose current stage is stalled/stuck stays on the board before the live-progress poller removes it (#479). Values `<= 0` or unparseable fall back to the default. | `store.py` `stalled_prune_seconds()` | env only — **no Helm knob** (add via `config.extraEnv`) |
 | `CFACTORY_COPILOT_MODEL` | `claude-opus-4-8` | no | Copilot model id; meaning depends on `CFACTORY_COPILOT_PROVIDER`. Editable at runtime from the Settings view. | `config.py` `copilot_model` | env / Helm `config.copilotModel` |
 | `CFACTORY_COPILOT_PROVIDER` | `claude` | no | Copilot LLM provider: `claude` (Claude Agent SDK, reads `ANTHROPIC_API_KEY`) or `ollama`/`openai_compatible` (OpenAI-compatible chat endpoint). | `config.py` `copilot_provider` | env / Helm `config.copilotProvider` |
 | `CFACTORY_OLLAMA_CLOUD_BASE_URL` | `https://ollama.com/v1` | no | OpenAI-compatible copilot base URL (includes `/v1`). Also accepts the bare `OLLAMA_CLOUD_BASE_URL`. Only used when provider is not `claude`. | `config.py` `ollama_cloud_base_url` | env / Helm `config.ollamaCloudBaseUrl` |

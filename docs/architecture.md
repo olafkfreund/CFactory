@@ -72,8 +72,9 @@ An LLM layer (Claude Agent SDK) whose tools are CFactory's *own* functions:
 
 - **Read tools** — query WorkItems, summarise a timeline, compute cost/latency
   rollups, detect anomalies.
-- **Action tools (advise + confirm)** — `propose_approve_gate`,
-  `propose_trigger_handoff`, `propose_kick_handback`. Each returns a *prepared
+- **Action tools (advise + confirm)** — `propose_approve_plan`,
+  `propose_approve_review`, `propose_reject_review`, `propose_recover`,
+  `propose_delete_task`. Each returns a *prepared
   action* (target service, endpoint, payload, rationale) that only executes on an
   explicit human click. **No autonomous writes.**
 

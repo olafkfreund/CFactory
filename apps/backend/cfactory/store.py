@@ -9,22 +9,28 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from functools import cache
+from typing import cast
 
+from factory_common.logsafe import sanitize_log
 from sqlalchemy import DateTime, Integer, Select, String, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.types import JSON
 
 from .config import DEFAULT_TENANT, get_settings
 from .db import Base, add_column_ddl, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem, as_utc
-from .status_taxonomy import is_running, is_terminal as _is_terminal
+from .status_taxonomy import is_dead_stage, is_done, is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
 
 logger = logging.getLogger(__name__)
+
+_QUALIFIED_KEY = re.compile(r"^(.+)#(\d+)$")
 
 
 def _now() -> datetime:
@@ -48,6 +54,21 @@ def stall_deadline_seconds() -> float:
     except ValueError:
         return _DEFAULT_STALL_DEADLINE_SECONDS
     return val if val > 0 else _DEFAULT_STALL_DEADLINE_SECONDS
+
+
+# How long a dead (stalled/stuck) stage stays on the board before the poller
+# removes its row (#479, #187). Long enough to be seen and counted in needs-you.
+_DEFAULT_STALLED_PRUNE_HOURS = 24.0
+
+
+def stalled_prune_seconds() -> float:
+    """The dead-row removal age in seconds (env ``CFACTORY_STALLED_PRUNE_HOURS``)."""
+    raw = os.environ.get("CFACTORY_STALLED_PRUNE_HOURS")
+    try:
+        hours = float(raw) if raw is not None else _DEFAULT_STALLED_PRUNE_HOURS
+    except ValueError:
+        hours = _DEFAULT_STALLED_PRUNE_HOURS
+    return (hours if hours > 0 else _DEFAULT_STALLED_PRUNE_HOURS) * 3600
 
 
 # `_as_aware` used to live here as a second copy of `db.as_utc`, used only for
@@ -465,6 +486,9 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, event.correlation_key)
+                    row = self._adopt_legacy_row(
+                        session, event.correlation_key, event.service, event.task_id, row
+                    )
                     if row is not None and _already_recorded(row.timeline, event):
                         return row.to_model(), False
 
@@ -513,6 +537,7 @@ class WorkItemStore:
         state: ServiceState,
         *,
         title: str | None = None,
+        newest: bool = False,
     ) -> WorkItem:
         """Update a service slice from a polled snapshot (no timeline entry).
 
@@ -524,6 +549,9 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, correlation_key)
+                    row = self._adopt_legacy_row(
+                        session, correlation_key, service, state.task_id, row
+                    )
                     new_slice = state.model_dump()
                     existing = (getattr(row, service.value) if row is not None else None) or {}
                     # A polled snapshot is built from the upstream's LIST row: it
@@ -556,7 +584,17 @@ class WorkItemStore:
                         and existing.get("phase") == new_slice.get("phase")
                         and (existing.get("usage") or None) == (new_slice.get("usage") or None)
                     )
-                    if unchanged and row is not None:
+                    # A dead task never takes a row back from a different task
+                    # that already finished there (a completed re-run, #479).
+                    # `newest` (#484): the poll found this task is the newest on the
+                    # key, so a later stalled re-run does take the row back.
+                    superseded = (
+                        not newest
+                        and is_done(existing.get("status"))
+                        and existing.get("task_id") != new_slice.get("task_id")
+                        and is_dead_stage(new_slice.get("status"))
+                    )
+                    if (unchanged or superseded) and row is not None:
                         return row.to_model()
                     if row is None:
                         row = WorkItemRow(
@@ -594,13 +632,55 @@ class WorkItemStore:
                 data = getattr(row, service.value) or {}
                 status = data.get("status")
                 task_id = data.get("task_id")
-                if not status or _is_terminal(status):
-                    continue  # idle, or completed/failed — leave it
+                if not status or _is_terminal(status) or is_dead_stage(status):
+                    continue  # idle, completed/failed, or stalled (#479) — leave it
                 if task_id is not None and task_id not in live_task_ids:
                     setattr(row, service.value, ServiceState().model_dump())
                     row.updated_at = _now()
                     cleared += 1
         return cleared
+
+    def prune_dead(
+        self, *, now: datetime | None = None, max_age_seconds: float | None = None
+    ) -> int:
+        """Delete work items whose current stage is dead (stalled/stuck) and that
+        have not changed for ``max_age_seconds`` (24 h by default).
+
+        Until then the row stays, so the board, the plan DAG and needs-you show the
+        stall (#479). A row whose current stage is running is never touched here,
+        however old (#480): liveness flags it instead. Returns rows deleted.
+
+        shortcut: if the upstream still lists the dead task, the next poll
+        re-creates the row with a fresh clock, so it reappears for another limit;
+        upgrade by remembering pruned task ids if that proves noisy.
+        """
+        now = now or _now()
+        limit = stalled_prune_seconds() if max_age_seconds is None else max_age_seconds
+        deleted = 0
+        with self._session.begin() as session:
+            # _select() is typed as a tuple Select; the rows are WorkItemRow.
+            rows = cast("list[WorkItemRow]", session.scalars(self._select()).all())
+            for row in rows:
+                frontier = next(
+                    (
+                        data
+                        for svc in reversed(_PIPELINE_ORDER)
+                        if (data := getattr(row, svc) or {}).get("status")
+                    ),
+                    None,
+                )
+                updated = as_utc(row.updated_at)
+                if frontier is None or not is_dead_stage(frontier["status"]) or updated is None:
+                    continue
+                if (now - updated).total_seconds() > limit:
+                    logger.info(
+                        "[cfactory] removed stalled work item key=%s task_id=%s",
+                        sanitize_log(row.correlation_key),
+                        sanitize_log(str(frontier.get("task_id"))),
+                    )
+                    session.delete(row)
+                    deleted += 1
+        return deleted
 
     def prune_duplicate_stages(self, service: Service, task_id_to_key: dict[str, str]) -> int:
         """Drop a service's stage from a work item when that task is now reported
@@ -629,57 +709,6 @@ class WorkItemStore:
                     if not _row_has_stage_data(row):
                         session.delete(row)
         return affected
-
-    def prune_stuck(self, service: Service, stuck_task_ids: set[str]) -> int:
-        """Delete work items whose ``service`` stage the upstream reports as
-        stuck/stalled — its own liveness watchdog has given up (TFactory's #95
-        sweep marks a hung stage ``stalled``).
-
-        Auto-removes a dead task from the board instead of the cockpit showing it
-        as "running" forever (which just confuses users). The whole row is dropped
-        (not merely the stage): a task whose current stage is stuck is dead, and
-        keeping its earlier ``done`` stages would leave a card that reads as
-        finished. Robust against re-hydration — the caller also excludes these
-        task ids from the hydrate/reconcile live set every poll, so a still-
-        reported stalled task stays gone. Returns rows deleted. Call ONLY after a
-        successful poll (``stuck_task_ids`` from the same fetch)."""
-        if not stuck_task_ids:
-            return 0
-        deleted = 0
-        with self._session.begin() as session:
-            rows = session.scalars(self._select()).all()
-            for row in rows:
-                data = getattr(row, service.value) or {}
-                tid = data.get("task_id")
-                if tid is not None and tid in stuck_task_ids:
-                    session.delete(row)
-                    deleted += 1
-        return deleted
-
-    def prune_stalled(
-        self, *, now: datetime | None = None, deadline_seconds: float | None = None
-    ) -> int:
-        """Delete work items whose active RUNNING frontier has gone silent past
-        the stall deadline — a dead executor the cockpit would otherwise show as
-        "running" forever.
-
-        Uses ``compute_liveness`` so it catches the case ``prune_stuck`` and
-        ``reconcile_snapshot`` miss: a stale ``in_progress`` orphaned from a
-        completion event (no ``task_id`` for reconcile to match, and no explicit
-        ``stalled`` marker to filter). A parked ``*_review`` / queued frontier
-        legitimately WAITS on a human/agent decision and is never pruned — only a
-        silent *running* frontier is a dead task. Returns rows deleted."""
-        now = now or _now()
-        deadline = stall_deadline_seconds() if deadline_seconds is None else deadline_seconds
-        deleted = 0
-        with self._session.begin() as session:
-            rows = session.scalars(self._select()).all()
-            for row in rows:
-                lv = compute_liveness(row.to_model(), now=now, deadline_seconds=deadline)
-                if lv.stalled and is_running(lv.active_status):
-                    session.delete(row)
-                    deleted += 1
-        return deleted
 
     def get(self, correlation_key: str) -> WorkItem | None:
         with self._session() as session:
@@ -711,6 +740,64 @@ class WorkItemStore:
         return session.scalars(
             self._select().where(WorkItemRow.correlation_key == correlation_key)
         ).first()
+
+    def _adopt_legacy_row(
+        self,
+        session: Session,
+        key: str,
+        service: Service,
+        task_id: str | None,
+        row: WorkItemRow | None,
+    ) -> WorkItemRow | None:
+        """Carry a bare-number row's slice for this task over to ``key`` (#484).
+
+        legacy (window, #484 follow-up): producers used to send ``<n>``. With no
+        row on ``key`` yet, the bare row is renamed. When ``key`` already has a
+        row (e.g. PFactory's qualified origin key), this service's timeline
+        entries move across (ordered by ``updated_at``), and its slice too unless
+        ``key`` already holds this task; otherwise prune_duplicate_stages would
+        clear the bare slice and its usage. Returns the row for ``key``.
+        """
+        m = _QUALIFIED_KEY.match(key)
+        if m is None or task_id is None:
+            return row
+        legacy = self._get_row(session, m.group(2))
+        if legacy is None or (getattr(legacy, service.value) or {}).get("task_id") != task_id:
+            return row
+        if row is not None and (getattr(row, service.value) or {}).get("task_id") not in (
+            None,
+            task_id,
+        ):
+            return row
+        logger.info(
+            "legacy correlation key migrated row %s -> %s",
+            sanitize_log(m.group(2)),
+            sanitize_log(key),
+        )
+        updated_at = legacy.updated_at
+        if row is None:
+            legacy.correlation_key = key
+            row = legacy
+        else:
+            timeline = legacy.timeline or []
+            moved = [e for e in timeline if e.get("service") == service.value]
+            row.timeline = sorted(
+                [*moved, *(row.timeline or [])], key=lambda e: str(e.get("updated_at") or "")
+            )
+            # Same task already on `key`: its slice is the newer one (a late
+            # old-format event must not roll it back), so only the history moves.
+            if (getattr(row, service.value) or {}).get("task_id") != task_id:
+                setattr(row, service.value, getattr(legacy, service.value))
+            legacy.timeline = [e for e in timeline if e.get("service") != service.value]
+            setattr(legacy, service.value, ServiceState().model_dump())
+            if not _row_has_stage_data(legacy):
+                session.delete(legacy)
+                return row
+        # onupdate would re-stamp this and reset the 24 h pruning clock; naming
+        # the column in the UPDATE makes it keep the old value.
+        legacy.updated_at = updated_at
+        flag_modified(legacy, "updated_at")
+        return row
 
 
 @cache

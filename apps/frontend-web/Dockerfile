@@ -24,6 +24,20 @@ RUN npm run build
 # Runtime: nginx-unprivileged listens on 8080 and runs as uid 101 (non-root).
 FROM nginxinc/nginx-unprivileged:1.31-alpine AS runtime
 
+# This image had NO security-upgrade layer at all, so it shipped whatever the
+# pinned nginx tag was built with -- that is how CVE-2026-14456 (openssl
+# 3.5.7-r0 -> 3.5.8-r0) reached a blocking Trivy finding here while the backend
+# image, which does upgrade, came back clean.
+#
+# SECURITY_REFRESH changes daily so the layer is not served from the build
+# cache forever; without it the upgrade would run exactly once and freeze.
+# Runs as root, then drops back to the image's non-root uid.
+USER root
+ARG SECURITY_REFRESH=0
+RUN echo "security refresh: ${SECURITY_REFRESH}" \
+    && apk upgrade --no-cache
+USER 101
+
 # Backend Service the cockpit's /api + /health + /api/ws calls are proxied to.
 # Overridden by the Helm chart (http://<release>-cfactory:80).
 ENV BACKEND_URL=http://cfactory:80

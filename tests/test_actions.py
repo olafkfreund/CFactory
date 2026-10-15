@@ -20,6 +20,7 @@ import pytest
 
 from cfactory.actions import (
     PreparedAction,
+    _nothing_to_act_on,
     execute_action,
     is_safe_endpoint,
     propose_approve_plan,
@@ -224,6 +225,56 @@ def test_propose_endpoint_404_for_missing_workitem(client):
         "/api/actions/propose", json={"kind": "approve_review", "correlation_key": "nope"}
     )
     assert resp.status_code == 404
+
+
+def test_propose_endpoint_409_when_no_stage_in_flight(client, store):
+    # #467: the item exists, but its only stage is done. That is not "no work
+    # item" (404); it is "nothing to act on", with the stage state as the reason.
+    _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7", status="done")
+    resp = client.post(
+        "/api/actions/propose", json={"kind": "approve_review", "correlation_key": "42"}
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "aifactory is 'done'" in detail
+    assert "no work item" not in detail
+
+
+def test_propose_endpoint_409_for_delete_on_plan_only_item(client, store):
+    _seed_plan(store)
+    resp = client.post(
+        "/api/actions/propose", json={"kind": "delete_task", "correlation_key": "013-probe2"}
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "plan sessions cannot be removed" in detail
+    assert "use reject" in detail
+
+
+@pytest.mark.parametrize("kind", ["approve_review", "reject_review", "recover"])
+def test_nothing_to_act_on_names_terminal_stages(store, kind):
+    _seed(store, service=Service.PFACTORY, correlation_key="42", task_id="p1", status="done")
+    _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7", status="failed")
+    msg = _nothing_to_act_on(kind, store.get("42"))
+    assert msg.startswith(f"nothing to {kind} for '42'")
+    assert "pfactory is 'done'" in msg
+    assert "aifactory is 'failed'" in msg
+    assert "no stage is in flight" in msg
+
+
+def test_nothing_to_act_on_approve_plan_without_plan_task(store):
+    _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7")
+    msg = _nothing_to_act_on("approve_plan", store.get("42"))
+    assert msg == "nothing to approve_plan for '42': no pfactory plan task"
+
+
+def test_nothing_to_act_on_delete_plan_session(store):
+    _seed_plan(store)
+    msg = _nothing_to_act_on("delete_task", store.get("013-probe2"))
+    assert msg == (
+        "nothing to delete_task for '013-probe2': "
+        "pfactory plan sessions cannot be removed; use reject"
+    )
 
 
 def test_propose_endpoint_400_for_unknown_kind(client, store):

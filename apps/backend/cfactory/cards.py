@@ -7,11 +7,11 @@ set when it enters the factory — that is the join back to ``work_items`` and t
 RFC-0001 correlation timeline.
 
 Cards live in their OWN table, deliberately. ``store.py``'s
-``reconcile_snapshot``, ``prune_duplicate_stages``, ``prune_stuck`` and
-``prune_stalled`` exist to blank stages and DELETE work-item rows whenever
-upstream polling says the task is gone. That machinery is correct for a mirror of
-upstream state and fatal for human-authored planning data, so none of it may be
-able to reach a card. The RFC-0019 spike (§4, "design corrections") recommends
+``reconcile_snapshot`` and ``prune_duplicate_stages`` exist to blank stages and
+DELETE work-item rows whenever upstream polling says the task is gone. That
+machinery is correct for a mirror of upstream state and fatal for human-authored
+planning data, so none of it may be able to reach a card. The RFC-0019 spike
+(§4, "design corrections") recommends
 exactly this separation instead of a precedence rule.
 
 Mirrors :mod:`cfactory.audit`: an ORM row on the shared ``Base`` plus a thin
@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
+from factory_common.logsafe import sanitize_log
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import DateTime, Index, Integer, Select, String, Text, func, select, update
 from sqlalchemy.engine import CursorResult, Engine
@@ -60,6 +62,7 @@ from .git_config import (
     GitConfigUpdate,
     GitTarget,
     config_view,
+    parse_repo_ref,
     provider_token,
     target_from_settings,
     validated_fields,
@@ -92,6 +95,8 @@ from .git_install import (
 )
 
 logger = logging.getLogger(__name__)
+
+_QUALIFIED_KEY = re.compile(r"^(.+)#(\d+)$")
 
 # The board columns. A card moves between these; there is no other status space.
 CardStatus = Literal["backlog", "ready", "in_progress", "blocked", "done"]
@@ -823,6 +828,30 @@ class CardStore:
         stmt = stmt.order_by(CardRow.created_at.asc())
         with self._session() as session:
             row = session.scalars(stmt).first()
+            if row is None and (m := _QUALIFIED_KEY.match(correlation_key)):
+                # legacy (window, #484 follow-up): a card still keyed on the bare number.
+                # Only a card whose issue lives in the key's repo: a bare `7` is
+                # ambiguous, and a card with no issue_ref is skipped, not guessed.
+                # An issue_ref holds the bare project ("grp/app#7") while the key
+                # may be provider-qualified ("gitlab:grp/app#7"): compare projects.
+                parsed = parse_repo_ref(m.group(1))
+                project = parsed[1] if parsed else None
+                legacy = self._select().where(CardRow.correlation_key == m.group(2))
+                # Any: the stubs type these rows differently across SQLAlchemy builds.
+                candidates: Any = session.scalars(legacy.order_by(CardRow.created_at.asc()))
+                old: Any = next(
+                    (c for c in candidates if _issue_project(c.issue_ref) == project), None
+                )
+                if old is not None:
+                    logger.info(
+                        "legacy correlation key migrated card=%s %s -> %s",
+                        sanitize_log(old.card_key),
+                        sanitize_log(m.group(2)),
+                        sanitize_log(correlation_key),
+                    )
+                    old.correlation_key = correlation_key
+                    session.commit()
+                    return Card.model_validate(old)
             return Card.model_validate(row) if row is not None else None
 
     def get_by_issue_ref(self, issue_ref: str) -> Card | None:

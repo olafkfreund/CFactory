@@ -6,7 +6,7 @@ from typing import Any
 
 from cfactory.models import Service
 
-from .base import AdapterItem, BaseHTTPAdapter, first
+from .base import AdapterItem, BaseHTTPAdapter, created_at_of, first
 
 
 class PFactoryAdapter(BaseHTTPAdapter):
@@ -43,12 +43,17 @@ class PFactoryAdapter(BaseHTTPAdapter):
             review = {"gates_passed": False} if gates_passed is False else None
 
         return AdapterItem(
-            correlation_key=str(issue if issue is not None else task_id),
+            # legacy (window, #484 follow-up): bare issue number
+            correlation_key=str(
+                first(row, "correlation_key", "correlationKey")
+                or (issue if issue is not None else task_id)
+            ),
             service=self.service,
             task_id=str(task_id),
             status=first(row, "board_state", "status"),
             phase="plan",
             title=first(row, "title", "name"),
             repo=first(row, "repo"),  # W5 (#218): target repo owner/name
+            created_at=created_at_of(row),
             review=review,
         )

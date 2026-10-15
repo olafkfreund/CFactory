@@ -46,6 +46,24 @@ CLI — it *consumes* the other services' REST/WebSocket surfaces (see
 | `GET /api/progress` | Live in-flight progress snapshot |
 | `GET /api/anomalies` | Stuck phases, handback loops, gate/test failures |
 
+Each anomaly has a `kind`:
+
+- `failure`: a stage's current status is a failure, rejection or explicit stuck
+  marker from the upstream. A discard is a deliberate close and is not reported
+  (#458).
+- `handback_loop`: a failing test was followed by more coding, i.e. test and
+  code are bouncing.
+- `stuck`: the furthest-along stage is active (not done, failed, parked for
+  review, or not yet started) and its **current** status has not changed for
+  24 hours. It is judged on the stage's present status, not the last timeline
+  event, so a task the poll has since seen finish is never reported (#454).
+
+A stage waiting on a human (`human_review` and other review gates) is not an
+anomaly. It is counted by `GET /api/needs-you/count` instead, so "needs a
+click" and "something is hung" stay separate. There is no setting for the 24h
+threshold; the cockpit's shorter stall pill uses `CFACTORY_STALL_DEADLINE_SECONDS`
+(default 900s) and is unaffected.
+
 ### Live agents (read-only)
 
 | Method & path | Purpose |
@@ -74,13 +92,25 @@ an upstream service. Model is set by `CFACTORY_COPILOT_MODEL` (default
 | `POST /api/actions/execute` | Run a CONFIRMED `PreparedAction` (requires `write` scope) |
 | `GET /api/audit` | Recent confirmed actions, newest first — the HITL trail |
 
-Action kinds:
+Action kinds (`ActionKind` in `cfactory/actions.py`). Review, reject and recover act on
+the furthest stage that is still in flight; terminal (done/failed) stages are skipped.
 
-| Kind | Target | Endpoint (best-effort contract) |
+| Kind | Target | Endpoint |
 |---|---|---|
-| `approve_gate` | PFactory | `POST /api/plans/{session}/approve` |
-| `trigger_handoff` | AIFactory | `POST /api/tasks/create-and-run` |
-| `kick_handback` | AIFactory | `POST /api/tasks/{task_id}/apply-correction` |
+| `approve_plan` | PFactory | `POST /api/tasks/{task_id}/approve-plan` |
+| `approve_review` | AIFactory / TFactory | `POST /api/tasks/{task_id}/worktree/create-pr`, then `POST /api/tasks/{task_id}/worktree/merge` |
+| | PFactory (plan stage) | `POST /api/plan/sessions/{sid}/approve` |
+| `reject_review` | AIFactory / TFactory | `POST /api/tasks/{task_id}/apply-correction` |
+| | PFactory (plan stage) | `POST /api/plan/sessions/{sid}/reject` |
+| `recover` | AIFactory / TFactory | `POST /api/tasks/{task_id}/recover` |
+| | PFactory (plan stage) | `POST /api/plan/sessions/{sid}/process` |
+| `delete_task` | AIFactory / TFactory | `DELETE /api/tasks/{task_id}` (also on failed tasks; not for plan sessions) |
+| `dispatch_card` | per card | built by `card_intake` when a card moves to ready; not proposable |
+
+`POST /api/actions/propose` answers **400** for an unknown kind, **404** when no work
+item exists for the correlation key, and **409** when the item exists but there is
+nothing to act on for that kind (for example every stage is done, or `delete_task` on a
+plan session). The 409 `detail` says why, naming each stage's current status.
 
 !!! note "SSRF guard"
     `PreparedAction.endpoint` must be a **root-relative path** (no scheme, no host).
@@ -89,6 +119,10 @@ Action kinds:
 
 Every confirmed action is recorded in the HMAC-anchored audit chain before its result
 is returned (see [DEC-005](decisions.md)).
+
+Approving a code task (`approve_review`: AIFactory create-pr, then merge) is safe to
+repeat, and it works after the task's worktree was cleaned up. An existing PR is
+reused and merged instead of failing with "already exists" (#457).
 
 ### Health
 

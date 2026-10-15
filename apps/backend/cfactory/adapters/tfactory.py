@@ -8,7 +8,7 @@ import httpx
 
 from cfactory.models import Service
 
-from .base import AdapterError, AdapterItem, BaseHTTPAdapter, first
+from .base import AdapterError, AdapterItem, BaseHTTPAdapter, created_at_of, first
 
 # The canonical TFactory task/evidence API is mounted under this prefix.
 _TF_PREFIX = "/api/tfactory/tasks"
@@ -62,7 +62,30 @@ class TFactoryAdapter(BaseHTTPAdapter):
             "status": plan.get("status"),
             "updated_at": plan.get("updated_at"),
             "subtasks": subtasks,
+            "lane_progress": self._lane_progress(task_id),
         }
+
+    def _lane_progress(self, task_id: str) -> dict[str, Any] | None:
+        """Per-lane EXECUTION state from the run's status.json (#431).
+
+        The test plan above describes what was *generated*; nothing in it says
+        whether a lane ever ran. A subtask whose generation completed reports
+        ``completed`` either way, which is how a spec with zero executed lanes
+        came to render as "Browser (8/8) STAGE COMPLETE".
+
+        Best-effort on purpose: ``None`` when the status is unreadable or the
+        field is absent, and the caller then keeps its previous behaviour rather
+        than reporting that nothing ran. A TFactory that predates the field
+        would otherwise repaint every healthy lane as pending — the same bug
+        pointing the other way.
+        """
+        try:
+            data = self._get_json(f"{_TF_PREFIX}/{task_id}")
+        except AdapterError:
+            return None
+        status_json = (data or {}).get("status_json") if isinstance(data, dict) else None
+        progress = (status_json or {}).get("lane_progress")
+        return progress if isinstance(progress, dict) and progress else None
 
     def get_evidence_manifest(self, spec_id: str) -> dict[str, list[str]]:
         """Browser-lane media captured for a spec: screenshot + recording file
@@ -105,11 +128,16 @@ class TFactoryAdapter(BaseHTTPAdapter):
             "metadata.githubIssueNumber",
         )
         return AdapterItem(
-            correlation_key=str(issue if issue is not None else task_id),
+            # legacy (window, #484 follow-up): bare issue number
+            correlation_key=str(
+                first(row, "correlation_key", "correlationKey")
+                or (issue if issue is not None else task_id)
+            ),
             service=self.service,
             task_id=str(task_id),
             status=first(row, "status"),
             phase=first(row, "phase"),
             title=first(row, "title", "name"),
             repo=first(row, "repo"),  # W5 (#218): target repo owner/name
+            created_at=created_at_of(row),
         )

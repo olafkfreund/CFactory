@@ -185,6 +185,27 @@ def test_test_stage_dispatches_to_tfactory_once_a_build_exists(client, upstream)
     assert "AC#1: it ships" in payload["spec_text"]
 
 
+@pytest.mark.parametrize(("issue_number", "event_key"), [(None, "af-003-x"), (42, "42")])
+def test_code_stage_settles_on_aifactory_shaped_completion(
+    client, upstream, cards, issue_number, event_key
+):
+    """#478: from-issue answers with ``<project>:<spec>``, but AIFactory keys its
+    completion event on the issue number or ``af-<spec>``. The card must be joined
+    on the key the event will carry, or the CODE stage never settles."""
+    upstream.overrides[CODE_DOOR] = (
+        200,
+        {"task_id": "proj-1:003-x", "spec_id": "003-x", "issue_number": issue_number},
+    )
+    card = _card(client)
+    act(client, card["card_key"], "code")
+
+    complete(client, "aifactory", "ev-af", key=event_key)
+
+    settled = cards.get(card["card_key"])
+    assert settled.correlation_key == event_key
+    assert settled.stage_runs["code"]["status"] == "done"
+
+
 def test_explicit_plan_overrides_tier_routing_and_says_so(client, upstream):
     """A `low` card would skip planning; asking for it plans anyway, with a warning
     naming the override rather than a silent surprise."""

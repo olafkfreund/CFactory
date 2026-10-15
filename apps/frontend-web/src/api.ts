@@ -154,8 +154,20 @@ export const VerificationBlockSchema = z.object({
   target_level: z.string().optional(),
   achieved_level: z.string(),
   claim: z.string(),
+  // `reason` is null, not absent, when a level carries no explanation — a
+  // producer serializing a dataclass emits the key with a null value rather
+  // than omitting it. `.optional()` alone rejects that, and because this schema
+  // guards the whole board payload, ONE null reason on ONE item blanked Mission
+  // Control entirely with a Zod error. Matches the `.nullable().optional()`
+  // shape already used for every other nullable reason in this file.
   levels: z
-    .array(z.object({ level: z.string(), status: z.string(), reason: z.string().optional() }))
+    .array(
+      z.object({
+        level: z.string(),
+        status: z.string(),
+        reason: z.string().nullable().optional(),
+      }),
+    )
     .optional(),
 });
 export type VerificationBlock = z.infer<typeof VerificationBlockSchema>;
@@ -548,12 +560,15 @@ export async function fetchHealth(): Promise<Health> {
   return HealthSchema.parse(await resp.json());
 }
 
+// The list envelope, EXPORTED rather than inlined at the call site (Factory#1005):
+// src/apiContract.test.ts replays a recorded backend body through this exact
+// schema, and an inlined copy there would be a second contract that can drift
+// from the one the client actually parses with. Same reason for the sibling
+// envelopes below.
+export const ServicesResponseSchema = z.object({ services: z.array(ServiceStatusSchema) });
+
 export async function fetchServices(): Promise<ServiceStatus[]> {
-  const data = await getJson(
-    "/api/services",
-    z.object({ services: z.array(ServiceStatusSchema) }),
-    "services",
-  );
+  const data = await getJson("/api/services", ServicesResponseSchema, "services");
   return data.services ?? [];
 }
 
@@ -952,14 +967,17 @@ export async function fetchActivity(limit = 50): Promise<ActivityEntry[]> {
   return data.activity ?? [];
 }
 
+export const WorkItemsResponseSchema = z.object({
+  count: z.number(),
+  items: z.array(WorkItemSchema),
+});
+
 export async function fetchWorkItems(): Promise<WorkItem[]> {
   const resp = await fetch("/api/workitems");
   if (!resp.ok) {
     throw new Error(`backend returned HTTP ${resp.status}`);
   }
-  const body = z
-    .object({ count: z.number(), items: z.array(WorkItemSchema) })
-    .parse(await resp.json());
+  const body = WorkItemsResponseSchema.parse(await resp.json());
   return body.items;
 }
 
@@ -983,12 +1001,10 @@ export const FeedMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type FeedMessage = z.infer<typeof FeedMessageSchema>;
 
+export const ProgressResponseSchema = z.object({ items: z.array(LiveProgressSchema) });
+
 export async function fetchProgress(): Promise<LiveProgress[]> {
-  const data = await getJson(
-    "/api/progress",
-    z.object({ items: z.array(LiveProgressSchema) }),
-    "progress",
-  );
+  const data = await getJson("/api/progress", ProgressResponseSchema, "progress");
   return data.items;
 }
 
@@ -1373,6 +1389,14 @@ export async function proposeAction(
     body: JSON.stringify({ kind, correlation_key, note }),
   });
   if (resp.status === 404) throw new Error("no actionable task for this item");
+  if (resp.status === 409) {
+    // #467: the item exists but has nothing to act on; the server says why.
+    const body: unknown = await resp.json().catch(() => null);
+    const detail = (body as { detail?: unknown } | null)?.detail;
+    throw new Error(
+      typeof detail === "string" && detail ? detail : "nothing to act on for this item",
+    );
+  }
   if (!resp.ok) throw new Error(`propose failed: HTTP ${resp.status}`);
   return PreparedActionSchema.parse(await resp.json());
 }

@@ -23,9 +23,10 @@ git fetch origin
 gh pr create --base main --head dev --title "chore: promote dev to main"
 ```
 
-Open the promotion PR, let CI run, get it reviewed and merged like any
-other PR (`main`'s branch protection requires 1 approving review — see
-CONTRIBUTING.md's Maintainers section for the full protection table).
+Open the promotion PR, let CI run, and merge it like any other PR. `main`
+requires no approving review, but every review conversation must be resolved
+and the required checks must pass (see CONTRIBUTING.md's Maintainers section
+for the full protection table).
 Merging it is what triggers the deploy below.
 
 ## What `deploy.yml` does on push to `main`

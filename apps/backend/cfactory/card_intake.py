@@ -39,6 +39,7 @@ never left sitting in ``ready`` as though it had been dispatched, never a 500.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -49,7 +50,7 @@ import httpx
 from .actions import PreparedAction, execute_action
 from .cards import Card, CardStore
 from .config import Settings, get_settings
-from .git_config import qualify_repo
+from .git_config import clone_url, qualify_repo
 from .models import Service, Stage, WorkItem
 from .status_taxonomy import is_done, is_failure_or_stuck
 
@@ -122,11 +123,54 @@ def parse_stage(value: str) -> Stage | None:
 
 
 def _brief(card: Card) -> str:
-    """The card rendered as the markdown body both intake doors accept."""
-    lines = [f"# {card.title}"]
-    if card.acceptance_criteria:
-        lines += ["", "## Acceptance Criteria", ""]
+    """The card rendered as the markdown body all three intake doors accept.
+
+    Carries the card's DESCRIPTION, not just its acceptance criteria (#434).
+    This used to be title plus criteria and nothing else, which meant every
+    producer -- planner, coder and verifier alike -- worked from the criteria
+    alone and never saw the body.
+
+    Measured on FCT-4: a 2004-byte card describing a Goal, What to build (naming
+    the exact functions to export), Acceptance Criteria and Out of scope reached
+    the coder as 1000 bytes of acceptance criteria. AIFactory#1421 recorded the
+    result as the coder "paraphrasing an enumerated API" -- 0/4 names at low
+    tier, 1/4 at medium. It was not paraphrasing. It was never told, and a
+    better model simply guessed better names from the same criteria.
+
+    Nothing caught it because acceptance criteria are the part a reviewer
+    checks, and they survived. A build that satisfies every criterion while
+    ignoring the design reads as correct everywhere -- including in its own test
+    suite, which the coder also writes.
+    """
+    lines: list[str] = []
+    body = (card.description or "").strip()
+    # The description usually opens with its own `# Title` (it is the issue body),
+    # and AIFactory's from-issue prepends the title again on top of whatever it
+    # receives. Emitting a heading here as well is how the title arrived three
+    # times over. Add one only when the body carries none of its own.
+    # An empty body does not start with "#" either, so a card with no
+    # description still gets its title here -- this branch is what guarantees a
+    # brief is never empty, and a build never dispatches with no instructions.
+    if not body.startswith("#"):
+        lines.append(f"# {card.title}")
+        if body:
+            lines.append("")
+    if body:
+        lines.append(body)
+
+    # Appended, never substituted -- but not duplicated either. The description
+    # is the issue body, and the tracked criteria were parsed out of its own
+    # "Acceptance Criteria" section, so re-appending them emits the same list
+    # twice. Two AC lists in one prompt is worse than either alone: a reader
+    # (human or model) has to decide which governs, and if they ever diverge it
+    # is silent.
+    has_own_acs = re.search(r"^#{1,6}\s*acceptance\s+criteria\b", body, re.I | re.M)
+    if card.acceptance_criteria and not has_own_acs:
+        if lines:
+            lines.append("")
+        lines += ["## Acceptance Criteria", ""]
         lines += [f"- {ac}" for ac in card.acceptance_criteria]
+
     return "\n".join(lines)
 
 
@@ -157,6 +201,16 @@ def repo_ref(store: CardStore, settings: Settings, card: Card) -> str | None:
     return qualify_repo(target.provider, target.project)
 
 
+def card_clone_url(store: CardStore, settings: Settings, card: Card) -> str | None:
+    """The clone URL for the repo this card's work targets (CFactory#438).
+
+    Resolved through the SAME per-card target :func:`repo_ref` uses, so the host
+    TFactory clones from is the card's own host rather than a tenant-wide guess.
+    """
+    target = store.git_target_for_card(card, settings)
+    return clone_url(target.provider, target.base_url, target.project)
+
+
 def aifactory_project_id(
     store: CardStore, settings: Settings, card: Card | None = None
 ) -> str | None:
@@ -177,7 +231,12 @@ def aifactory_project_id(
 
 
 def prepare_stage(
-    card: Card, stage: Stage, *, project_id: str | None, repo: str | None = None
+    card: Card,
+    stage: Stage,
+    *,
+    project_id: str | None,
+    repo: str | None = None,
+    git_url: str | None = None,
 ) -> PreparedAction | None:
     """Build the not-yet-executed intake write that sends ``card`` into ``stage``.
 
@@ -234,6 +293,9 @@ def prepare_stage(
                 # component ("FCT-42").
                 "spec_id": card.card_key,
                 "spec_text": _brief(card),
+                # project_id is AIFactory's; TFactory keeps its own registry and
+                # self-registers from the clone URL rather than 404ing (#438).
+                **({"git_url": git_url} if git_url else {}),
                 **qualified,
             },
             rationale=(
@@ -254,6 +316,14 @@ def prepare_stage(
                 "body": _brief(card),
                 # The tier label AIFactory's classifier reads (RFC-0011 §2).
                 "labels": [f"factory:{card.tier}"],
+                # RFC-0001 correlation. AIFactory keys the completion event on
+                # the ISSUE NUMBER and falls back to a synthetic `af-<spec_id>`
+                # when it has none -- a key nothing else uses, so the usage block
+                # lands on a THIRD work item and the cockpit's cost rollup reads
+                # the two rows without it. Every card dispatched from the board
+                # reported $0.00 for exactly this reason (#1418). The card knows
+                # the number: it is the tail of `issue_ref`.
+                **_issue_number_payload(card.issue_ref),
             },
             "auto_continue": True,
             **qualified,
@@ -263,6 +333,24 @@ def prepare_stage(
             "classifier label and the model picks (RFC-0011 §2)."
         ),
     )
+
+
+def _issue_number_payload(issue_ref: str | None) -> dict[str, int]:
+    """``{"number": N}`` from an ``owner/repo#123`` reference, or ``{}``.
+
+    Returns a MAPPING rather than an int so the caller can splat it: a card with
+    no issue (one created on the board rather than imported) sends no `number`
+    key at all, which is what AIFactory's synthetic fallback is legitimately for.
+    Passing an explicit ``None`` would look like a supplied-but-empty value.
+
+    Mirrors :func:`cfactory.cards._issue_project`, which takes the other half of
+    the same string. Parsed here rather than imported for the same reason it
+    gives: the import would go the wrong way.
+    """
+    if not issue_ref or "#" not in issue_ref:
+        return {}
+    tail = issue_ref.rsplit("#", 1)[1].strip()
+    return {"number": int(tail)} if tail.isdigit() else {}
 
 
 def prepare_dispatch(
@@ -407,16 +495,24 @@ def _refused(refusal: StageRefusal, stage: Stage) -> dict[str, Any]:
     }
 
 
-def _upstream_key(body: Any) -> str | None:
+def _upstream_key(body: Any, service: str | None = None) -> str | None:
     """The correlation key to join the card on, out of an intake response.
 
     Neither door returns an RFC-0001 correlation key directly: with no GitHub
     issue behind the card, both adapters key the work item on the upstream's own
     id (``adapters/aifactory.py`` and ``adapters/pfactory.py`` both fall back to
     ``task_id``), so that id IS the correlation key CFactory will see.
+
+    AIFactory is the exception (#478): from-issue answers ``<project>:<spec>``,
+    but its completion event is keyed on the issue number, else ``af-<spec_id>``
+    (AIFactory ``services/completion.py`` ``correlation_key()``). The card is
+    joined on that, or the event never finds it and CODE never settles.
     """
     if not isinstance(body, dict):
         return None
+    if service == "aifactory" and not body.get("correlation_key") and body.get("spec_id"):
+        issue = body.get("issue_number")
+        return str(issue) if issue is not None else f"af-{body['spec_id']}"
     for key in ("correlation_key", "task_id", "session_id", "id", "spec_id"):
         value = body.get(key)
         if value:
@@ -462,7 +558,7 @@ def _send(
             **result,
         }
 
-    ref = _upstream_key(result.get("body"))
+    ref = _upstream_key(result.get("body"), action.target_service)
     # Write-once: the FIRST stage to land sets the correlation key and every later
     # stage of the same card threads that same key rather than re-pointing it. No
     # key in the response at all would leave the card unjoinable, so fall back to
@@ -582,7 +678,13 @@ def dispatch_stage(
     refusal = refuse_reason(card, stage, project_id=project_id)
     if refusal is not None:
         return _refused(refusal, stage)
-    action = prepare_stage(card, stage, project_id=project_id, repo=repo_ref(store, settings, card))
+    action = prepare_stage(
+        card,
+        stage,
+        project_id=project_id,
+        repo=repo_ref(store, settings, card),
+        git_url=card_clone_url(store, settings, card),
+    )
     if action is None:  # refuse_reason already covers every buildable case
         return _refused(
             StageRefusal("no_intake_project", f"no payload can be built for {stage.value}"), stage

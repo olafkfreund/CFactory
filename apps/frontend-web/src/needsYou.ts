@@ -4,7 +4,7 @@
 // (hung past its idle deadline) or parked in a stage awaiting a human decision
 // (plan approval, code/verify review gate). Everything else — flowing or
 // finished — is not in the inbox.
-import { activeStage, overallState, stageState } from "./taskState";
+import { activeStage, isStalledStatus, overallState, stageState } from "./taskState";
 import type { WorkItem } from "./api";
 import { fmtAge } from "./format";
 
@@ -64,9 +64,14 @@ export function attentionFor(wi: WorkItem): Attention | null {
     stageState(statuses.tfactory),
   ]);
 
-  // Stalled: hung in a non-terminal stage past its idle deadline (#105).
-  if (wi.liveness?.stalled && overall === "running") {
-    const key = activeStage(statuses) ?? "aifactory";
+  // Stalled: hung in a non-terminal stage past its idle deadline (#105). A stage
+  // the upstream marked stalled reads "failed" overall but is still this case, so
+  // the list agrees with the backend /api/needs-you/count (#479).
+  const stalledKey = (["tfactory", "aifactory", "pfactory"] as const).find((k) =>
+    isStalledStatus(statuses[k]),
+  );
+  if (wi.liveness?.stalled && (overall === "running" || stalledKey)) {
+    const key = stalledKey ?? activeStage(statuses) ?? "aifactory";
     const meta = STAGE_BY_KEY[key];
     const age = fmtAge(wi.liveness.last_activity_age_seconds);
     return {

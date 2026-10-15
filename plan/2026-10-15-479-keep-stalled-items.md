@@ -97,3 +97,13 @@ The Opus review of the diff found two gaps, fixed in one follow-up commit:
 Not changed (out of scope, noted for the reviewer): the backend card
 write-back (`card_status_for`) still maps `stalled` to `in_progress`, because
 `is_stuck` only knows `stuck` (audit note N1).
+
+## Deviation (lead review of #483, item 1): needs-you list and count agree
+
+Folding `stalled` into `failed` made `attentionFor` (`needsYou.ts`) return null
+for a liveness-stalled row, because it only flagged an overall `running` item,
+while the backend `/api/needs-you/count` (`needs_you.py`) still counted it.
+`taskState.ts` now exports `isStalledStatus`; `attentionFor` flags a
+liveness-stalled row whose stage is stalled and names that stage. Tests on the
+same row (AIFactory completed, TFactory stalled, 1 h old):
+`needsYou.test.ts` and `tests/test_needs_you.py`.

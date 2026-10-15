@@ -10,6 +10,11 @@ const FAIL = /(fail|reject|error|abort|cancel|block|discard)/i;
 // Whole token only: "installed" must not read as stalled. A stalled/stuck stage is
 // one whose upstream watchdog gave up, so it is shown failed, not running (#479).
 const STALLED = /(^|[_-])(stalled|stuck)([_-]|$)/i;
+
+/** A stage whose upstream watchdog gave up (whole-token stalled/stuck). */
+export function isStalledStatus(status?: string | null): boolean {
+  return !!status && STALLED.test(status);
+}
 const DONE =
   /(^|[_-])(merged|done|complete|completed|passed|approved|qa[_-]?approved|shipped|succeeded|success|ready|emitted|triaged|closed|accepted)([_-]|$)/i;
 const REVIEW = /(human[_-]?review|ai[_-]?review|needs[_-]?review|in[_-]?review|awaiting|review)/i;
@@ -20,7 +25,7 @@ const RUNNING =
 /** Classify one stage's status string into a canonical lifecycle state. */
 export function stageState(status?: string | null): TaskState {
   if (!status) return "idle";
-  if (FAIL.test(status) || STALLED.test(status)) return "failed";
+  if (FAIL.test(status) || isStalledStatus(status)) return "failed";
   if (DONE.test(status)) return "done";
   if (REVIEW.test(status)) return "review";
   if (QUEUED.test(status)) return "queued";

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from cfactory.models import ServiceState, WorkItem
 from cfactory.needs_you import needs_human, needs_you_count
@@ -86,3 +86,17 @@ def test_endpoint_counts_review_items(client):
     body = resp.json()
     assert "count" in body
     assert body["count"] >= 1
+
+
+def test_stalled_tfactory_after_completed_build_needs_a_human():
+    # Same row as needsYou.test.ts "stalled stage after a completed build": the
+    # backend count and the cockpit's attentionFor must agree on it (#479 review).
+    wi = _wi(
+        "9",
+        services={
+            "aifactory": ServiceState(status="completed"),
+            "tfactory": ServiceState(status="stalled"),
+        },
+        updated=datetime.now(UTC) - timedelta(hours=1),
+    )
+    assert needs_human(wi) is True

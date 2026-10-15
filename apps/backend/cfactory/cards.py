@@ -62,6 +62,7 @@ from .git_config import (
     GitConfigUpdate,
     GitTarget,
     config_view,
+    parse_repo_ref,
     provider_token,
     target_from_settings,
     validated_fields,
@@ -831,11 +832,15 @@ class CardStore:
                 # legacy (window, #484 follow-up): a card still keyed on the bare number.
                 # Only a card whose issue lives in the key's repo: a bare `7` is
                 # ambiguous, and a card with no issue_ref is skipped, not guessed.
+                # An issue_ref holds the bare project ("grp/app#7") while the key
+                # may be provider-qualified ("gitlab:grp/app#7"): compare projects.
+                parsed = parse_repo_ref(m.group(1))
+                project = parsed[1] if parsed else None
                 legacy = self._select().where(CardRow.correlation_key == m.group(2))
                 # Any: the stubs type these rows differently across SQLAlchemy builds.
                 candidates: Any = session.scalars(legacy.order_by(CardRow.created_at.asc()))
                 old: Any = next(
-                    (c for c in candidates if _issue_project(c.issue_ref) == m.group(1)), None
+                    (c for c in candidates if _issue_project(c.issue_ref) == project), None
                 )
                 if old is not None:
                     logger.info(

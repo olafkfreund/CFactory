@@ -5,8 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 from cfactory.adapters import AIFactoryAdapter, hydrate
 from cfactory.cards import CardCreate, CardStore
+from cfactory.git_config import qualify_repo
 from cfactory.models import CompletionEvent, Service, ServiceState
 from cfactory.progress import LiveProgressHub, poll_progress_once
 
@@ -197,3 +199,15 @@ def test_late_old_format_event_does_not_roll_back_the_qualified_slice(store):
     assert item.aifactory.status == "reviewing"
     assert item.aifactory.usage is not None and item.aifactory.usage.total_tokens == 10
     assert [e.updated_at.minute for e in item.timeline if e.updated_at] == [0, 1, 5]
+
+
+@pytest.mark.parametrize(
+    ("provider", "project"),
+    [("gitlab", "grp/app"), ("azure_devops", "org/project/repo"), ("github", "o/r")],
+)
+def test_card_fallback_matches_a_provider_qualified_key(tmp_path, provider, project):
+    # issue_ref holds the bare project; the key carries qualify_repo's prefix.
+    cards = CardStore(f"sqlite:///{tmp_path / 'cards.db'}")
+    card = cards.create(CardCreate(title="t", correlation_key="7", issue_ref=f"{project}#7"))
+    found = cards.get_by_correlation_key(f"{qualify_repo(provider, project)}#7")
+    assert found is not None and found.card_key == card.card_key

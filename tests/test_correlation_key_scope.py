@@ -1,0 +1,107 @@
+"""The correlation key is scoped to the repo (#484), and the newest task owns a stage."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import httpx
+from cfactory.adapters import AIFactoryAdapter, hydrate
+from cfactory.cards import CardCreate, CardStore
+from cfactory.models import CompletionEvent, Service, ServiceState
+from cfactory.progress import LiveProgressHub, poll_progress_once
+
+
+def _adapter(tasks):
+    return AIFactoryAdapter(
+        "http://x",
+        transport=httpx.MockTransport(lambda _r: httpx.Response(200, json={"tasks": tasks})),
+    )
+
+
+def test_same_issue_number_in_two_repos_makes_two_work_items(store):
+    items = _adapter(
+        [
+            {"id": "t1", "status": "coding", "githubIssueNumber": 7, "correlationKey": "a/x#7"},
+            {"id": "t2", "status": "coding", "githubIssueNumber": 7, "correlationKey": "b/y#7"},
+        ]
+    ).list_items()
+    hydrate(store, items)
+    assert sorted(w.correlation_key for w in store.list()) == ["a/x#7", "b/y#7"]
+
+
+def test_bare_row_and_card_are_adopted_by_the_qualified_key(store, tmp_path):
+    cards = CardStore(f"sqlite:///{tmp_path / 'cards.db'}")
+    card = cards.create(CardCreate(title="t", correlation_key="7"))
+    store.upsert_snapshot("7", Service.AIFACTORY, ServiceState(task_id="t1", status="coding"))
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="7",
+            service=Service.AIFACTORY,
+            task_id="t1",
+            status="coding",
+            updated_at=datetime(2026, 6, 4, 12, 0, tzinfo=UTC),
+            usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, "cost_usd": 0.01},
+        )
+    )
+    before = store.get("7")
+    assert before is not None
+
+    event = CompletionEvent(
+        correlation_key="a/x#7",
+        service=Service.AIFACTORY,
+        task_id="t1",
+        status="reviewing",
+        updated_at=datetime(2026, 6, 4, 12, 5, tzinfo=UTC),
+    )
+    item, applied = store.upsert_from_event(event)
+
+    assert applied and store.get("7") is None
+    assert len(item.timeline) == len(before.timeline) + 1
+    assert item.aifactory.usage is not None and item.aifactory.usage.total_tokens == 3
+    found = cards.get_by_correlation_key("a/x#7")
+    assert found is not None and found.card_key == card.card_key
+    assert found.correlation_key == "a/x#7"
+
+
+def _poll(store, tasks):
+    poll_progress_once(LiveProgressHub(), [_adapter(tasks)], store)
+    item = store.get("a/x#7")
+    assert item is not None
+    return item
+
+
+def test_newest_stalled_task_owns_the_row_over_an_older_done_one(store):
+    item = _poll(
+        store,
+        [
+            {
+                "id": "a",
+                "status": "done",
+                "correlationKey": "a/x#7",
+                "createdAt": "2026-06-01T10:00:00Z",
+            },
+            {
+                "id": "c",
+                "status": "stalled",
+                "correlationKey": "a/x#7",
+                "createdAt": "2026-06-02T10:00:00Z",
+            },
+        ],
+    )
+    assert item.aifactory.task_id == "c" and item.aifactory.status == "stalled"
+
+
+def test_missing_created_at_keeps_the_done_task(store):
+    item = _poll(
+        store,
+        [
+            {
+                "id": "a",
+                "status": "done",
+                "correlationKey": "a/x#7",
+                "createdAt": "2026-06-01T10:00:00Z",
+            },
+            {"id": "c", "status": "stalled", "correlationKey": "a/x#7"},
+        ],
+    )
+    assert item.aifactory.task_id == "a" and item.aifactory.status == "done"

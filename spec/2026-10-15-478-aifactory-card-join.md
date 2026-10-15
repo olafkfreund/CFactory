@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 478
 intent: intent/2026-10-15-478-aifactory-card-join.md
 ---

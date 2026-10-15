@@ -753,9 +753,10 @@ class WorkItemStore:
 
         legacy (window, #484 follow-up): producers used to send ``<n>``. With no
         row on ``key`` yet, the bare row is renamed. When ``key`` already has a
-        row (e.g. PFactory's qualified origin key), this service's slice and its
-        timeline entries move across instead; otherwise prune_duplicate_stages
-        would clear the bare slice and its usage. Returns the row for ``key``.
+        row (e.g. PFactory's qualified origin key), this service's timeline
+        entries move across (ordered by ``updated_at``), and its slice too unless
+        ``key`` already holds this task; otherwise prune_duplicate_stages would
+        clear the bare slice and its usage. Returns the row for ``key``.
         """
         m = _QUALIFIED_KEY.match(key)
         if m is None or task_id is None:
@@ -780,8 +781,13 @@ class WorkItemStore:
         else:
             timeline = legacy.timeline or []
             moved = [e for e in timeline if e.get("service") == service.value]
-            row.timeline = [*moved, *(row.timeline or [])]
-            setattr(row, service.value, getattr(legacy, service.value))
+            row.timeline = sorted(
+                [*moved, *(row.timeline or [])], key=lambda e: str(e.get("updated_at") or "")
+            )
+            # Same task already on `key`: its slice is the newer one (a late
+            # old-format event must not roll it back), so only the history moves.
+            if (getattr(row, service.value) or {}).get("task_id") != task_id:
+                setattr(row, service.value, getattr(legacy, service.value))
             legacy.timeline = [e for e in timeline if e.get("service") != service.value]
             setattr(legacy, service.value, ServiceState().model_dump())
             if not _row_has_stage_data(legacy):

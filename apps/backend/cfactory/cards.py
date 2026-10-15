@@ -829,9 +829,18 @@ class CardStore:
             row = session.scalars(stmt).first()
             if row is None and (m := _QUALIFIED_KEY.match(correlation_key)):
                 # legacy (window, #484 follow-up): a card still keyed on the bare number.
+                # Only a card whose issue lives in the key's repo: a bare `7` is
+                # ambiguous, and a card with no issue_ref is skipped, not guessed.
                 legacy = self._select().where(CardRow.correlation_key == m.group(2))
                 # Any: the stubs type this row differently across SQLAlchemy builds.
-                old: Any = session.scalars(legacy.order_by(CardRow.created_at.asc())).first()
+                old: Any = next(
+                    (
+                        c
+                        for c in session.scalars(legacy.order_by(CardRow.created_at.asc()))
+                        if _issue_project(c.issue_ref) == m.group(1)
+                    ),
+                    None,
+                )
                 if old is not None:
                     logger.info(
                         "legacy correlation key migrated card=%s %s -> %s",

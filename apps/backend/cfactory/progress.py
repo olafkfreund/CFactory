@@ -101,6 +101,12 @@ def _created(item: AdapterItem) -> datetime | None:
     return t if t.tzinfo else t.replace(tzinfo=UTC)
 
 
+def _current_task(store: WorkItemStore, item: AdapterItem) -> str | None:
+    """The task id the row for ``item``'s key currently shows for its service."""
+    wi = store.get(item.correlation_key)
+    return getattr(wi, item.service.value).task_id if wi is not None else None
+
+
 def poll_progress_once(
     hub: LiveProgressHub,
     adapters: list[BaseHTTPAdapter],
@@ -154,7 +160,15 @@ def poll_progress_once(
                         and last_dead[i.correlation_key] == i.task_id
                     )
                 ]
-                hydrate(store, live, newest_ids=frozenset(i.task_id for i in owners))
+                # "Newest" is only known among this poll's tasks: it may override
+                # #483's guard only when the row's current task is one of them, or
+                # a lone dead task would beat an unlisted (event-only) re-run.
+                newest_ids = frozenset(
+                    o.task_id
+                    for o in owners
+                    if _current_task(store, o) in {i.task_id for i in groups[o.correlation_key]}
+                )
+                hydrate(store, live, newest_ids=newest_ids)
                 store.reconcile_snapshot(adapter.service, {i.task_id for i in live})
                 # Drop orphaned duplicate cards left when an upstream re-keys a
                 # task (fallback id -> real GitHub-issue key); reconcile preserves

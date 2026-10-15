@@ -31,7 +31,7 @@ def test_same_issue_number_in_two_repos_makes_two_work_items(store):
 
 def test_bare_row_and_card_are_adopted_by_the_qualified_key(store, tmp_path):
     cards = CardStore(f"sqlite:///{tmp_path / 'cards.db'}")
-    card = cards.create(CardCreate(title="t", correlation_key="7"))
+    card = cards.create(CardCreate(title="t", correlation_key="7", issue_ref="a/x#7"))
     store.upsert_snapshot("7", Service.AIFACTORY, ServiceState(task_id="t1", status="coding"))
     store.upsert_from_event(
         CompletionEvent(
@@ -139,3 +139,61 @@ def test_slice_moves_into_an_existing_qualified_row(store):
     assert item.pfactory.task_id == "p1"
     assert item.aifactory.usage is not None and item.aifactory.usage.total_tokens == 3
     assert [e.service for e in item.timeline] == [Service.AIFACTORY]
+
+
+def test_card_fallback_only_takes_a_card_from_the_keys_repo(tmp_path):
+    cards = CardStore(f"sqlite:///{tmp_path / 'cards.db'}")
+    mine = cards.create(CardCreate(title="t", correlation_key="7", issue_ref="a/x#7"))
+    cards.create(CardCreate(title="no issue", correlation_key="7"))
+    assert cards.get_by_correlation_key("b/y#7") is None
+    found = cards.get_by_correlation_key("a/x#7")
+    assert found is not None and found.card_key == mine.card_key
+
+
+def test_lone_dead_task_does_not_beat_an_unlisted_rerun(store):
+    store.upsert_from_event(
+        CompletionEvent(
+            correlation_key="a/x#7",
+            service=Service.AIFACTORY,
+            task_id="rerun",
+            status="done",
+            updated_at=datetime(2026, 6, 4, tzinfo=UTC),
+        )
+    )
+    item = _poll(
+        store,
+        [
+            {
+                "id": "orig",
+                "status": "stalled",
+                "correlationKey": "a/x#7",
+                "createdAt": "2026-06-01T10:00:00Z",
+            }
+        ],
+    )
+    assert (item.aifactory.task_id, item.aifactory.status) == ("rerun", "done")
+
+
+def _ev(key, status, minute, tokens):
+    return CompletionEvent(
+        correlation_key=key,
+        service=Service.AIFACTORY,
+        task_id="t1",
+        status=status,
+        updated_at=datetime(2026, 6, 4, 12, minute, tzinfo=UTC),
+        usage={"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens, "cost_usd": 0.0},
+    )
+
+
+def test_late_old_format_event_does_not_roll_back_the_qualified_slice(store):
+    store.upsert_from_event(_ev("a/x#7", "coding", 0, 3))
+    store.upsert_from_event(_ev("a/x#7", "reviewing", 5, 10))
+    store.upsert_from_event(_ev("7", "coding", 1, 3))  # late event from an old producer pod
+    store.upsert_snapshot(
+        "a/x#7", Service.AIFACTORY, ServiceState(task_id="t1", status="reviewing")
+    )
+    item = store.get("a/x#7")
+    assert store.get("7") is None and item is not None
+    assert item.aifactory.status == "reviewing"
+    assert item.aifactory.usage is not None and item.aifactory.usage.total_tokens == 10
+    assert [e.updated_at.minute for e in item.timeline if e.updated_at] == [0, 1, 5]

@@ -41,8 +41,9 @@ def _is_dead_stage(status: str | None) -> bool:
     liveness-swept ``stalled`` / ``watchdog_stalled`` (TFactory's #95 sweep flips
     a hung stage to ``status=stalled``).
 
-    Such a stage is auto-removed from the board rather than shown as running
-    forever. Token-boundary match (never substring — ``"installed"`` must not
+    Such a stage is kept out of the live feed rather than shown as running
+    forever (it stays on the board, stored as stalled). Token-boundary match
+    (never substring — ``"installed"`` must not
     read as stalled). ponytail follow-up: fold ``stalled`` into the fleet-shared
     ``_STUCK_TOKENS`` so ``is_stuck``/``is_active`` agree everywhere, not just
     here.
@@ -129,10 +130,8 @@ def poll_progress_once(
         try:
             items = adapter.list_items()
             # A stage the upstream reports as stuck/stalled is a dead task — its
-            # own watchdog gave up. Auto-remove it: keep it out of the live feed +
-            # store so the board never shows it as "running", and delete any card
-            # already on the board. Filtering every poll makes removal stick even
-            # though the upstream keeps listing the stalled task.
+            # own watchdog gave up. Keep it out of the live feed so it never reads
+            # as "running"; it stays in the store, stored as stalled.
             stuck_ids = {i.task_id for i in items if _is_dead_stage(i.status)}
             for item in items:
                 if item.task_id in stuck_ids:
@@ -141,10 +140,7 @@ def poll_progress_once(
                 hub.update(lp)
                 changed.append(lp)
             if store is not None:
-                live = [i for i in items if i.task_id not in stuck_ids]
-                # Delete dead cards BEFORE reconcile — reconcile would blank the
-                # stalled stage's task_id, defeating prune_stuck's id match.
-                store.prune_stuck(adapter.service, stuck_ids)
+                live = items
                 hydrate(store, live)
                 store.reconcile_snapshot(adapter.service, {i.task_id for i in live})
                 # Drop orphaned duplicate cards left when an upstream re-keys a
@@ -163,12 +159,6 @@ def poll_progress_once(
             )
         finally:
             adapter.close()
-    if store is not None:
-        # Store-wide age sweep (once per cycle, after every adapter): drop a card
-        # whose RUNNING frontier has gone silent past the stall deadline — a dead
-        # executor orphaned from a completion event that no per-adapter reconcile
-        # can clear (no task_id). Parked review/queued frontiers are never touched.
-        store.prune_stalled()
     return changed
 
 

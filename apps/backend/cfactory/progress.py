@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import re
 from datetime import UTC, datetime
 from functools import cache
 from typing import Any
@@ -27,32 +26,11 @@ from starlette.concurrency import run_in_threadpool
 from .adapters import AdapterError, AdapterItem, BaseHTTPAdapter, build_adapters, hydrate
 from .config import Settings, get_settings
 from .models import Service
-from .status_taxonomy import is_stuck
+from .status_taxonomy import is_dead_stage as _is_dead_stage
 from .store import WorkItemStore, get_store
 from .ws import ConnectionManager
 
 logger = logging.getLogger(__name__)
-
-_SPLIT_RE = re.compile(r"[\s_\-]+")
-
-
-def _is_dead_stage(status: str | None) -> bool:
-    """A stage the upstream has given up on: an explicit ``stuck`` marker, or a
-    liveness-swept ``stalled`` / ``watchdog_stalled`` (TFactory's #95 sweep flips
-    a hung stage to ``status=stalled``).
-
-    Such a stage is kept out of the live feed rather than shown as running
-    forever (it stays on the board, stored as stalled). Token-boundary match
-    (never substring — ``"installed"`` must not
-    read as stalled). ponytail follow-up: fold ``stalled`` into the fleet-shared
-    ``_STUCK_TOKENS`` so ``is_stuck``/``is_active`` agree everywhere, not just
-    here.
-    """
-    if is_stuck(status):
-        return True
-    if not status:
-        return False
-    return "stalled" in {t for t in _SPLIT_RE.split(status.strip().lower()) if t}
 
 
 def _now() -> datetime:

@@ -107,3 +107,13 @@ while the backend `/api/needs-you/count` (`needs_you.py`) still counted it.
 liveness-stalled row whose stage is stalled and names that stage. Tests on the
 same row (AIFactory completed, TFactory stalled, 1 h old):
 `needsYou.test.ts` and `tests/test_needs_you.py`.
+
+## Deviation (lead review of #483, item 2): reconcile keeps a stalled stage
+
+`reconcile_snapshot` (`store.py`) blanked any non-terminal stage the upstream
+stopped listing, and `stalled` is not terminal, so the plan node went back to
+`completed` once TFactory pruned the stalled spec. It now skips a dead stage
+too. To use the check from `store.py` without an import cycle,
+`_is_dead_stage` moved from `progress.py` to `status_taxonomy.is_dead_stage`
+(`progress.py` keeps the old name as an import alias; `task_process.py` imports
+it from the taxonomy). Test: `test_stalled_stage_survives_the_upstream_dropping_it`.

@@ -150,6 +150,34 @@ def test_stalled_tfactory_stage_marks_plan_node_stalled():
     assert graph["nodes"][0]["status"] == "stalled"
 
 
+def test_stalled_stage_survives_the_upstream_dropping_it():
+    # Review of #483: reconcile blanked a non-terminal stage the upstream stopped
+    # listing, so the plan node went back to "completed" once TFactory pruned the
+    # stalled spec. A stalled stage is kept.
+    def tf(tasks: list[dict]) -> TFactoryAdapter:
+        return TFactoryAdapter(
+            "http://x",
+            transport=httpx.MockTransport(lambda _req: httpx.Response(200, json={"tasks": tasks})),
+        )
+
+    store = _store()
+    store.upsert_snapshot("9", Service.AIFACTORY, ServiceState(task_id="ai:9", status="completed"))
+    poll_progress_once(
+        LiveProgressHub(),
+        [tf([{"spec_id": "tf-9", "status": "stalled", "github_issue": 9}])],
+        store,
+    )
+    poll_progress_once(LiveProgressHub(), [tf([])], store)
+
+    assert store.get("9").tfactory.status == "stalled"
+    session = {
+        "board_state": "done",
+        "epic": {"children": [{"key": "a"}]},
+        "emit_result": {"child_numbers": {"a": 9}},
+    }
+    assert task_process._build_plan_graph(session, store)["nodes"][0]["status"] == "stalled"
+
+
 # ── #480: a silent running row keeps updated_at so liveness can flag it ─────────
 
 

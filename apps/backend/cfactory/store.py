@@ -21,7 +21,7 @@ from sqlalchemy.types import JSON
 from .config import DEFAULT_TENANT, get_settings
 from .db import Base, add_column_ddl, make_engine
 from .models import CompletionEvent, Liveness, Service, ServiceState, WorkItem, as_utc
-from .status_taxonomy import is_terminal as _is_terminal
+from .status_taxonomy import is_dead_stage, is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
 
 logger = logging.getLogger(__name__)
@@ -594,8 +594,8 @@ class WorkItemStore:
                 data = getattr(row, service.value) or {}
                 status = data.get("status")
                 task_id = data.get("task_id")
-                if not status or _is_terminal(status):
-                    continue  # idle, or completed/failed — leave it
+                if not status or _is_terminal(status) or is_dead_stage(status):
+                    continue  # idle, completed/failed, or stalled (#479) — leave it
                 if task_id is not None and task_id not in live_task_ids:
                     setattr(row, service.value, ServiceState().model_dump())
                     row.updated_at = _now()

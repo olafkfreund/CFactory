@@ -108,6 +108,8 @@ def _plan_child_state(wi: Any) -> tuple[str | None, str | None, str | None]:
     status: str | None = None
     if any(w in s for s in statuses for w in _FAIL_WORDS):
         status = "failed"
+    elif any(w in s for s in statuses for w in ("stall", "stuck")):
+        status = "stalled"
     elif any(w in s for s in statuses for w in _DONE_WORDS):
         status = "completed"
     elif any(w in s for s in statuses for w in _ACTIVE_WORDS):

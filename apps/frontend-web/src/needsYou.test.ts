@@ -127,4 +127,22 @@ describe("needsYou", () => {
     const a = attentionFor(item);
     expect(a?.reason).toBe("Verified — awaiting your review before merge.");
   });
+  it("flags a stalled stage after a completed build, as the backend count does", () => {
+    // Same row as tests/test_needs_you.py: a stalled TFactory stage reads
+    // "failed" overall, but the top-bar count includes it, so the list must too.
+    const a = attentionFor(
+      wi(
+        { a: "completed", t: "stalled" },
+        {
+          last_activity_age_seconds: 3600,
+          active_service: "tfactory",
+          active_status: "stalled",
+          stalled: true,
+          deadline_seconds: 900,
+        },
+      ),
+    );
+    expect(a?.kind).toBe("stalled");
+    expect(a?.stage).toBe("test");
+  });
 });

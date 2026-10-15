@@ -44,6 +44,8 @@ terminal check.
 
 from __future__ import annotations
 
+import re
+
 # Re-export the canonical classifiers + token sets from the vendored, pinned
 # factory-contracts package (the hub single source of truth). Importing rather
 # than redefining is the consumption proven for Factory#160; the names match the
@@ -74,6 +76,7 @@ __all__ = [
     "_RUNNING_TOKENS",
     "_STUCK_TOKENS",
     "is_active",
+    "is_dead_stage",
     "is_done",
     "is_failed",
     "is_failure_or_stuck",
@@ -83,3 +86,24 @@ __all__ = [
     "is_stuck",
     "is_terminal",
 ]
+
+
+_SPLIT_RE = re.compile(r"[\s_\-]+")
+
+
+def is_dead_stage(status: str | None) -> bool:
+    """A stage the upstream has given up on: an explicit ``stuck`` marker, or a
+    liveness-swept ``stalled`` / ``watchdog_stalled`` (TFactory's #95 sweep flips
+    a hung stage to ``status=stalled``).
+
+    Kept out of the live feed, but stored and never blanked by reconcile, so the
+    board and the plan DAG keep showing it stalled (#479). Token-boundary match,
+    never substring: ``"installed"`` must not read as stalled. ponytail follow-up:
+    fold ``stalled`` into the fleet-shared ``_STUCK_TOKENS`` so ``is_stuck`` and
+    ``is_active`` agree everywhere.
+    """
+    if is_stuck(status):
+        return True
+    if not status:
+        return False
+    return "stalled" in {t for t in _SPLIT_RE.split(status.strip().lower()) if t}

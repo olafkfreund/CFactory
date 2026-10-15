@@ -31,6 +31,7 @@ class AdapterItem(BaseModel):
     phase: str | None = None
     title: str | None = None
     repo: str | None = None  # target repo owner/name (W5, Factory #218)
+    created_at: str | None = None  # #484: newest task on a key owns the stage
     # #245: PFactory's per-lens plan-review verdict. `gates_passed` alone says
     # THAT a plan is blocked, not WHY, so the cockpit could only render an
     # enabled Approve button and let the click 409 with a lens it never showed.
@@ -84,6 +85,11 @@ def first(d: dict[str, Any], *keys: str) -> Any | None:
         if cur is not None:
             return cur
     return None
+
+
+def created_at_of(row: dict[str, Any]) -> str | None:
+    value = first(row, "createdAt", "created_at")
+    return None if value is None else str(value)
 
 
 class AdapterError(RuntimeError):

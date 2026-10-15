@@ -81,3 +81,19 @@ Self-contained summary of the approved decisions:
 ## Rollback
 
 Revert the implementation commits. No schema or data migration.
+
+## Deviation (after review)
+
+The Opus review of the diff found two gaps, fixed in one follow-up commit:
+
+- Step 4's check used substrings (`"stall" in s`), so `installed` read as
+  stalled. It now calls `progress._is_dead_stage` (whole-token match). Test:
+  `test_plan_child_stall_check_is_whole_token`.
+- The cockpit's `stageState` (`apps/frontend-web/src/taskState.ts`) mapped a
+  kept `stalled` stage to `running`, which #186/#187 deleted rows to avoid.
+  A whole-token `stalled`/`stuck` now reads `failed`. Test:
+  `apps/frontend-web/src/taskState.test.ts`.
+
+Not changed (out of scope, noted for the reviewer): the backend card
+write-back (`card_status_for`) still maps `stalled` to `in_progress`, because
+`is_stuck` only knows `stuck` (audit note N1).

@@ -13,7 +13,7 @@ import time
 import httpx
 from cfactory import task_process
 from cfactory.adapters import AIFactoryAdapter, TFactoryAdapter
-from cfactory.models import Service, ServiceState
+from cfactory.models import Service, ServiceState, WorkItem
 from cfactory.progress import LiveProgressHub, _is_dead_stage, poll_progress_once
 from cfactory.store import WorkItemStore, compute_liveness
 
@@ -170,3 +170,9 @@ def test_silent_running_row_is_kept_and_flagged_stalled(monkeypatch):
     assert row is not None
     assert row.updated_at == first.updated_at  # no-op polls never bump it (#105)
     assert compute_liveness(row).stalled is True
+
+
+def test_plan_child_stall_check_is_whole_token():
+    # "installed" contains "stalled" as a substring; it must still read completed.
+    wi = WorkItem(correlation_key="9", aifactory=ServiceState(status="deps_installed_done"))
+    assert task_process._plan_child_state(wi)[0] == "completed"

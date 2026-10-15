@@ -23,6 +23,7 @@ from .adapters.aifactory import AIFactoryAdapter
 from .adapters.base import AdapterError, BaseHTTPAdapter
 from .adapters.pfactory import PFactoryAdapter
 from .adapters.tfactory import TFactoryAdapter
+from .progress import _is_dead_stage
 from .store import WorkItemStore
 
 # TFactory's v0.2 lane spine, in execution order. Drives the test-stage diagram's
@@ -108,7 +109,7 @@ def _plan_child_state(wi: Any) -> tuple[str | None, str | None, str | None]:
     status: str | None = None
     if any(w in s for s in statuses for w in _FAIL_WORDS):
         status = "failed"
-    elif any(w in s for s in statuses for w in ("stall", "stuck")):
+    elif any(_is_dead_stage(s) for s in statuses):
         status = "stalled"
     elif any(w in s for s in statuses for w in _DONE_WORDS):
         status = "completed"

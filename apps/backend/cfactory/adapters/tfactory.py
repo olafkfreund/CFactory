@@ -8,7 +8,7 @@ import httpx
 
 from cfactory.models import Service
 
-from .base import AdapterError, AdapterItem, BaseHTTPAdapter, first
+from .base import AdapterError, AdapterItem, BaseHTTPAdapter, created_at_of, first
 
 # The canonical TFactory task/evidence API is mounted under this prefix.
 _TF_PREFIX = "/api/tfactory/tasks"
@@ -128,11 +128,16 @@ class TFactoryAdapter(BaseHTTPAdapter):
             "metadata.githubIssueNumber",
         )
         return AdapterItem(
-            correlation_key=str(issue if issue is not None else task_id),
+            # legacy (window, #484 follow-up): bare issue number
+            correlation_key=str(
+                first(row, "correlation_key", "correlationKey")
+                or (issue if issue is not None else task_id)
+            ),
             service=self.service,
             task_id=str(task_id),
             status=first(row, "status"),
             phase=first(row, "phase"),
             title=first(row, "title", "name"),
             repo=first(row, "repo"),  # W5 (#218): target repo owner/name
+            created_at=created_at_of(row),
         )

@@ -62,8 +62,8 @@ newcomer's first run, start with the
 
 Cards live in their **own table**, deliberately — not in `work_items`. This is
 the single most important structural fact about the feature, and it is not a
-style preference. `store.py` owns `reconcile_snapshot`, `prune_duplicate_stages`,
-`prune_stuck` and `prune_stalled`: machinery that blanks stages and **DELETEs
+style preference. `store.py` owns `reconcile_snapshot` and
+`prune_duplicate_stages`: machinery that blanks stages and **DELETEs
 work-item rows** whenever upstream polling says the task is gone. That is
 correct for a mirror of upstream state and fatal for human-authored planning
 data. So none of it can reach a card.

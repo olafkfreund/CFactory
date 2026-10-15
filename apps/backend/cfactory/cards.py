@@ -7,11 +7,11 @@ set when it enters the factory — that is the join back to ``work_items`` and t
 RFC-0001 correlation timeline.
 
 Cards live in their OWN table, deliberately. ``store.py``'s
-``reconcile_snapshot``, ``prune_duplicate_stages``, ``prune_stuck`` and
-``prune_stalled`` exist to blank stages and DELETE work-item rows whenever
-upstream polling says the task is gone. That machinery is correct for a mirror of
-upstream state and fatal for human-authored planning data, so none of it may be
-able to reach a card. The RFC-0019 spike (§4, "design corrections") recommends
+``reconcile_snapshot`` and ``prune_duplicate_stages`` exist to blank stages and
+DELETE work-item rows whenever upstream polling says the task is gone. That
+machinery is correct for a mirror of upstream state and fatal for human-authored
+planning data, so none of it may be able to reach a card. The RFC-0019 spike
+(§4, "design corrections") recommends
 exactly this separation instead of a precedence rule.
 
 Mirrors :mod:`cfactory.audit`: an ORM row on the shared ``Base`` plus a thin

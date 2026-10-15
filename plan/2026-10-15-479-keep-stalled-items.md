@@ -34,22 +34,23 @@ Self-contained summary of the approved decisions:
      is not None with `aifactory.status == "stalled"`; hub still excludes it.
    - `test_poll_deletes_a_task_that_later_stalls` becomes
      `test_poll_keeps_a_task_that_later_stalls`: row kept, status `stalled`.
-   - New #479 wiring test: store a child (issue 9) with AIFactory `completed`,
-     then poll a TFactory-shaped... (use the AIFactory mock adapter for the
-     stalled stage is wrong service) -> use `upsert_snapshot` for AIFactory
-     `completed` and a `TFactoryAdapter` mock reporting the TFactory task
-     `stalled` for issue 9 through `poll_progress_once`; then
-     `task_process._build_plan_graph(session, store)` with a session
+   - New #479 wiring test: `upsert_snapshot("9", AIFACTORY, completed)`, then
+     `poll_progress_once` with a `TFactoryAdapter` mock whose list
+     (`{"tasks": [...]}` on `/api/tfactory/tasks`) reports
+     `{"spec_id": "tf-9", "status": "stalled", "github_issue": 9}`; then
+     `task_process._build_plan_graph(session, store)` with
      `{"board_state": "done", "epic": {"children": [{"key": "a"}]},
      "emit_result": {"child_numbers": {"a": 9}}}` must give node status
      `stalled`.
-   - New #480 wiring test: poll an `in_progress` item, then poll the same list
-     item again; then `compute_liveness(store.get(key), now=+1h).stalled` is
-     True and `updated_at` equals the first poll's.
+   - New #480 wiring test: poll an `in_progress` AIFactory item; set
+     `CFACTORY_STALL_DEADLINE_SECONDS=0.001` (monkeypatch) and sleep 0.01 s;
+     poll the same list item twice more (on unfixed code the first deletes the
+     row, the second re-creates it fresh). The row's `updated_at` must equal
+     the first poll's and `compute_liveness(row).stalled` must be True.
    → verify the new/changed tests FAIL on unfixed code:
    `PYTHONPATH=apps/backend pytest -q tests/test_prune_stuck.py`
-   Traps: check the TFactory adapter's list JSON shape in
-   `apps/backend/cfactory/adapters/tfactory.py` before writing the mock.
+   Traps: TFactory keys on `spec_id` and the issue on `github_issue`
+   (`adapters/tfactory.py:117-138`).
 2. `apps/backend/cfactory/progress.py:136-171`: keep `stuck_ids` only for the
    hub skip; `live = items`; drop the `prune_stuck` call and its comment; drop
    the `prune_stalled()` block. Update `_is_dead_stage`'s docstring ("kept out

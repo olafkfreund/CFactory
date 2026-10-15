@@ -495,16 +495,24 @@ def _refused(refusal: StageRefusal, stage: Stage) -> dict[str, Any]:
     }
 
 
-def _upstream_key(body: Any) -> str | None:
+def _upstream_key(body: Any, service: str | None = None) -> str | None:
     """The correlation key to join the card on, out of an intake response.
 
     Neither door returns an RFC-0001 correlation key directly: with no GitHub
     issue behind the card, both adapters key the work item on the upstream's own
     id (``adapters/aifactory.py`` and ``adapters/pfactory.py`` both fall back to
     ``task_id``), so that id IS the correlation key CFactory will see.
+
+    AIFactory is the exception (#478): from-issue answers ``<project>:<spec>``,
+    but its completion event is keyed on the issue number, else ``af-<spec_id>``
+    (AIFactory ``services/completion.py`` ``correlation_key()``). The card is
+    joined on that, or the event never finds it and CODE never settles.
     """
     if not isinstance(body, dict):
         return None
+    if service == "aifactory" and not body.get("correlation_key") and body.get("spec_id"):
+        issue = body.get("issue_number")
+        return str(issue) if issue is not None else f"af-{body['spec_id']}"
     for key in ("correlation_key", "task_id", "session_id", "id", "spec_id"):
         value = body.get(key)
         if value:
@@ -550,7 +558,7 @@ def _send(
             **result,
         }
 
-    ref = _upstream_key(result.get("body"))
+    ref = _upstream_key(result.get("body"), action.target_service)
     # Write-once: the FIRST stage to land sets the correlation key and every later
     # stage of the same card threads that same key rather than re-pointing it. No
     # key in the response at all would leave the card unjoinable, so fall back to

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 479
 also_closes: 480
 author: olafkfreund

@@ -1,17 +1,21 @@
-"""Auto-remove stuck/stalled tasks from the board.
+"""Stalled/stuck tasks are kept on the board, stored as stalled (#479, #480).
 
 A stage the upstream reports as ``stalled`` (its own liveness watchdog gave up —
-TFactory's #95 sweep) is a dead task; the cockpit must drop it instead of showing
-it as "running" forever, which just confuses users.
+TFactory's #95 sweep) is kept out of the live progress feed but stays in the store,
+so history is kept and the stage reads ``stalled`` rather than the row vanishing.
+The poller never deletes work-item rows.
 """
 
 from __future__ import annotations
 
+import time
+
 import httpx
-from cfactory.adapters import AIFactoryAdapter
+from cfactory import task_process
+from cfactory.adapters import AIFactoryAdapter, TFactoryAdapter
 from cfactory.models import Service, ServiceState
 from cfactory.progress import LiveProgressHub, _is_dead_stage, poll_progress_once
-from cfactory.store import WorkItemStore
+from cfactory.store import WorkItemStore, compute_liveness
 
 
 def _store() -> WorkItemStore:
@@ -37,42 +41,7 @@ def test_is_dead_stage_ignores_healthy_and_substrings():
     assert _is_dead_stage(None) is False
 
 
-# ── store.prune_stuck ───────────────────────────────────────────────────────
-
-
-def test_prune_stuck_deletes_matching_row():
-    s = _store()
-    s.upsert_snapshot("7", Service.TFACTORY, ServiceState(task_id="tf:7", status="stalled"))
-    assert s.prune_stuck(Service.TFACTORY, {"tf:7"}) == 1
-    assert s.get("7") is None
-
-
-def test_prune_stuck_leaves_other_rows():
-    s = _store()
-    s.upsert_snapshot("7", Service.TFACTORY, ServiceState(task_id="tf:7", status="stalled"))
-    s.upsert_snapshot("8", Service.TFACTORY, ServiceState(task_id="tf:8", status="triaged"))
-    assert s.prune_stuck(Service.TFACTORY, {"tf:7"}) == 1
-    assert s.get("7") is None
-    assert s.get("8") is not None
-
-
-def test_prune_stuck_empty_set_is_noop():
-    s = _store()
-    s.upsert_snapshot("7", Service.TFACTORY, ServiceState(task_id="tf:7", status="stalled"))
-    assert s.prune_stuck(Service.TFACTORY, set()) == 0
-    assert s.get("7") is not None
-
-
-def test_prune_stuck_is_per_service():
-    s = _store()
-    s.upsert_snapshot("7", Service.TFACTORY, ServiceState(task_id="tf:7", status="stalled"))
-    s.upsert_snapshot("7", Service.PFACTORY, ServiceState(task_id="pf:7", status="planning"))
-    # Pruning by a tfactory task id must not touch a pfactory-keyed row.
-    assert s.prune_stuck(Service.PFACTORY, {"tf:7"}) == 0
-    assert s.get("7") is not None
-
-
-# ── poll integration: stalled item auto-removed, healthy kept ───────────────
+# ── poll integration: stalled item kept in the store, out of the hub ─────────
 
 
 def _mock_ai(tasks: list[dict]) -> AIFactoryAdapter:
@@ -82,7 +51,7 @@ def _mock_ai(tasks: list[dict]) -> AIFactoryAdapter:
     )
 
 
-def test_poll_auto_removes_stalled_and_keeps_healthy():
+def test_poll_keeps_stalled_out_of_the_hub_but_in_the_store():
     ai = _mock_ai(
         [
             {
@@ -104,12 +73,14 @@ def test_poll_auto_removes_stalled_and_keeps_healthy():
     poll_progress_once(hub, [ai], store)
 
     assert store.get("1") is not None  # healthy task boarded
-    assert store.get("2") is None  # stalled task never boarded (auto-removed)
-    # and it is absent from the live progress feed too
+    kept = store.get("2")  # stalled task stays on the board, stored as stalled
+    assert kept is not None
+    assert kept.aifactory.status == "stalled"
+    # but it is absent from the live progress feed
     assert all(lp.correlation_key != "2" for lp in hub.snapshot())
 
 
-def test_poll_deletes_a_task_that_later_stalls():
+def test_poll_keeps_a_task_that_later_stalls():
     hub = LiveProgressHub()
     store = _store()
     # First poll: healthy → on the board.
@@ -130,7 +101,7 @@ def test_poll_deletes_a_task_that_later_stalls():
         store,
     )
     assert store.get("5") is not None
-    # Next poll: the upstream now reports it stalled → the card is removed.
+    # Next poll: the upstream now reports it stalled → the card is kept, as stalled.
     poll_progress_once(
         hub,
         [
@@ -147,45 +118,55 @@ def test_poll_deletes_a_task_that_later_stalls():
         ],
         store,
     )
-    assert store.get("5") is None
+    kept = store.get("5")
+    assert kept is not None
+    assert kept.aifactory.status == "stalled"
 
 
-# ── age-based prune_stalled: silent RUNNING frontier removed, parked kept ────
-
-from datetime import UTC, datetime, timedelta  # noqa: E402
+# ── #479: a stalled downstream stage lights its plan node as stalled ────────────
 
 
-def _future():
-    return datetime.now(UTC) + timedelta(hours=1)  # forces age > deadline
+def test_stalled_tfactory_stage_marks_plan_node_stalled():
+    store = _store()
+    store.upsert_snapshot("9", Service.AIFACTORY, ServiceState(task_id="ai:9", status="completed"))
+    tf = TFactoryAdapter(
+        "http://x",
+        transport=httpx.MockTransport(
+            lambda _req: httpx.Response(
+                200,
+                json={"tasks": [{"spec_id": "tf-9", "status": "stalled", "github_issue": 9}]},
+            )
+        ),
+    )
+    poll_progress_once(LiveProgressHub(), [tf], store)
+
+    session = {
+        "board_state": "done",
+        "epic": {"children": [{"key": "a"}]},
+        "emit_result": {"child_numbers": {"a": 9}},
+    }
+    graph = task_process._build_plan_graph(session, store)
+    assert graph is not None
+    assert graph["nodes"][0]["status"] == "stalled"
 
 
-def test_prune_stalled_removes_silent_running_frontier():
-    s = _store()
-    s.upsert_snapshot("1", Service.AIFACTORY, ServiceState(task_id="ai:1", status="in_progress"))
-    assert s.prune_stalled(now=_future()) == 1
-    assert s.get("1") is None
+# ── #480: a silent running row keeps updated_at so liveness can flag it ─────────
 
 
-def test_prune_stalled_keeps_parked_review():
-    # human_review legitimately WAITS on a human — never auto-removed.
-    s = _store()
-    s.upsert_snapshot("2", Service.AIFACTORY, ServiceState(task_id="ai:2", status="human_review"))
-    assert s.prune_stalled(now=_future()) == 0
-    assert s.get("2") is not None
+def test_silent_running_row_is_kept_and_flagged_stalled(monkeypatch):
+    item = [{"id": "x", "status": "in_progress", "metadata": {"githubIssueNumber": 1}}]
+    hub = LiveProgressHub()
+    store = _store()
+    poll_progress_once(hub, [_mock_ai(item)], store)
+    first = store.get("1")
+    assert first is not None
 
+    monkeypatch.setenv("CFACTORY_STALL_DEADLINE_SECONDS", "0.001")
+    time.sleep(0.01)
+    poll_progress_once(hub, [_mock_ai(item)], store)
+    poll_progress_once(hub, [_mock_ai(item)], store)
 
-def test_prune_stalled_keeps_terminal_and_queued():
-    s = _store()
-    s.upsert_snapshot("3", Service.AIFACTORY, ServiceState(task_id="ai:3", status="done"))
-    s.upsert_snapshot("4", Service.AIFACTORY, ServiceState(task_id="ai:4", status="backlog"))
-    assert s.prune_stalled(now=_future()) == 0
-    assert s.get("3") is not None
-    assert s.get("4") is not None
-
-
-def test_prune_stalled_keeps_fresh_running():
-    # Not yet aged past the deadline → still legitimately running.
-    s = _store()
-    s.upsert_snapshot("5", Service.AIFACTORY, ServiceState(task_id="ai:5", status="in_progress"))
-    assert s.prune_stalled() == 0
-    assert s.get("5") is not None
+    row = store.get("1")
+    assert row is not None
+    assert row.updated_at == first.updated_at  # no-op polls never bump it (#105)
+    assert compute_liveness(row).stalled is True

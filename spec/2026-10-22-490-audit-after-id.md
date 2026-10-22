@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 490
 intent: intent/2026-10-22-490-audit-after-id.md
 ---

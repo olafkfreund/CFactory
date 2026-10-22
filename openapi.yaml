@@ -763,6 +763,17 @@ paths:
     get:
       tags: [Audit]
       summary: Recent confirmed actions (the human-in-the-loop trail)
+      parameters:
+        - name: after_id
+          in: query
+          required: false
+          description: Return entries with a greater ID in ascending order. Omit for newest first.
+          schema: { type: integer, minimum: 0 }
+        - name: limit
+          in: query
+          required: false
+          description: Maximum entries to return.
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
       description: >-
         The `actor` on every entry identifies WITHOUT authenticating (#251): it
         is `user:<email>` for a person proved by a verified OIDC ID token,

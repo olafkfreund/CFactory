@@ -45,3 +45,9 @@ configured pytest root), `ruff check` on touched files, ratchet lint if present.
 
 Revert the PR; the params are optional so no client depends on them until the
 factory-gitops forwarder change lands.
+
+## Deviations
+
+- Step 4: the paging test also asserts the running total never exceeds the
+  rows inserted, so a paging bug that repeats a page fails instead of looping
+  forever. The 422 check is folded into the same test.

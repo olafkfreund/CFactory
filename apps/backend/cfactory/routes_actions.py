@@ -8,7 +8,7 @@ from http import HTTPStatus
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.concurrency import run_in_threadpool
 
 from .actions import PreparedAction, _nothing_to_act_on, execute_action, propose
@@ -101,8 +101,15 @@ async def execute_prepared_action(
 
 
 @router.get("/api/audit")
-def list_audit(audit: Annotated[AuditStore, Depends(audit_dep)]) -> dict[str, object]:
+def list_audit(
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    after_id: Annotated[int | None, Query(ge=0)] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict[str, object]:
     """Recent confirmed actions, newest first — the human-in-the-loop trail.
+
+    With ``after_id``, return up to ``limit`` newer entries in ascending ID
+    order for incremental paging. Without it, return the latest entries first.
 
     ``attribution`` says what this trail is CAPABLE of naming, and it exists
     because the actor column alone cannot say (#251 part b). Every row here
@@ -128,7 +135,7 @@ def list_audit(audit: Annotated[AuditStore, Depends(audit_dep)]) -> dict[str, ob
     residual — issuer set but verification failing — is visible anyway, because
     the reader has been told to expect ``user:`` actors and sees none.
     """
-    entries = audit.list()
+    entries = audit.list(limit=limit, after_id=after_id)
     return {
         "count": len(entries),
         "attribution": "oidc" if get_settings().oidc_issuer else "unattributed",

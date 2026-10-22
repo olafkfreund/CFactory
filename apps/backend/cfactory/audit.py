@@ -446,9 +446,17 @@ class AuditStore:
             session.flush()
             return row.to_model()
 
-    def list(self, limit: int = 100) -> EntryModels:
-        """Return the most recent entries, newest first."""
+    def list(self, limit: int = 100, after_id: int | None = None) -> EntryModels:
+        """Return entries after an ID oldest first, or the newest entries first."""
         with self._session() as session:
+            if after_id is not None:
+                rows = session.scalars(
+                    select(AuditEntry)
+                    .where(AuditEntry.id > after_id)
+                    .order_by(AuditEntry.id.asc())
+                    .limit(limit)
+                )
+                return [r.to_model() for r in rows]
             rows = session.scalars(select(AuditEntry).order_by(AuditEntry.id.desc()).limit(limit))
             return [r.to_model() for r in rows]
 

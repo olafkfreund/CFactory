@@ -110,6 +110,25 @@ def test_audit_newest_first(client_with_audit):
     assert [e["correlation_key"] for e in body["entries"]] == ["2", "1"]
 
 
+def test_audit_after_id_pages_every_row(client_with_audit):
+    api, audit = client_with_audit
+    expected = [_record(audit, correlation_key=str(i)).id for i in range(250)]
+    ids = []
+    after_id = 0
+    while True:
+        response = api.get("/api/audit", params={"after_id": after_id, "limit": 100})
+        assert response.status_code == 200
+        page = response.json()["entries"]
+        ids.extend(entry["id"] for entry in page)
+        assert len(ids) <= len(expected)
+        if len(page) < 100:
+            break
+        after_id = page[-1]["id"]
+
+    assert ids == sorted(expected)
+    assert api.get("/api/audit", params={"limit": 501}).status_code == 422
+
+
 # --------------------------------------------------------------------------
 # HMAC-anchored audit chain (#21)
 # --------------------------------------------------------------------------

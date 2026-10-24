@@ -8,7 +8,7 @@
 // diagnose) instead of surfacing as an `undefined` deep inside a component.
 //
 // Schemas are deliberately tolerant where the wire contract is additive:
-// `.passthrough()`/`.optional()` mirror the back-compat notes that were on the
+// `.loose()`/`.optional()` mirror the back-compat notes that were on the
 // hand-written interfaces, so adding a new backend field never breaks the client.
 
 import { z } from "zod";
@@ -21,7 +21,7 @@ async function getJson<T>(
   path: string,
   // Input is `unknown` (a parsed JSON body), not `T` — so a schema with a
   // `.default()`, whose input and output types differ, is accepted here.
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema: z.ZodType<T>,
   label: string,
 ): Promise<T> {
   const resp = await fetch(path);
@@ -54,7 +54,7 @@ async function sendJson<T>(
   method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body: unknown,
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema: z.ZodType<T>,
 ): Promise<T> {
   const resp = await fetch(path, {
     method,
@@ -105,9 +105,9 @@ export const HealthSchema = z
     service: z.string(),
     version: z.string(),
     multi_tenant: z.boolean().optional(),
-    upstreams: z.record(z.string()),
+    upstreams: z.record(z.string(), z.string()),
   })
-  .passthrough();
+  .loose();
 export type Health = z.infer<typeof HealthSchema>;
 
 export const ServiceStatusSchema = z
@@ -121,7 +121,7 @@ export const ServiceStatusSchema = z
     status: z.enum(["online", "unauthorized", "offline", "error"]).optional(),
     detail: z.string().nullable().optional(),
   })
-  .passthrough();
+  .loose();
 export type ServiceStatus = z.infer<typeof ServiceStatusSchema>;
 
 // --- Tokens ---------------------------------------------------------------
@@ -192,7 +192,7 @@ export const RoutingInfoSchema = z.object({
   rationale: z.string().nullable().optional(),
   autonomy: z.string().nullable().optional(),
   autonomy_reason: z.string().nullable().optional(),
-  phase_models: z.record(z.string()).optional(),
+  phase_models: z.record(z.string(), z.string()).optional(),
 });
 export type RoutingInfo = z.infer<typeof RoutingInfoSchema>;
 
@@ -204,7 +204,7 @@ export const InjectionScanSchema = z
     verdict: z.string().optional(), // "clean" | "flagged"
     reason: z.string().nullable().optional(),
   })
-  .passthrough();
+  .loose();
 export type InjectionScan = z.infer<typeof InjectionScanSchema>;
 
 // TFactory#650: dependency-review signal — pass/fail/warn plus findings.
@@ -219,11 +219,11 @@ export const DependencyReviewSchema = z
             severity: z.string().optional(),
             reason: z.string().optional(),
           })
-          .passthrough(),
+          .loose(),
       )
       .optional(),
   })
-  .passthrough();
+  .loose();
 export type DependencyReview = z.infer<typeof DependencyReviewSchema>;
 
 // TFactory#649: the judge-vote split behind a verdict (majority + dissent).
@@ -240,11 +240,11 @@ export const VoteSplitSchema = z
             model: z.string().optional(),
             verdict: z.string().optional(),
           })
-          .passthrough(),
+          .loose(),
       )
       .optional(),
   })
-  .passthrough();
+  .loose();
 export type VoteSplit = z.infer<typeof VoteSplitSchema>;
 
 // #245: PFactory's plan-review verdict. Every lens must clear `threshold`
@@ -270,15 +270,15 @@ export const PlanReviewSchema = z
                     severity: z.string().optional(),
                     detail: z.string().optional(),
                   })
-                  .passthrough(),
+                  .loose(),
               )
               .optional(),
           })
-          .passthrough(),
+          .loose(),
       )
       .optional(),
   })
-  .passthrough();
+  .loose();
 export type PlanReview = z.infer<typeof PlanReviewSchema>;
 
 /** Why Approve is unavailable, or null when the plan can be approved.
@@ -319,7 +319,7 @@ export const ServiceStateSchema = z.object({
       votes: VoteSplitSchema.optional(),
       review: PlanReviewSchema.optional(),
     })
-    .passthrough()
+    .loose()
     .optional(),
 });
 export type ServiceState = z.infer<typeof ServiceStateSchema>;
@@ -403,7 +403,7 @@ export const TokenTotalsSchema = z.object({
     // dollars for subscription/local runs).
     routing_savings_usd: z.number().optional(),
   }),
-  by_service: z.record(ServiceTokensSchema),
+  by_service: z.record(z.string(), ServiceTokensSchema),
   by_work_item: z.array(WorkItemTokenRowSchema),
 });
 export type TokenTotals = z.infer<typeof TokenTotalsSchema>;
@@ -438,8 +438,8 @@ export const WorkerRowSchema = z.object({
 export type WorkerRow = z.infer<typeof WorkerRowSchema>;
 
 export const TokensByWorkerSchema = z.object({
-  by_provider: z.record(RollupRowSchema),
-  by_model: z.record(RollupRowSchema),
+  by_provider: z.record(z.string(), RollupRowSchema),
+  by_model: z.record(z.string(), RollupRowSchema),
   by_work_item: z.array(
     z.object({
       correlation_key: z.string(),
@@ -472,7 +472,7 @@ export const CostRoutingSchema = z.object({
   routing: RoutingInfoSchema.nullable(),
   actual_cost_usd: z.number().nullable(),
   actual_total_tokens: z.number(),
-  actual_by_model: z.record(ActualModelRowSchema),
+  actual_by_model: z.record(z.string(), ActualModelRowSchema),
   billing: BillingSummarySchema.nullable().optional(),
   estimate_vs_actual: z.object({
     estimate_usd: z.number().nullable(),
@@ -731,7 +731,7 @@ export type GitVerify = z.infer<typeof GitVerifySchema>;
 // panel re-reads the tree afterwards, so only "it worked" is consumed here.
 export const GitDeleteSchema = z
   .object({ ok: z.boolean(), deleted: z.boolean().optional() })
-  .passthrough();
+  .loose();
 
 export type GitRepositoryBody = {
   project: string;
@@ -756,8 +756,8 @@ export const GitCapabilitySchema = z.object({
   key: z.string(),
   title: z.string(),
   detail: z.string(),
-  support: z.record(z.string()).default({}),
-  notes: z.record(z.string()).default({}),
+  support: z.record(z.string(), z.string()).default({}),
+  notes: z.record(z.string(), z.string()).default({}),
 });
 export type GitCapability = z.infer<typeof GitCapabilitySchema>;
 
@@ -1180,7 +1180,7 @@ export type ProcessGraph = z.infer<typeof ProcessGraphSchema>;
 // RFC-0015 §4 D2: one requirement->test traceability row — an acceptance
 // criterion mapped to its covering test(s), the VAL level reached, and the
 // verdict. `tests` empty => the AC has no covering test (a traceability gap).
-// `.passthrough()` keeps the row forward-compatible (the contract marks the item
+// `.loose()` keeps the row forward-compatible (the contract marks the item
 // `additionalProperties: true`).
 export const TraceabilityRowSchema = z
   .object({
@@ -1190,7 +1190,7 @@ export const TraceabilityRowSchema = z
     val_level: z.string().nullable().optional(),
     status: z.enum(["passed", "failed", "not_run", "skipped"]),
   })
-  .passthrough();
+  .loose();
 export type TraceabilityRow = z.infer<typeof TraceabilityRowSchema>;
 
 // RFC-0015 §3.3: the human-readable spec/plan/tasks Markdown mirror PFactory
@@ -1202,7 +1202,7 @@ export const ArtifactsSchema = z
     plan: z.string().optional(),
     tasks: z.string().optional(),
   })
-  .passthrough();
+  .loose();
 export type Artifacts = z.infer<typeof ArtifactsSchema>;
 
 export const ProcessDetailSchema = z.object({
@@ -1330,7 +1330,7 @@ export async function fetchRollups(): Promise<Rollups> {
 export const ActionStepSchema = z.object({
   method: z.string(),
   endpoint: z.string(),
-  payload: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 export type ActionStep = z.infer<typeof ActionStepSchema>;
 
@@ -1340,7 +1340,7 @@ export const PreparedActionSchema = z.object({
   target_service: z.string(),
   method: z.string(),
   endpoint: z.string(),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
   follow_ups: z.array(ActionStepSchema).optional(),
   rationale: z.string(),
 });
@@ -1489,7 +1489,7 @@ export async function refresh(): Promise<Record<string, unknown>> {
   if (!resp.ok) {
     throw new Error(`refresh failed: HTTP ${resp.status}`);
   }
-  const body = z.object({ refreshed: z.record(z.unknown()) }).parse(await resp.json());
+  const body = z.object({ refreshed: z.record(z.string(), z.unknown()) }).parse(await resp.json());
   return body.refreshed;
 }
 
@@ -1552,7 +1552,7 @@ export const StageRunSchema = z
     ref: z.string().nullable().optional(),
     detail: z.string().nullable().optional(),
   })
-  .passthrough();
+  .loose();
 export type StageRun = z.infer<typeof StageRunSchema>;
 
 export const CardSchema = z
@@ -1588,7 +1588,7 @@ export const CardSchema = z
     labels: z.array(z.string()).default([]),
     // Why the last sync with the git host failed, or null when it succeeded.
     // The board could not show this before because it did not model it (#323):
-    // `.passthrough()` meant the field arrived and was thrown away, so a card
+    // `.loose()` meant the field arrived and was thrown away, so a card
     // whose mirror is stale looked exactly like one that is current. Modelling
     // it is what makes rendering it possible; nothing renders it yet.
     // Always null on anything a read hands back - a soft-deleted card is off the
@@ -1620,14 +1620,14 @@ export const CardSchema = z
     created_at: z.string(),
     updated_at: z.string(),
   })
-  .passthrough();
+  .loose();
 export type Card = z.infer<typeof CardSchema>;
 
 // The list endpoint's envelope: tolerate both a bare array and the `{cards}`
 // envelope the sibling endpoints use, so either backend shape round-trips.
 const CardListSchema = z.union([
   z.array(CardSchema),
-  z.object({ cards: z.array(CardSchema) }).passthrough(),
+  z.object({ cards: z.array(CardSchema) }).loose(),
 ]);
 
 // `| undefined` is the honest type: the filter bar holds unset filters as an
@@ -1685,7 +1685,7 @@ export const CardCommentSchema = z
     created_at: z.string(),
     updated_at: z.string(),
   })
-  .passthrough();
+  .loose();
 export type CardComment = z.infer<typeof CardCommentSchema>;
 
 // `synced_at` null means the thread has never been read successfully — never
@@ -1700,7 +1700,7 @@ export const CardCommentsSchema = z
     synced_at: z.string().nullish(),
     comments: z.array(CardCommentSchema),
   })
-  .passthrough();
+  .loose();
 export type CardComments = z.infer<typeof CardCommentsSchema>;
 
 export async function fetchCardComments(cardKey: string): Promise<CardComments> {
@@ -1728,7 +1728,7 @@ export const CardImportSchema = z
     polled_at: z.string().nullish(),
     reason: z.string().nullish(),
   })
-  .passthrough();
+  .loose();
 export type CardImport = z.infer<typeof CardImportSchema>;
 
 export async function importCards(): Promise<CardImport> {
@@ -1781,10 +1781,10 @@ export const StageActionResultSchema = z
         sequence: z.array(CardStageSchema).optional(),
         warnings: z.array(z.string()).optional(),
       })
-      .passthrough(),
+      .loose(),
     card: CardSchema.nullable(),
   })
-  .passthrough();
+  .loose();
 export type StageActionResult = z.infer<typeof StageActionResultSchema>;
 
 /**

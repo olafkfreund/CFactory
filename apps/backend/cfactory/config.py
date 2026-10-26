@@ -240,10 +240,14 @@ class Settings(BaseSettings):
         repr=False,
     )
 
-    # Scoped API keys (#20). Local-first: when empty/None, auth enforcement is
-    # OPEN (single-user local mode). When set, requests must carry a known key
-    # with the required scope. Format: "<key>:read,write;<key2>:read".
+    # Scoped API keys (#20). When empty/None, API requests are denied unless
+    # api_dev_open is enabled. When set, requests must carry a known key with
+    # the required scope. Format: "<key>:read,write;<key2>:read".
     api_keys: str | None = Field(default=None, repr=False)
+
+    # Explicit local-dev opt-in for /api and /connect when no keys are configured.
+    # Ignored once api_keys is set; never enable on a hosted/shared deployment.
+    api_dev_open: bool = False
 
     # Bearer token the MCP transport (POST /mcp) requires (#113). Treated as a
     # LEGACY FULL-SCOPE credential since RFC-0019 Phase 2a: a caller presenting it

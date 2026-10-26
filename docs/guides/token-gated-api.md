@@ -127,7 +127,9 @@ set). Write endpoints additionally require a `write`-scoped key.
 `write`-scoped key under `CFACTORY_EVENTS_AUTH_MODE` (CFactory#501). In `warn`
 (the default) a call without one is still accepted, but logged as
 `unauthenticated '/api/events' accepted in warn mode (would be 401); total=N`.
-Set `enforce` once those lines stop appearing; any other value also rejects.
+Warn mode accepts events even with no keys configured; only enforce applies the
+#500 fail-closed rule. Set `enforce` once those lines stop appearing; any other
+value also rejects.
 The senders send `Authorization: Bearer $APP_API_TOKEN`, so that token must be
 a `read,write` key in `CFACTORY_API_KEYS`.
 

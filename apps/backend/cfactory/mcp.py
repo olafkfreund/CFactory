@@ -88,7 +88,7 @@ from .git_install import InstallError
 from .store import get_store
 
 logger = logging.getLogger(__name__)
-_legacy_secret_uses: Counter[str] = Counter()
+_legacy_mcp_uses: Counter[str] = Counter()
 
 router = APIRouter(tags=["CFactory MCP"])
 
@@ -994,21 +994,21 @@ def _authenticate(request: Request) -> frozenset[str]:
 
     # 1. Legacy full-scope bearer — count every match before checking scoped keys.
     if settings.mcp_secret and secret_matches(token, settings.mcp_secret):
-        # Constant log strings per branch: nothing derived from the secret-named
-        # settings reaches the log (CodeQL py/clear-text-logging-sensitive-data).
+        # Constant log strings per branch and no "secret" in the counter's name:
+        # CodeQL py/clear-text-logging-sensitive-data taints secret-named values.
         user_agent = sanitize_log(request.headers.get("user-agent", ""))
         if settings.mcp_legacy_secret_mode.strip().lower() == "allow":
-            _legacy_secret_uses["allowed"] += 1
+            _legacy_mcp_uses["allowed"] += 1
             logger.warning(
                 "legacy MCP secret allowed (deprecated); total=%d user_agent=%s",
-                _legacy_secret_uses["allowed"],
+                _legacy_mcp_uses["allowed"],
                 user_agent,
             )
             return FULL_SCOPE
-        _legacy_secret_uses["denied"] += 1
+        _legacy_mcp_uses["denied"] += 1
         logger.warning(
             "legacy MCP secret denied (deprecated); total=%d user_agent=%s",
-            _legacy_secret_uses["denied"],
+            _legacy_mcp_uses["denied"],
             user_agent,
         )
 

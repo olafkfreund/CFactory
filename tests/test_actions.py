@@ -6,7 +6,7 @@ injected ``httpx.MockTransport``; proposing must make NO HTTP call at all.
 Action kinds map to the factories' real task API:
   approve_plan   → POST /api/tasks/{id}/approve-plan
   approve_review → POST /api/tasks/{id}/worktree/create-pr  then  …/merge
-  reject_review  → POST /api/tasks/{id}/apply-correction  {reason}
+  reject_review  → POST /api/tasks/{id}/apply-correction  {fix_request_md, triage, confirm}
   recover        → POST /api/tasks/{id}/recover
   delete_task    → DELETE /api/tasks/{id}
 """
@@ -97,7 +97,10 @@ def test_propose_reject_review_carries_reason(store):
     assert action is not None
     assert action.kind == "reject_review"
     assert action.endpoint == "/api/tasks/ai-7/apply-correction"
-    assert action.payload == {"reason": "missing tests", "source": "cockpit"}
+    assert action.payload["reason"] == "missing tests"
+    assert action.payload["source"] == "cockpit"
+    assert "missing tests" in action.payload["fix_request_md"]
+    assert action.payload["triage"]["failing_tests"][0]["reason"] == "missing tests"
 
 
 def test_propose_reject_review_defaults_reason(store):

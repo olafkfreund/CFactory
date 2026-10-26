@@ -9,6 +9,7 @@ CI runs it as ``python3 scripts/ratchet_lint.py``.
 
 from __future__ import annotations
 
+import os
 import socket
 import sys
 from pathlib import Path
@@ -19,6 +20,9 @@ from fastapi.testclient import TestClient
 # APPENDED, not inserted: a script directory has no business shadowing a real
 # first-party module.
 sys.path.append(str(Path(__file__).resolve().parents[1] / "scripts"))
+
+# Existing keyless API tests exercise the explicit local-development mode.
+os.environ.setdefault("CFACTORY_API_DEV_OPEN", "true")
 
 from cfactory.app import create_app, store_dep
 from cfactory.store import WorkItemStore

@@ -37,11 +37,15 @@ Decisions carried over from the approved spec:
    - `get_keystore()` reads `CFACTORY_API_DEV_OPEN` (monkeypatch env, then `reset_settings()` and `reset_keystore()`).
    → verify by `cd apps/backend && .venv/bin/pytest ../../tests/test_auth.py ../../tests/test_token_gated_api.py -q`, which must fail on the old auth.py for the deny tests.
    Traps: the existing `_restore_keystore` fixture calls `reset_keystore()`; keep it.
+   Deviation (implementation): the full suite showed two more places.
+   - `scripts/dump_api_contract.py` deletes every `CFACTORY_*` env var at import. That dropped the conftest flag, so later `reset_settings()` calls rebuilt a deny-mode keystore (129 order-dependent failures), and the contract dump would have recorded 401s. The script now sets `CFACTORY_API_DEV_OPEN=true` right after the clear, because it dumps the local dev-open API.
+   - `tests/test_enterprise.py`'s `_client` builds `KeyStore(keys, dev_open=True)` so its `keys={}` local-actor test stays a dev-open test.
 3. `flake.nix`: export `CFACTORY_API_DEV_OPEN="''${CFACTORY_API_DEV_OPEN:-true}"` next to the MCP one.
    `.env.example`, `docs/dev/environment-reference.md`, `techdocs/dependencies.md`: change "unset = OPEN" to "unset = DENY unless CFACTORY_API_DEV_OPEN" and add a `CFACTORY_API_DEV_OPEN` row or line.
    `charts/cfactory/values.yaml`: update the `apiKeys` comment.
    → verify by `grep -rn 'Unset = auth OPEN\|auth is OPEN' .env.example docs techdocs charts` returning nothing.
    Traps: none.
+   Deviation (implementation): the grep turned up more stale "OPEN mode" wording, so step 3 also updates the comments in `apps/backend/cfactory/app.py`, `git_base_url.py` and `routes_connect.py`, plus `docs/guides/token-gated-api.md` (its rollback section said that disabling keys reopens the API) and `guides/multi-tenant.md`. These are comments and docs only.
 
 ## Tests
 

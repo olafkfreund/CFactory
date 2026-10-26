@@ -49,8 +49,9 @@ Editor   ──▶ cloudflared ────────────────�
 - The **editor** uses a **direct-to-backend host** (here `cfactory-mcp…`, which
   also serves the read-only MCP endpoint) and presents the **token** itself;
   CFactory's keystore validates it.
-- In **open mode** (no keys configured — the local/dev default) none of this is
-  enforced: the editor connects with no token at all.
+- With **no keys configured** the API denies every request (Factory#312), unless
+  `CFACTORY_API_DEV_OPEN=true` — the local-dev opt-in the nix dev shell sets. In
+  that dev-open mode the editor connects with no token at all.
 
 ## Scenario coverage
 
@@ -126,7 +127,9 @@ inbound webhook from the sibling factories). Write endpoints additionally requir
 
 ### Rolling back
 Set `apiKeys.enabled=false` (and `frontend.apiKey.enabled=false`), or remove the two
-env vars. The keystore returns to OPEN mode and the cockpit is unchanged. Rotating
+env vars. With no keys the API now DENIES every request (Factory#312); reopening
+it needs `CFACTORY_API_DEV_OPEN=true` via `config.extraEnv`, which removes all
+API auth — an emergency stopgap only, never a resting state. Rotating
 the key = update the Secret and restart both deployments.
 
 ---
@@ -232,7 +235,7 @@ reachable only through the proxy — perimeter work, tracked in Factory#312.
 - `GET /connect/vscode?redirect=<editor cb>&state=<nonce>` — one-click hand-off; 302s to `<redirect>?token=…&state=…`.
 
 **Settings** (`CFACTORY_*` env / Helm `config.*` + `apiKeys.*` + `frontend.apiKey.*`)
-- `CFACTORY_API_KEYS` — `"<key>:read,write;<key2>:read"`; empty = OPEN mode.
+- `CFACTORY_API_KEYS` — `"<key>:read,write;<key2>:read"`; empty = DENY unless `CFACTORY_API_DEV_OPEN=true`.
 - `CFACTORY_API_KEY` (frontend) — the bare key nginx injects.
 - `CFACTORY_PUBLIC_API_URL` — shown on `/settings/token` as the editor API URL.
 - `CFACTORY_OIDC_ISSUER` / `CFACTORY_OIDC_AUDIENCE` — who the audit trail names

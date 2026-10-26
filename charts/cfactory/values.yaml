@@ -159,11 +159,12 @@ config:
   #     valueFrom: { secretKeyRef: { name: cfactory-llm, key: anthropic-key } }
   extraEnv: []
 
-# Scoped API keys (CFACTORY_API_KEYS). When empty, auth is OPEN (single-user
-# local mode). In production, set existingSecret to a Secret carrying the
+# Scoped API keys (CFACTORY_API_KEYS). When empty, /api and /connect DENY every
+# request (Factory#312) unless CFACTORY_API_DEV_OPEN=true (local dev only, via
+# config.extraEnv). In production, set existingSecret to a Secret carrying the
 # "<key>:read,write;<key2>:read" string under the named key.
 apiKeys:
-  # When false, CFACTORY_API_KEYS is not injected (open mode).
+  # When false, CFACTORY_API_KEYS is not injected and the API denies.
   enabled: false
   # Name of a Secret holding the API keys string. Required when enabled=true.
   existingSecret: cfactory-api-keys

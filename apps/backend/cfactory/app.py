@@ -151,8 +151,8 @@ def create_app() -> FastAPI:
     # When the keystore is configured (CFACTORY_API_KEYS set), every request to
     # the data/action surface (/api/* and /connect/*) must carry a key with the
     # READ scope; write endpoints additionally require WRITE via require_scope.
-    # In OPEN mode (no keys) this is a no-op, so local/dev and the current prod
-    # posture are unchanged. The browser cockpit reaches this through nginx, which
+    # With no keys it DENIES (Factory#312) unless CFACTORY_API_DEV_OPEN=true, the
+    # local-dev opt-in the nix dev shell sets. The browser cockpit reaches this through nginx, which
     # injects the key; programmatic clients (the editor) send their own bearer.
     #
     # Exemptions: /health (k8s probes), the read-only MCP server (/mcp — its own

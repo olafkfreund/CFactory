@@ -121,9 +121,17 @@ curl -so /dev/null -w '%{http_code}\n' \
 The keystore middleware enforces `/api/*` and `/connect/*` only. Exempt: `/health`
 (k8s probes), `/mcp` (guarded by its own scope check — the legacy `CFACTORY_MCP_SECRET`
 full-scope bearer or a scoped key from this same keystore; it denies when neither is
-set), `/api/events*` (the idempotent
-inbound webhook from the sibling factories). Write endpoints additionally require a
-`write`-scoped key.
+set). Write endpoints additionally require a `write`-scoped key.
+
+`/api/events*` (the inbound webhook from the sibling factories) requires a
+`write`-scoped key under `CFACTORY_EVENTS_AUTH_MODE` (CFactory#501). In `warn`
+(the default) a call without one is still accepted, but logged as
+`unauthenticated '/api/events' accepted in warn mode (would be 401); total=N`.
+Warn mode accepts events even with no keys configured; only enforce applies the
+#500 fail-closed rule. Set `enforce` once those lines stop appearing; any other
+value also rejects.
+The senders send `Authorization: Bearer $APP_API_TOKEN`, so that token must be
+a `read,write` key in `CFACTORY_API_KEYS`.
 
 ### Rolling back
 Set `apiKeys.enabled=false` (and `frontend.apiKey.enabled=false`), or remove the two

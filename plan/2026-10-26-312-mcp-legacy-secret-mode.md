@@ -25,3 +25,7 @@ Approved decisions (from the spec):
 ## Rollback
 
 Revert the commit. The default is `allow`, so no deploy depends on it.
+
+## Deviations
+
+- Step 1: the warning is logged from two branches with constant `allowed`/`denied` strings, instead of one call that formats an outcome computed from `mcp_legacy_secret_mode`. CodeQL `py/clear-text-logging-sensitive-data` treats any value derived from a setting named `*secret*` as sensitive. The behaviour, counter and log content are unchanged.

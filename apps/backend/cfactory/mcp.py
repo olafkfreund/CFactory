@@ -994,17 +994,23 @@ def _authenticate(request: Request) -> frozenset[str]:
 
     # 1. Legacy full-scope bearer — count every match before checking scoped keys.
     if settings.mcp_secret and secret_matches(token, settings.mcp_secret):
-        allowed = settings.mcp_legacy_secret_mode.strip().lower() == "allow"
-        outcome = "allowed" if allowed else "denied"
-        _legacy_secret_uses[outcome] += 1
-        logger.warning(
-            "legacy MCP secret %s (deprecated); total=%d user_agent=%s",
-            outcome,
-            _legacy_secret_uses[outcome],
-            sanitize_log(request.headers.get("user-agent", "")),
-        )
-        if allowed:
+        # Constant log strings per branch: nothing derived from the secret-named
+        # settings reaches the log (CodeQL py/clear-text-logging-sensitive-data).
+        user_agent = sanitize_log(request.headers.get("user-agent", ""))
+        if settings.mcp_legacy_secret_mode.strip().lower() == "allow":
+            _legacy_secret_uses["allowed"] += 1
+            logger.warning(
+                "legacy MCP secret allowed (deprecated); total=%d user_agent=%s",
+                _legacy_secret_uses["allowed"],
+                user_agent,
+            )
             return FULL_SCOPE
+        _legacy_secret_uses["denied"] += 1
+        logger.warning(
+            "legacy MCP secret denied (deprecated); total=%d user_agent=%s",
+            _legacy_secret_uses["denied"],
+            user_agent,
+        )
 
     # 2. Scoped API keys — the same keystore that gates /api and /connect.
     keystore = get_keystore()

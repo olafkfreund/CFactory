@@ -72,6 +72,9 @@ CONTRACT_PATH = REPO_ROOT / "apps" / "frontend-web" / "src" / "api-contract.json
 # caches. Import-time side effect, deliberately: there is no later hook.
 for _name in [k for k in os.environ if k.startswith("CFACTORY_")]:
     del os.environ[_name]
+# A keyless API denies (Factory#312); this hermetic dump records the local,
+# dev-open API, exactly as the nix dev shell runs it.
+os.environ["CFACTORY_API_DEV_OPEN"] = "true"
 
 sys.path.insert(0, str(REPO_ROOT / "apps" / "backend"))
 

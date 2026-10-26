@@ -96,6 +96,9 @@
             # local MCP clients keep working without a token; hosted deploys set
             # CFACTORY_MCP_SECRET / CFACTORY_API_KEYS instead and never this.
             export CFACTORY_MCP_DEV_OPEN="''${CFACTORY_MCP_DEV_OPEN:-true}"
+            # /api and /connect fail CLOSED the same way when no keys are set
+            # (Factory#312); the dev shell opts back in. Never in a hosted deploy.
+            export CFACTORY_API_DEV_OPEN="''${CFACTORY_API_DEV_OPEN:-true}"
 
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
               pkgs.stdenv.cc.cc.lib

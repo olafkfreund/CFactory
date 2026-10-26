@@ -1,9 +1,9 @@
 """Scoped API-key authentication (#20).
 
-Local-first, single-user posture: when NO keys are configured the keystore is
-OPEN and every request is allowed. As soon as keys ARE configured, requests must
-present a known key (via ``Authorization: Bearer <key>`` or ``X-API-Key: <key>``)
-that carries the required scope.
+When NO keys are configured, requests are denied unless the local development
+opt-in is enabled. As soon as keys ARE configured, requests must present a known
+key (via ``Authorization: Bearer <key>`` or ``X-API-Key: <key>``) that carries the
+required scope.
 
 This reuses the family's scoped-key idea (AIFactory's ``acw_``-style keys with
 ``mcp:read``/``mcp:write`` scopes) but keeps it deliberately simple: bare
@@ -103,10 +103,9 @@ def parse_api_keys(raw: str | None) -> dict[str, set[str]]:
         if not KEY_SHAPED.match(key):
             # ponytail: warn, do not reject. Two ways to "reject" and both are
             # worse than the weak key. Dropping the entry can empty the keystore,
-            # and an empty keystore is OPEN mode (`KeyStore.configured` False) —
-            # a weak key would silently become NO key. Raising kills the process
-            # at import of the settings, so the cockpit that would let an
-            # operator fix the key is exactly what fails to start.
+            # silently denying access (or opening it with the dev opt-in).
+            # Raising kills the process at settings import, so the cockpit
+            # that would let an operator fix the key fails to start.
             logger.warning(
                 "CFACTORY_API_KEYS contains a key that is not fleet-shaped "
                 "(expected `cfk_`/`acw_` + 16+ alphanumerics): %s. Low-entropy "
@@ -121,20 +120,18 @@ def parse_api_keys(raw: str | None) -> dict[str, set[str]]:
 class KeyStore:
     """A set of API keys mapped to the scopes each key holds.
 
-    When empty (no keys configured) the store is in OPEN mode: ``authorize`` is a
-    no-op and every request is permitted (local single-user default).
+    When empty, the store denies requests unless ``dev_open`` is enabled.
     """
 
-    def __init__(self, keys: dict[str, set[str]] | None = None):
+    def __init__(self, keys: dict[str, set[str]] | None = None, dev_open: bool = False):
         self._keys: dict[str, set[str]] = dict(keys or {})
+        self.dev_open = dev_open
 
     def replace(self, keys: dict[str, set[str]] | None = None) -> None:
         """Swap the whole key set in place, keeping this instance's identity.
 
-        `_keys` is the store's ONLY state -- `configured`, `scopes_for`,
-        `preferred_key` and `authorize` all derive from it -- so this cannot
-        leave the store half-updated, and in particular cannot leave it
-        reporting `configured` while holding a different key set.
+        Keep ``dev_open`` unchanged while replacing the keys, so this cannot
+        leave the store reporting ``configured`` for a different key set.
         """
         self._keys = dict(keys or {})
 
@@ -142,6 +139,11 @@ class KeyStore:
     def configured(self) -> bool:
         """True when at least one key is configured (enforcement is ON)."""
         return bool(self._keys)
+
+    @property
+    def open(self) -> bool:
+        """True when empty and explicitly open for local development."""
+        return not self._keys and self.dev_open
 
     def scopes_for(self, key: str | None) -> set[str] | None:
         """Return the scope set for ``key``, or None if the key is unknown.
@@ -165,9 +167,8 @@ class KeyStore:
         """Return a configured key suitable for handing to a client (#73).
 
         Prefers a key that carries WRITE (so the editor can act, not just read),
-        then one with READ, then any configured key. Returns None in OPEN mode
-        (no keys configured) — there is no token to hand out, and the API accepts
-        every request anyway.
+        then one with READ, then any configured key. Returns None when no keys
+        are configured; there is no token to hand out.
         """
         if not self._keys:
             return None
@@ -181,11 +182,20 @@ class KeyStore:
     def authorize(self, key: str | None, scope: str) -> None:
         """Raise an HTTPException unless ``key`` may exercise ``scope``.
 
-        OPEN mode (no keys configured) always allows. Otherwise: 401 for a
+        An empty store allows only with ``dev_open``. Otherwise: 401 for a
         missing/unknown key, 403 when the key lacks the required scope.
         """
         if not self.configured:
-            return
+            if self.dev_open:
+                return
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "no API keys configured: set CFACTORY_API_KEYS "
+                    "(or CFACTORY_API_DEV_OPEN=true for local dev only)"
+                ),
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         scopes = self.scopes_for(key)
         if scopes is None:
             raise HTTPException(
@@ -200,7 +210,8 @@ class KeyStore:
 @cache
 def get_keystore() -> KeyStore:
     """Return the cached process-wide KeyStore, built from settings on first use."""
-    return KeyStore(parse_api_keys(get_settings().api_keys))
+    settings = get_settings()
+    return KeyStore(parse_api_keys(settings.api_keys), dev_open=settings.api_dev_open)
 
 
 def set_keys(keys: dict[str, set[str]]) -> None:
@@ -238,11 +249,11 @@ def authorize_headers(
     """Authorize a raw header pair against ``keystore`` for ``scope``.
 
     Shared by the HTTP key-enforcement middleware and the WebSocket handlers
-    (neither can use the ``require_scope`` FastAPI dependency). In OPEN mode
-    (no keys configured) this is a no-op. Raises ``HTTPException`` (401/403)
-    otherwise — callers translate that into an HTTP response or a WS close.
+    (neither can use the ``require_scope`` FastAPI dependency). With an empty
+    store, only explicit dev-open mode is a no-op. Raises ``HTTPException``
+    (401/403) otherwise — callers translate it into an HTTP response or WS close.
     """
-    if not keystore.configured:
+    if keystore.open:
         return
     key = extract_key(authorization, x_api_key)
     keystore.authorize(key, scope)
@@ -251,8 +262,8 @@ def authorize_headers(
 def require_scope(scope: str):
     """Build a FastAPI dependency that enforces ``scope`` against the keystore.
 
-    In OPEN mode (no keys configured) it allows the request and returns None.
-    Otherwise it resolves the key from the request headers and authorizes it.
+    In explicit dev-open mode it allows the request and returns None. Otherwise
+    it resolves the key from the request headers and authorizes it.
     """
 
     def dependency(
@@ -260,7 +271,7 @@ def require_scope(scope: str):
         authorization: str | None = Header(default=None),
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     ) -> str | None:
-        if not keystore.configured:
+        if keystore.open:
             return None
         key = extract_key(authorization, x_api_key)
         keystore.authorize(key, scope)

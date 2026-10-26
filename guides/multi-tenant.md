@@ -1,6 +1,7 @@
 # CFactory: Local → Hosted Multi-Tenant Runbook
 
-CFactory ships **local-first**: single user, single tenant, auth OPEN. This
+CFactory ships **local-first**: single user, single tenant, auth open in the
+nix dev shell (`CFACTORY_API_DEV_OPEN`). This
 guide is the operator "flip" runbook for promoting a local instance to a hosted,
 shared, multi-tenant deployment. It ties together the enterprise seams added in
 #20 (scoped API keys), #21 (audit HMAC chain + identity), and #23 (multi-tenant
@@ -17,9 +18,10 @@ configuration is `CFACTORY_*` environment variables (see
 
 - **Scoped API-key auth (#20).** When `CFACTORY_API_KEYS` is set, every request
   must carry a known key with the required scope (`read` / `write`). When unset,
-  auth is OPEN (local single-user mode).
+  the API denies every request (Factory#312) unless `CFACTORY_API_DEV_OPEN=true`
+  (local single-user mode).
 - **Caller identity → audit actor (#21).** The presented API key (or `local` in
-  OPEN mode) is stamped as the `actor` on each audit entry.
+  dev-open mode) is stamped as the `actor` on each audit entry.
 - **Tamper-evident audit chain (#21).** Audit entries are HMAC-SHA256 chained
   under `CFACTORY_AUDIT_HMAC_SECRET`; any after-the-fact mutation breaks the
   chain.

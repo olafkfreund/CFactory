@@ -4,8 +4,7 @@ When CFACTORY_API_KEYS is configured the keystore is ENFORCED: the HTTP
 middleware requires a READ-scoped key on /api/* and /connect/*, the WebSocket
 handlers reject unauthenticated sockets, write endpoints still require WRITE, and
 a small set of paths stay exempt (/health probes, the inbound /api/events
-webhook). In OPEN mode (no keys) everything is unchanged — covered by the rest of
-the suite, which runs with the keystore open.
+webhook). With explicit dev-open and no keys, the local API behavior is unchanged.
 
 The middleware and WS handlers read the *global* keystore (they can't use the
 ``keystore_dep`` override), so these tests configure it via ``set_keys`` and
@@ -16,9 +15,11 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from cfactory.app import create_app, store_dep
-from cfactory.auth import reset_keystore, set_keys
+from cfactory.auth import get_keystore, reset_keystore, set_keys
+from cfactory.config import reset_settings
 from cfactory.store import WorkItemStore
 
 RW = {"k_rw": {"read", "write"}}
@@ -66,15 +67,41 @@ def test_api_accepts_x_api_key_header(client):
     assert r.status_code == 200
 
 
-def test_api_rejects_unknown_key(client):
+@pytest.mark.parametrize("dev_open", [False, True])
+def test_api_rejects_unknown_key(client, monkeypatch, dev_open):
     set_keys(RW)
+    monkeypatch.setattr(get_keystore(), "dev_open", dev_open)
     r = client.get("/api/workitems", headers={"Authorization": "Bearer nope"})
     assert r.status_code == 401
 
 
 def test_open_mode_needs_no_key(client):
-    # No set_keys() → OPEN: the data API is reachable with no auth (today's posture).
+    # No set_keys() uses the suite's explicit dev-open setting.
     assert client.get("/api/workitems").status_code == 200
+
+
+def test_keyless_api_denied_but_health_reachable(client, monkeypatch):
+    set_keys({})
+    monkeypatch.setattr(get_keystore(), "dev_open", False)
+    r = client.get("/api/workitems")
+    assert r.status_code == 401
+    assert "CFACTORY_API_KEYS" in r.json()["detail"]
+    with pytest.raises(WebSocketDisconnect) as exc, client.websocket_connect("/api/ws"):
+        pass
+    assert exc.value.code == 1008
+    assert client.get("/health").status_code == 200
+
+
+def test_get_keystore_reads_dev_open_env(monkeypatch):
+    try:
+        with monkeypatch.context() as env:
+            env.setenv("CFACTORY_API_DEV_OPEN", "false")
+            reset_settings()
+            reset_keystore()
+            assert get_keystore().dev_open is False
+    finally:
+        reset_settings()
+        reset_keystore()
 
 
 # --------------------------------------------------------------------------
@@ -86,8 +113,11 @@ def test_health_is_exempt(client):
     assert client.get("/health").status_code == 200
 
 
-def test_event_webhook_is_exempt(client):
-    set_keys(RW)
+@pytest.mark.parametrize("keyless", [False, True])
+def test_event_webhook_is_exempt(client, monkeypatch, keyless):
+    set_keys({} if keyless else RW)
+    if keyless:
+        monkeypatch.setattr(get_keystore(), "dev_open", False)
     body = {
         "correlation_key": "555",
         "service": "aifactory",

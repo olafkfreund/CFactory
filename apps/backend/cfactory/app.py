@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -60,7 +61,7 @@ from .api_deps import (  # noqa: F401 — public re-export surface
     provider_health_transport_dep,
     store_dep,
 )
-from .auth import READ, authorize_headers, get_keystore
+from .auth import READ, WRITE, authorize_headers, get_keystore
 from .cards import get_cards_store
 from .config import (
     check_audit_secret,
@@ -76,10 +77,11 @@ from .store import get_store
 from .upstream_ws import start_subscribers
 from .ws import get_manager
 
-# Endpoints exempt from API-key enforcement: the idempotent inbound event webhook
-# is machine-to-machine. (/health, /mcp, and the API docs are not under the
-# guarded /api//connect prefixes in the first place.)
-_EXEMPT_PREFIXES = ("/api/events",)
+# The inbound event webhook needs a WRITE key, gated by CFACTORY_EVENTS_AUTH_MODE
+# (CFactory#501). In "warn" mode a failing call is accepted but logged and counted
+# here, so the logs can show zero before the flip to "enforce".
+_EVENTS_PREFIX = "/api/events"
+_unauthenticated_events: Counter[int] = Counter()  # by would-be status
 
 logger = logging.getLogger(__name__)
 
@@ -151,30 +153,39 @@ def create_app() -> FastAPI:
     # When the keystore is configured (CFACTORY_API_KEYS set), every request to
     # the data/action surface (/api/* and /connect/*) must carry a key with the
     # READ scope; write endpoints additionally require WRITE via require_scope.
-    # In OPEN mode (no keys) this is a no-op, so local/dev and the current prod
-    # posture are unchanged. The browser cockpit reaches this through nginx, which
+    # With no keys it DENIES (Factory#312) unless CFACTORY_API_DEV_OPEN=true, the
+    # local-dev opt-in the nix dev shell sets. The browser cockpit reaches this through nginx, which
     # injects the key; programmatic clients (the editor) send their own bearer.
     #
-    # Exemptions: /health (k8s probes), the read-only MCP server (/mcp — its own
-    # CFACTORY_MCP_SECRET bearer), the idempotent inbound event webhook
-    # (/api/events*, machine-to-machine), and the API docs.
+    # Not guarded: /health (k8s probes), the MCP server (/mcp — its own bearer)
+    # and the API docs. The inbound event webhook (/api/events*) needs WRITE,
+    # subject to CFACTORY_EVENTS_AUTH_MODE (CFactory#501).
     @app.middleware("http")
     async def enforce_api_key(request: Request, call_next):
         path = request.url.path
         guarded = path.startswith("/api/") or path.startswith("/connect/")
-        if guarded and not path.startswith(_EXEMPT_PREFIXES):
-            keystore = get_keystore()
+        if guarded:
+            events = path.startswith(_EVENTS_PREFIX)
             try:
                 authorize_headers(
-                    keystore,
+                    get_keystore(),
                     request.headers.get("authorization"),
                     request.headers.get("x-api-key"),
-                    READ,
+                    WRITE if events else READ,
                 )
             except HTTPException as exc:
-                return JSONResponse(
-                    {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
-                )
+                if events and get_settings().events_auth_mode.strip().lower() == "warn":
+                    _unauthenticated_events[exc.status_code] += 1
+                    logger.warning(
+                        "unauthenticated %r accepted in warn mode (would be %d); total=%d",
+                        path,
+                        exc.status_code,
+                        _unauthenticated_events.total(),
+                    )
+                else:
+                    return JSONResponse(
+                        {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
+                    )
         return await call_next(request)
 
     app.include_router(routes_health.router)

@@ -12,7 +12,7 @@ import warnings
 from functools import cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .error_ref import InputRejectedError
@@ -240,10 +240,14 @@ class Settings(BaseSettings):
         repr=False,
     )
 
-    # Scoped API keys (#20). Local-first: when empty/None, auth enforcement is
-    # OPEN (single-user local mode). When set, requests must carry a known key
-    # with the required scope. Format: "<key>:read,write;<key2>:read".
+    # Scoped API keys (#20). When empty/None, API requests are denied unless
+    # api_dev_open is enabled. When set, requests must carry a known key with
+    # the required scope. Format: "<key>:read,write;<key2>:read".
     api_keys: str | None = Field(default=None, repr=False)
+
+    # Explicit local-dev opt-in for /api and /connect when no keys are configured.
+    # Ignored once api_keys is set; never enable on a hosted/shared deployment.
+    api_dev_open: bool = False
 
     # Bearer token the MCP transport (POST /mcp) requires (#113). Treated as a
     # LEGACY FULL-SCOPE credential since RFC-0019 Phase 2a: a caller presenting it
@@ -258,6 +262,18 @@ class Settings(BaseSettings):
     # surface. Set CFACTORY_MCP_DEV_OPEN=true for local dev only — never in a
     # hosted/shared deploy. Ignored once mcp_secret or api_keys is set.
     mcp_dev_open: bool = False
+
+    # Auth on the inbound /api/events webhook (CFactory#501). "warn" accepts an
+    # event without a WRITE key but logs and counts it; any other value
+    # (including "enforce") rejects it, so a typo fails closed.
+    events_auth_mode: str = "warn"
+
+    @field_validator("api_dev_open", "mcp_dev_open", mode="before")
+    @classmethod
+    def _strict_true(cls, v: object) -> bool:
+        # Only a case-insensitive "true" opens a surface; pydantic's bool would
+        # also accept 1/yes/on/t/y (CFactory#501).
+        return v if isinstance(v, bool) else str(v).lower() == "true"
 
     # Public base URL of the token-gated API surface for editor/external clients
     # (#73 follow-up). When set (e.g. https://cfactory-api.freundcloud.org.uk —

@@ -241,7 +241,21 @@ def propose_reject_review(store: WorkItemStore, correlation_key: str, note: str 
         target_service=service,
         method="POST",
         endpoint=APPLY_CORRECTION_ENDPOINT.format(task_id=task_id),
-        payload={"reason": reason, "source": "cockpit"},
+        # AIFactory's ApplyCorrectionRequest: fix_request_md is required, triage is
+        # required by default since 3.10.9, and confirm=false is only a preview (#498).
+        # triage.source must be in the published schema's enum; the note is the item.
+        payload={
+            "fix_request_md": f"# Review rejected from the cockpit\n\n{reason}\n",
+            "source": "cockpit",
+            "confirm": True,
+            "correlation_key": correlation_key,
+            "reason": reason,
+            "triage": {
+                "source": "triage",
+                "failing_tests": [{"test_id": "cockpit-review", "reason": reason}],
+                "correlation_key": correlation_key,
+            },
+        },
         rationale=f"Reject {correlation_key!r} and send it back to the fixer: {reason}",
     )
 

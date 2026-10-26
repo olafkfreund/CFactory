@@ -48,7 +48,7 @@ def safe_git_base_url(base_url: str | None) -> str | None:
     ``PUT /api/tenants/{tenant}/git-config`` and the ``/git-connections`` routes.
     Those require ``require_scope("write")`` and that the path tenant match the
     resolved identity -- and nothing more. There is no operator or admin role in
-    front of them, and in OPEN mode (no keystore configured) ``require_scope``
+    front of them, and in dev-open mode (no keys, ``CFACTORY_API_DEV_OPEN``) ``require_scope``
     returns without checking anything at all. So an ordinary board user, not an
     operator, chooses this host.
 

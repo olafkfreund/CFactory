@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 498
 intent: intent/2026-10-26-498-reject-review-payload.md
 ---

@@ -55,6 +55,7 @@ def mcp_client(seeded_store, monkeypatch):
     # the env var AND drop the cached Settings singleton so get_settings() rebuilds
     # from the patched environment.
     monkeypatch.setenv("CFACTORY_MCP_SECRET", "test-secret")
+    monkeypatch.delenv("CFACTORY_MCP_LEGACY_SECRET_MODE", raising=False)
     monkeypatch.delenv("CFACTORY_API_KEYS", raising=False)
     config.reset_settings()
     auth.reset_keystore()  # /mcp now consults the scoped keystore too
@@ -256,6 +257,51 @@ def test_legacy_mcp_secret_is_full_scope(mcp_client, monkeypatch):
 
     assert _call_as(mcp_client, "test-secret", "cfactory_get_rollups").status_code == 200
     assert _call_as(mcp_client, "test-secret", "cfactory_dummy_write").status_code == 200
+
+
+def test_legacy_secret_allow_is_counted_and_logged(mcp_client, monkeypatch, caplog):
+    monkeypatch.setenv("CFACTORY_MCP_LEGACY_SECRET_MODE", " ALLOW ")
+    config.reset_settings()
+    before = mcp._legacy_secret_uses["allowed"]
+
+    with caplog.at_level("WARNING", logger="cfactory.mcp"):
+        r = mcp_client.post(
+            "/mcp",
+            headers={**AUTH, "User-Agent": "legacy-client"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+
+    assert r.status_code == 200
+    assert mcp._legacy_secret_uses["allowed"] == before + 1
+    assert f"total={before + 1}" in caplog.text
+    assert "legacy-client" in caplog.text
+    assert "test-secret" not in caplog.text
+
+
+@pytest.mark.parametrize("mode", ["deny", "denyy"])
+def test_legacy_secret_denied_and_counted(mcp_client, monkeypatch, mode):
+    monkeypatch.setenv("CFACTORY_MCP_LEGACY_SECRET_MODE", mode)
+    monkeypatch.setenv("CFACTORY_MCP_DEV_OPEN", "true")
+    config.reset_settings()
+    before = mcp._legacy_secret_uses["denied"]
+
+    r = _call_as(mcp_client, "test-secret", "cfactory_get_rollups")
+
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Invalid MCP token"
+    assert mcp._legacy_secret_uses["denied"] == before + 1
+
+
+def test_matching_scoped_key_keeps_its_scope_in_deny_mode(mcp_client, monkeypatch):
+    monkeypatch.setenv("CFACTORY_MCP_LEGACY_SECRET_MODE", "deny")
+    monkeypatch.setenv("CFACTORY_API_KEYS", "test-secret:read")
+    config.reset_settings()
+    auth.reset_keystore()
+    monkeypatch.setitem(mcp.TOOL_SCOPES, "cfactory_dummy_write", auth.WRITE)
+    monkeypatch.setitem(mcp._TOOL_HANDLERS, "cfactory_dummy_write", lambda _a, _c: {"ok": True})
+
+    assert _call_as(mcp_client, "test-secret", "cfactory_get_rollups").status_code == 200
+    assert _call_as(mcp_client, "test-secret", "cfactory_dummy_write").status_code == 403
 
 
 def test_unconfigured_denies_instead_of_opening(seeded_store, monkeypatch):

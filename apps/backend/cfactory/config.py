@@ -256,6 +256,9 @@ class Settings(BaseSettings):
     # rather than an inline os.environ read in mcp.py.
     mcp_secret: str | None = Field(default=None, repr=False)
 
+    # Only "allow" grants the legacy MCP secret full scope; other values deny it.
+    mcp_legacy_secret_mode: str = "allow"  # noqa: S105 — an auth mode, not a password
+
     # Explicit dev opt-in that re-opens /mcp when NO credential is configured
     # (RFC-0019 Phase 2a). Unconfigured used to mean "open"; it now means DENY, so
     # that adding write tools cannot silently expose mutation on a fail-open

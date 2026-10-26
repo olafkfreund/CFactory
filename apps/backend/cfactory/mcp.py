@@ -18,8 +18,9 @@ would.
 
 Auth (three credentials, in precedence order):
 
-1. ``CFACTORY_MCP_SECRET`` — the LEGACY full-scope bearer. Live in prod; a caller
-   presenting it holds read AND write, exactly as before.
+1. ``CFACTORY_MCP_SECRET`` — the LEGACY full-scope bearer. Default
+   ``CFACTORY_MCP_LEGACY_SECRET_MODE=allow`` grants read and write; any other
+   mode denies the legacy grant and checks scoped keys next.
 2. ``CFACTORY_API_KEYS`` — the same scoped keystore that gates ``/api`` and
    ``/connect`` (``"<key>:read;<key2>:read,write"``). A key may call a tool only
    if it carries that tool's declared scope. This is the additive part.
@@ -46,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -86,6 +88,7 @@ from .git_install import InstallError
 from .store import get_store
 
 logger = logging.getLogger(__name__)
+_legacy_secret_uses: Counter[str] = Counter()
 
 router = APIRouter(tags=["CFactory MCP"])
 
@@ -989,9 +992,19 @@ def _authenticate(request: Request) -> frozenset[str]:
     settings = get_settings()
     token = extract_key(request.headers.get("authorization"), request.headers.get("x-api-key"))
 
-    # 1. Legacy full-scope bearer — unchanged behaviour for existing prod clients.
+    # 1. Legacy full-scope bearer — count every match before checking scoped keys.
     if settings.mcp_secret and secret_matches(token, settings.mcp_secret):
-        return FULL_SCOPE
+        allowed = settings.mcp_legacy_secret_mode.strip().lower() == "allow"
+        outcome = "allowed" if allowed else "denied"
+        _legacy_secret_uses[outcome] += 1
+        logger.warning(
+            "legacy MCP secret %s (deprecated); total=%d user_agent=%s",
+            outcome,
+            _legacy_secret_uses[outcome],
+            sanitize_log(request.headers.get("user-agent", "")),
+        )
+        if allowed:
+            return FULL_SCOPE
 
     # 2. Scoped API keys — the same keystore that gates /api and /connect.
     keystore = get_keystore()

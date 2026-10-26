@@ -24,9 +24,9 @@ def get_connect_token(
 
     Returns the configured key (the one ``/connect/vscode`` hands back) so the
     ``/settings/token`` page can show it with a copy button. ``configured`` is
-    false in OPEN mode (no ``CFACTORY_API_KEYS`` set), where there is no token to
-    copy and the API accepts every request anyway. Reachable behind the same
-    gate as the rest of the cockpit UI."""
+    false when no ``CFACTORY_API_KEYS`` are set: there is no token to copy, and
+    the page is only reachable in dev-open mode (``CFACTORY_API_DEV_OPEN``).
+    Reachable behind the same gate as the rest of the cockpit UI."""
     settings = get_settings()
     token = keystore.preferred_key()
     return {

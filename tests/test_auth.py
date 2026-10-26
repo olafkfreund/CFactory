@@ -1,7 +1,7 @@
 """Tests for scoped API-key auth (#20).
 
-Local-first posture: with NO keys configured the API is OPEN and the write
-endpoint works with no auth header. With keys configured, ``POST
+With NO keys configured the API denies requests unless dev-open is enabled.
+With keys configured, ``POST
 /api/actions/execute`` requires a key bearing the ``write`` scope.
 
 Hermetic: the executor uses an injected ``httpx.MockTransport`` and the keystore
@@ -48,16 +48,16 @@ class _OkTransport(httpx.MockTransport):
         super().__init__(lambda request: httpx.Response(200, json={"ok": True}))
 
 
-def _make_client(store, keys: dict[str, set[str]] | None) -> TestClient:
+def _make_client(store, keys: dict[str, set[str]] | None, dev_open: bool = False) -> TestClient:
     """Build a TestClient with a hermetic store, mock transport, and (optionally)
-    a configured keystore. ``keys=None`` leaves the keystore OPEN (local mode)."""
+    a configured keystore. ``keys=None`` uses the suite's dev-open default."""
     app = create_app()
     app.dependency_overrides[store_dep] = lambda: store
     app.dependency_overrides[action_transport_dep] = _OkTransport
     # Hermetic in-memory audit store so execute never touches the workspace DB.
     app.dependency_overrides[audit_dep] = lambda: AuditStore("sqlite://")
     if keys is not None:
-        app.dependency_overrides[keystore_dep] = lambda: KeyStore(keys)
+        app.dependency_overrides[keystore_dep] = lambda: KeyStore(keys, dev_open=dev_open)
     return TestClient(app)
 
 
@@ -97,7 +97,7 @@ def test_parse_api_keys_warns_on_low_entropy_key(caplog):
     with caplog.at_level(logging.WARNING, logger="cfactory.auth"):
         parsed = parse_api_keys("devkey:read,write")
     assert [r.getMessage() for r in caplog.records if "not fleet-shaped" in r.getMessage()]
-    # Warned, NOT dropped: an emptied keystore is OPEN mode, i.e. no auth at all.
+    # Warned, not dropped: an empty keystore denies unless dev-open is enabled.
     assert parsed == {"devkey": {"read", "write"}}
 
 
@@ -123,7 +123,7 @@ def test_parse_api_keys_rejects_short_suffix_and_unknown_prefix(caplog):
 
 
 # --------------------------------------------------------------------------
-# Local mode: no keys configured -> execute is OPEN
+# Local development mode: no keys configured with explicit opt-in
 # --------------------------------------------------------------------------
 
 
@@ -136,11 +136,16 @@ def test_execute_open_in_local_mode_no_header(store):
     assert _r["status_code"] == 200 and _r["ok"] is True and _r["body"] == {"ok": True}
 
 
-def test_execute_open_when_keystore_explicitly_empty(store):
-    """An explicitly empty keystore is still OPEN mode."""
+def test_execute_denied_when_keystore_explicitly_empty(store):
     api = _make_client(store, keys={})
     resp = api.post("/api/actions/execute", json=EXECUTE_BODY)
-    assert resp.status_code == 200
+    assert resp.status_code == 401
+    assert "CFACTORY_API_KEYS" in resp.json()["detail"]
+
+
+def test_execute_open_when_keystore_explicitly_dev_open(store):
+    api = _make_client(store, keys={}, dev_open=True)
+    assert api.post("/api/actions/execute", json=EXECUTE_BODY).status_code == 200
 
 
 # --------------------------------------------------------------------------

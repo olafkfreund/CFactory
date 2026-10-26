@@ -45,7 +45,8 @@ def _client(store, audit, keys):
     app.dependency_overrides[store_dep] = lambda: store
     app.dependency_overrides[audit_dep] = lambda: audit
     app.dependency_overrides[action_transport_dep] = _OkTransport
-    app.dependency_overrides[keystore_dep] = lambda: KeyStore(keys)
+    # dev_open only matters for keys={} (the local actor test); configured stores ignore it.
+    app.dependency_overrides[keystore_dep] = lambda: KeyStore(keys, dev_open=True)
     return TestClient(app)
 
 
@@ -61,7 +62,7 @@ def audit(tmp_path):
 
 
 def test_actor_is_local_in_open_mode(store, audit):
-    api = _client(store, audit, keys={})  # OPEN
+    api = _client(store, audit, keys={})  # dev-open
     resp = api.post("/api/actions/execute", json=EXECUTE_BODY)
     assert resp.status_code == 200
     assert audit.list()[0].actor == LOCAL_IDENTITY

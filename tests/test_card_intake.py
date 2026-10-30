@@ -369,3 +369,28 @@ def test_criteria_only_still_works() -> None:
 
     assert brief.startswith("# Ship it")
     assert "- AC one" in brief
+
+
+def test_aifactory_upstream_key_is_project_scoped():
+    # #1972: the same spec id in two projects must not share a card key.
+    from cfactory.card_intake import _upstream_key
+
+    a = _upstream_key({"task_id": "p1:003-x", "spec_id": "003-x"}, "aifactory")
+    b = _upstream_key({"task_id": "p2:003-x", "spec_id": "003-x"}, "aifactory")
+    assert (a, b) == ("af-p1:003-x", "af-p2:003-x")
+    assert _upstream_key({"spec_id": "003-x"}, "aifactory") is None
+    long_id = "p:" + "x" * 130
+    assert _upstream_key({"task_id": long_id, "spec_id": "x"}, "aifactory") is None
+
+
+def test_overlong_aifactory_task_id_gives_no_key_and_a_safe_log(caplog):
+    from cfactory.card_intake import _upstream_key
+
+    task_id = "p:" + "x\n" * 70
+    with caplog.at_level("WARNING"):
+        key = _upstream_key({"task_id": task_id, "spec_id": "s"}, "aifactory")
+    assert key is None
+    assert "too long" in caplog.text
+    msg = caplog.records[0].getMessage()
+    assert "\n" not in msg  # no forged log lines
+    assert "'" not in msg  # sanitize_log, not a repr

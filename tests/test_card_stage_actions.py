@@ -185,16 +185,18 @@ def test_test_stage_dispatches_to_tfactory_once_a_build_exists(client, upstream)
     assert "AC#1: it ships" in payload["spec_text"]
 
 
-@pytest.mark.parametrize(("issue_number", "event_key"), [(None, "af-003-x"), (42, "42")])
+@pytest.mark.parametrize(
+    ("correlation_key", "event_key"), [(None, "af-003-x"), ("o/r#42", "o/r#42")]
+)
 def test_code_stage_settles_on_aifactory_shaped_completion(
-    client, upstream, cards, issue_number, event_key
+    client, upstream, cards, correlation_key, event_key
 ):
     """#478: from-issue answers with ``<project>:<spec>``, but AIFactory keys its
-    completion event on the issue number or ``af-<spec>``. The card must be joined
-    on the key the event will carry, or the CODE stage never settles."""
+    completion event on its ``correlation_key`` or ``af-<spec>``. The card must be
+    joined on the key the event will carry, or the CODE stage never settles."""
     upstream.overrides[CODE_DOOR] = (
         200,
-        {"task_id": "proj-1:003-x", "spec_id": "003-x", "issue_number": issue_number},
+        {"task_id": "proj-1:003-x", "spec_id": "003-x", "correlation_key": correlation_key},
     )
     card = _card(client)
     act(client, card["card_key"], "code")

@@ -60,13 +60,13 @@ def test_poll_keeps_stalled_out_of_the_hub_but_in_the_store():
                 "id": "good",
                 "status": "coding",
                 "phase": "code",
-                "metadata": {"githubIssueNumber": 1},
+                "correlation_key": "1",
             },
             {
                 "id": "dead",
                 "status": "stalled",
                 "phase": "watchdog_stalled",
-                "metadata": {"githubIssueNumber": 2},
+                "correlation_key": "2",
             },
         ]
     )
@@ -95,7 +95,7 @@ def test_poll_keeps_a_task_that_later_stalls():
                         "id": "x",
                         "status": "coding",
                         "phase": "code",
-                        "metadata": {"githubIssueNumber": 5},
+                        "correlation_key": "5",
                     }
                 ]
             )
@@ -113,7 +113,7 @@ def test_poll_keeps_a_task_that_later_stalls():
                         "id": "x",
                         "status": "stalled",
                         "phase": "watchdog_stalled",
-                        "metadata": {"githubIssueNumber": 5},
+                        "correlation_key": "5",
                     }
                 ]
             )
@@ -136,7 +136,7 @@ def test_stalled_tfactory_stage_marks_plan_node_stalled():
         transport=httpx.MockTransport(
             lambda _req: httpx.Response(
                 200,
-                json={"tasks": [{"spec_id": "tf-9", "status": "stalled", "github_issue": 9}]},
+                json={"tasks": [{"spec_id": "tf-9", "status": "stalled", "correlation_key": "9"}]},
             )
         ),
     )
@@ -166,7 +166,7 @@ def test_stalled_stage_survives_the_upstream_dropping_it():
     store.upsert_snapshot("9", Service.AIFACTORY, ServiceState(task_id="ai:9", status="completed"))
     poll_progress_once(
         LiveProgressHub(),
-        [tf([{"spec_id": "tf-9", "status": "stalled", "github_issue": 9}])],
+        [tf([{"spec_id": "tf-9", "status": "stalled", "correlation_key": "9"}])],
         store,
     )
     poll_progress_once(LiveProgressHub(), [tf([])], store)
@@ -184,7 +184,7 @@ def test_stalled_stage_survives_the_upstream_dropping_it():
 
 
 def test_silent_running_row_is_kept_and_flagged_stalled(monkeypatch):
-    item = [{"id": "x", "status": "in_progress", "metadata": {"githubIssueNumber": 1}}]
+    item = [{"id": "x", "status": "in_progress", "correlation_key": "1"}]
     hub = LiveProgressHub()
     store = _store()
     poll_progress_once(hub, [_mock_ai(item)], store)
@@ -213,8 +213,8 @@ def test_rerun_of_a_stalled_task_ends_completed(order):
     # Re-review of #483: a stalled task and its completed re-run share issue 7. The
     # dead one must not be hydrated over the live one, in either list order.
     tasks = {
-        "old": {"id": "old", "status": "stalled", "metadata": {"githubIssueNumber": 7}},
-        "new": {"id": "new", "status": "completed", "metadata": {"githubIssueNumber": 7}},
+        "old": {"id": "old", "status": "stalled", "correlation_key": "7"},
+        "new": {"id": "new", "status": "completed", "correlation_key": "7"},
     }
     store = _store()
     poll_progress_once(LiveProgressHub(), [_mock_ai([tasks[k] for k in order])], store)
@@ -263,9 +263,9 @@ def test_two_dead_tasks_on_one_key_still_age_and_are_pruned():
         "id": "a",
         "status": "stalled",
         "phase": "watchdog_stalled",
-        "metadata": {"githubIssueNumber": 7},
+        "correlation_key": "7",
     }
-    b = {"id": "b", "status": "stuck", "phase": "coding", "metadata": {"githubIssueNumber": 7}}
+    b = {"id": "b", "status": "stuck", "phase": "coding", "correlation_key": "7"}
     store = _store()
     poll_progress_once(LiveProgressHub(), [_mock_ai([a, b])], store)
     first = store.get("7").updated_at
@@ -283,13 +283,13 @@ def test_dead_original_does_not_take_the_row_back_from_a_finished_rerun():
         "id": "old",
         "status": "stalled",
         "phase": "watchdog_stalled",
-        "metadata": {"githubIssueNumber": 8},
+        "correlation_key": "8",
     }
     new = {
         "id": "new",
         "status": "completed",
         "phase": "done",
-        "metadata": {"githubIssueNumber": 8},
+        "correlation_key": "8",
     }
     store = _store()
     poll_progress_once(LiveProgressHub(), [_mock_ai([old, new])], store)

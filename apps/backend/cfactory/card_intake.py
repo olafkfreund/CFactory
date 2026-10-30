@@ -503,16 +503,16 @@ def _upstream_key(body: Any, service: str | None = None) -> str | None:
     id (``adapters/aifactory.py`` and ``adapters/pfactory.py`` both fall back to
     ``task_id``), so that id IS the correlation key CFactory will see.
 
-    AIFactory is the exception (#478): from-issue answers ``<project>:<spec>``,
-    but its completion event is keyed on the issue number, else ``af-<spec_id>``
-    (AIFactory ``services/completion.py`` ``correlation_key()``). The card is
-    joined on that, or the event never finds it and CODE never settles.
+    AIFactory is the exception (#478): from-issue answers ``<project>:<spec>``.
+    When it also sends ``correlation_key`` the loop below takes it; without one
+    the completion event is keyed ``af-<spec_id>`` (AIFactory
+    ``services/completion.py`` ``correlation_key()``). The card is joined on
+    that, or the event never finds it and CODE never settles.
     """
     if not isinstance(body, dict):
         return None
     if service == "aifactory" and not body.get("correlation_key") and body.get("spec_id"):
-        issue = body.get("issue_number")
-        return str(issue) if issue is not None else f"af-{body['spec_id']}"
+        return f"af-{body['spec_id']}"
     for key in ("correlation_key", "task_id", "session_id", "id", "spec_id"):
         value = body.get(key)
         if value:

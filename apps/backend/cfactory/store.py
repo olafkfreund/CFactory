@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from datetime import UTC, datetime
 from functools import cache
 from typing import cast
@@ -19,7 +18,6 @@ from sqlalchemy import DateTime, Integer, Select, String, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.types import JSON
 
 from .config import DEFAULT_TENANT, get_settings
@@ -29,8 +27,6 @@ from .status_taxonomy import is_dead_stage, is_done, is_terminal as _is_terminal
 from .usage import add_usage, empty_bucket
 
 logger = logging.getLogger(__name__)
-
-_QUALIFIED_KEY = re.compile(r"^(.+)#(\d+)$")
 
 
 def _now() -> datetime:
@@ -486,9 +482,6 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, event.correlation_key)
-                    row = self._adopt_legacy_row(
-                        session, event.correlation_key, event.service, event.task_id, row
-                    )
                     if row is not None and _already_recorded(row.timeline, event):
                         return row.to_model(), False
 
@@ -549,9 +542,6 @@ class WorkItemStore:
             try:
                 with self._session.begin() as session:
                     row = self._get_row(session, correlation_key)
-                    row = self._adopt_legacy_row(
-                        session, correlation_key, service, state.task_id, row
-                    )
                     new_slice = state.model_dump()
                     existing = (getattr(row, service.value) if row is not None else None) or {}
                     # A polled snapshot is built from the upstream's LIST row: it
@@ -740,64 +730,6 @@ class WorkItemStore:
         return session.scalars(
             self._select().where(WorkItemRow.correlation_key == correlation_key)
         ).first()
-
-    def _adopt_legacy_row(
-        self,
-        session: Session,
-        key: str,
-        service: Service,
-        task_id: str | None,
-        row: WorkItemRow | None,
-    ) -> WorkItemRow | None:
-        """Carry a bare-number row's slice for this task over to ``key`` (#484).
-
-        legacy (window, #484 follow-up): producers used to send ``<n>``. With no
-        row on ``key`` yet, the bare row is renamed. When ``key`` already has a
-        row (e.g. PFactory's qualified origin key), this service's timeline
-        entries move across (ordered by ``updated_at``), and its slice too unless
-        ``key`` already holds this task; otherwise prune_duplicate_stages would
-        clear the bare slice and its usage. Returns the row for ``key``.
-        """
-        m = _QUALIFIED_KEY.match(key)
-        if m is None or task_id is None:
-            return row
-        legacy = self._get_row(session, m.group(2))
-        if legacy is None or (getattr(legacy, service.value) or {}).get("task_id") != task_id:
-            return row
-        if row is not None and (getattr(row, service.value) or {}).get("task_id") not in (
-            None,
-            task_id,
-        ):
-            return row
-        logger.info(
-            "legacy correlation key migrated row %s -> %s",
-            sanitize_log(m.group(2)),
-            sanitize_log(key),
-        )
-        updated_at = legacy.updated_at
-        if row is None:
-            legacy.correlation_key = key
-            row = legacy
-        else:
-            timeline = legacy.timeline or []
-            moved = [e for e in timeline if e.get("service") == service.value]
-            row.timeline = sorted(
-                [*moved, *(row.timeline or [])], key=lambda e: str(e.get("updated_at") or "")
-            )
-            # Same task already on `key`: its slice is the newer one (a late
-            # old-format event must not roll it back), so only the history moves.
-            if (getattr(row, service.value) or {}).get("task_id") != task_id:
-                setattr(row, service.value, getattr(legacy, service.value))
-            legacy.timeline = [e for e in timeline if e.get("service") != service.value]
-            setattr(legacy, service.value, ServiceState().model_dump())
-            if not _row_has_stage_data(legacy):
-                session.delete(legacy)
-                return row
-        # onupdate would re-stamp this and reset the 24 h pruning clock; naming
-        # the column in the UPDATE makes it keep the old value.
-        legacy.updated_at = updated_at
-        flag_modified(legacy, "updated_at")
-        return row
 
 
 @cache

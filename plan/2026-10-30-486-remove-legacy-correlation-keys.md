@@ -74,3 +74,13 @@ venv has none). Never `--fix` files you did not change.
 
 Revert the PR. No data or schema changed, so a revert restores the fallbacks
 with nothing to repair.
+
+## Deviations (implementation)
+
+- Step 5 touched six more test files than named (`test_progress.py`,
+  `test_prune_stuck.py`, `test_refresh.py`, `test_ws_broadcast.py`,
+  `test_live_agents.py`, `test_live_agent_proxy.py`): their fixtures built bare
+  keys from `githubIssueNumber`/`github_issue`. Each now sends an explicit
+  `correlation_key` with the same value, so their assertions are unchanged.
+- Steps 1, 2 and 4 also removed imports and one comment left unused (`re`,
+  `flag_modified`, `sanitize_log`; tfactory's source.json note).

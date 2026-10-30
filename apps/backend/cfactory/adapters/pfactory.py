@@ -28,9 +28,6 @@ class PFactoryAdapter(BaseHTTPAdapter):
         task_id = first(row, "session_id", "id")
         if task_id is None:
             return None
-        issue = first(
-            row, "github_issue", "githubIssueNumber", "issue_number", "metadata.githubIssueNumber"
-        )
         # #245: the per-lens review verdict, when this PFactory is new enough to
         # send it. Older ones return only the `gates_passed` boolean, which says
         # THAT a plan is blocked but not WHY -- enough to disable Approve, not
@@ -43,11 +40,7 @@ class PFactoryAdapter(BaseHTTPAdapter):
             review = {"gates_passed": False} if gates_passed is False else None
 
         return AdapterItem(
-            # legacy (window, #484 follow-up): bare issue number
-            correlation_key=str(
-                first(row, "correlation_key", "correlationKey")
-                or (issue if issue is not None else task_id)
-            ),
+            correlation_key=str(first(row, "correlation_key", "correlationKey") or task_id),
             service=self.service,
             task_id=str(task_id),
             status=first(row, "board_state", "status"),

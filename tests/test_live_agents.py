@@ -62,8 +62,8 @@ def test_discover_returns_only_active_agents_with_proxy_ws_path():
     adapter = _ai(
         rmux=True,
         tasks=[
-            {"id": "t1", "status": "coding", "metadata": {"githubIssueNumber": 7}, "title": "A"},
-            {"id": "t2", "status": "completed", "metadata": {"githubIssueNumber": 8}},
+            {"id": "t1", "status": "coding", "correlation_key": "7", "title": "A"},
+            {"id": "t2", "status": "completed", "correlation_key": "8"},
         ],
     )
     result = discover_live_agents(adapter)
@@ -103,7 +103,7 @@ def test_discover_rmux_on_but_tasks_unreachable_yields_no_agents():
 def test_route_returns_envelope_with_count():
     adapter = _ai(
         rmux=True,
-        tasks=[{"id": "t1", "status": "coding", "metadata": {"githubIssueNumber": 7}}],
+        tasks=[{"id": "t1", "status": "coding", "correlation_key": "7"}],
     )
     body = _client(adapter).get("/api/live-agents").json()
     assert body["rmux_enabled"] is True
@@ -158,7 +158,7 @@ def test_live_agents_route_unions_aifactory_and_tfactory():
     non-streamable TFactory verify session (#184)."""
     ai = _ai(
         rmux=True,
-        tasks=[{"id": "ai-1", "status": "coding", "metadata": {"githubIssueNumber": 1}}],
+        tasks=[{"id": "ai-1", "status": "coding", "correlation_key": "1"}],
     )
     tf = _tf(tasks=[{"spec_id": "010-x", "status": "evaluating", "phase": "evaluator"}])
     app = create_app()

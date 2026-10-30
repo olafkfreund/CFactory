@@ -40,15 +40,8 @@ class AIFactoryAdapter(BaseHTTPAdapter):
         task_id = first(row, "id", "task_id")
         if task_id is None:
             return None
-        issue = first(
-            row, "metadata.githubIssueNumber", "github_issue", "githubIssueNumber", "issue_number"
-        )
         return AdapterItem(
-            # legacy (window, #484 follow-up): bare issue number
-            correlation_key=str(
-                first(row, "correlation_key", "correlationKey")
-                or (issue if issue is not None else task_id)
-            ),
+            correlation_key=str(first(row, "correlation_key", "correlationKey") or task_id),
             service=self.service,
             task_id=str(task_id),
             status=first(row, "status"),

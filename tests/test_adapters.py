@@ -54,7 +54,7 @@ def test_pfactory_hits_plan_sessions_path_and_reads_sessions_envelope():
                     {
                         "session_id": "s1",
                         "board_state": "human_review",
-                        "github_issue": 42,
+                        "correlation_key": "o/r#42",
                         "title": "Login plan",
                     }
                 ]
@@ -64,7 +64,7 @@ def test_pfactory_hits_plan_sessions_path_and_reads_sessions_envelope():
     items = PFactoryAdapter("http://x", transport=httpx.MockTransport(capture)).list_items()
     assert seen["path"] == "/api/plan/sessions"  # not the old /api/plans (404)
     assert len(items) == 1  # {"sessions": [...]} envelope is unwrapped
-    assert items[0].correlation_key == "42"
+    assert items[0].correlation_key == "o/r#42"
     assert items[0].task_id == "s1"
     assert items[0].status == "human_review"
 
@@ -102,7 +102,7 @@ def test_aifactory_normalizes_and_extracts_issue_key():
                 "id": "t1",
                 "status": "coding",
                 "phase": "code",
-                "metadata": {"githubIssueNumber": 42},
+                "correlation_key": "o/r#42",
                 "title": "Login",
             }
         ]
@@ -111,7 +111,7 @@ def test_aifactory_normalizes_and_extracts_issue_key():
     items = adapter.list_items()
     assert len(items) == 1
     it = items[0]
-    assert it.correlation_key == "42"  # from metadata.githubIssueNumber
+    assert it.correlation_key == "o/r#42"  # the producer's key
     assert it.service is Service.AIFACTORY
     assert it.task_id == "t1"
     assert it.status == "coding"
@@ -123,12 +123,12 @@ def test_pfactory_accepts_bare_list_and_board_state():
         {
             "session_id": "s1",
             "board_state": "human_review",
-            "github_issue": 42,
+            "correlation_key": "o/r#42",
             "title": "Login plan",
         }
     ]
     items = PFactoryAdapter("http://x", transport=_transport(payload)).list_items()
-    assert items[0].correlation_key == "42"
+    assert items[0].correlation_key == "o/r#42"
     assert items[0].task_id == "s1"
     assert items[0].status == "human_review"
     assert items[0].phase == "plan"
@@ -141,12 +141,12 @@ def test_tfactory_reads_nested_provenance():
                 "spec_id": "spec1",
                 "status": "triaged",
                 "phase": "test",
-                "source": {"aifactory": {"github_issue": 42}},
+                "correlation_key": "o/r#42",
             }
         ]
     }
     items = TFactoryAdapter("http://x", transport=_transport(payload)).list_items()
-    assert items[0].correlation_key == "42"
+    assert items[0].correlation_key == "o/r#42"
     assert items[0].task_id == "spec1"
 
 
@@ -158,7 +158,8 @@ def test_tfactory_lists_from_tfactory_tasks_endpoint():
 
 
 def test_correlation_key_falls_back_to_task_id_when_no_issue():
-    payload = {"tasks": [{"id": "t9", "status": "done"}]}
+    # A bare issue number is no longer a key: only the producer's correlation_key is.
+    payload = {"tasks": [{"id": "t9", "status": "done", "metadata": {"githubIssueNumber": 42}}]}
     items = AIFactoryAdapter("http://x", transport=_transport(payload)).list_items()
     assert items[0].correlation_key == "t9"
 
@@ -173,20 +174,27 @@ def test_hydrate_threads_services_by_correlation_key(store):
     pf = PFactoryAdapter(
         "http://x",
         transport=_transport(
-            [{"session_id": "s1", "board_state": "done", "github_issue": 42, "title": "Login"}]
+            [
+                {
+                    "session_id": "s1",
+                    "board_state": "done",
+                    "correlation_key": "o/r#42",
+                    "title": "Login",
+                }
+            ]
         ),
     )
     ai = AIFactoryAdapter(
         "http://x",
         transport=_transport(
-            {"tasks": [{"id": "t1", "status": "coding", "metadata": {"githubIssueNumber": 42}}]}
+            {"tasks": [{"id": "t1", "status": "coding", "correlation_key": "o/r#42"}]}
         ),
     )
 
     n = hydrate(store, pf.list_items()) + hydrate(store, ai.list_items())
     assert n == 2
 
-    wi = store.get("42")
+    wi = store.get("o/r#42")
     assert wi is not None
     assert wi.pfactory.status == "done"
     assert wi.aifactory.status == "coding"

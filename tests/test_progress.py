@@ -42,7 +42,7 @@ def test_hub_keeps_latest_per_key():
 def test_poll_progress_once_folds_into_hub():
     ai = AIFactoryAdapter("http://x", transport=httpx.MockTransport(
         lambda r: httpx.Response(200, json={"tasks": [
-            {"id": "t1", "status": "coding", "phase": "code", "metadata": {"githubIssueNumber": 7}}]})))
+            {"id": "t1", "status": "coding", "phase": "code", "correlation_key": "7"}]})))
     hub = LiveProgressHub()
     changed = poll_progress_once(hub, [ai])
     assert len(changed) == 1

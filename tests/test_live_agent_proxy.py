@@ -75,8 +75,8 @@ def _fake_connect(frames):
 
 def test_resolve_spec_id_maps_correlation_key_to_task_id():
     adapter = _ai(tasks=[
-        {"id": "spec-001", "status": "coding", "metadata": {"githubIssueNumber": 7}},
-        {"id": "spec-002", "status": "coding", "metadata": {"githubIssueNumber": 8}},
+        {"id": "spec-001", "status": "coding", "correlation_key": "7"},
+        {"id": "spec-002", "status": "coding", "correlation_key": "8"},
     ])
     assert resolve_spec_id(adapter, "7") == "spec-001"
     assert resolve_spec_id(adapter, "999") is None
@@ -109,7 +109,7 @@ def _client(adapter, frames):
 
 def test_proxy_streams_pane_bytes_and_drops_control_frame():
     adapter = _ai(tasks=[
-        {"id": "spec-001", "status": "coding", "metadata": {"githubIssueNumber": 7}},
+        {"id": "spec-001", "status": "coding", "correlation_key": "7"},
     ])
     client = _client(adapter, [CONNECTED, PANE])
     with client.websocket_connect("/api/live-agents/7/ws") as ws:
@@ -119,7 +119,7 @@ def test_proxy_streams_pane_bytes_and_drops_control_frame():
 
 def test_proxy_closes_cleanly_on_unknown_key():
     adapter = _ai(tasks=[
-        {"id": "spec-001", "status": "coding", "metadata": {"githubIssueNumber": 7}},
+        {"id": "spec-001", "status": "coding", "correlation_key": "7"},
     ])
     client = _client(adapter, [PANE])
     with client.websocket_connect("/api/live-agents/404/ws") as ws:
@@ -130,7 +130,7 @@ def test_proxy_closes_cleanly_on_unknown_key():
 
 def test_proxy_closes_when_rmux_disabled():
     adapter = _ai(rmux=False, tasks=[
-        {"id": "spec-001", "status": "coding", "metadata": {"githubIssueNumber": 7}},
+        {"id": "spec-001", "status": "coding", "correlation_key": "7"},
     ])
     client = _client(adapter, [PANE])
     with client.websocket_connect("/api/live-agents/7/ws") as ws:

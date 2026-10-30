@@ -44,7 +44,7 @@ def test_refresh_broadcasts_snapshot(store):
         "http://x",
         transport=httpx.MockTransport(
             lambda r: httpx.Response(200, json={"tasks": [{"id": "t1", "status": "coding",
-                                                           "metadata": {"githubIssueNumber": 5}}]})
+                                                           "correlation_key": "5"}]})
         ),
     )
     app = create_app()

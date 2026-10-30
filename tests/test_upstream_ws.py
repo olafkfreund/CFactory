@@ -28,13 +28,30 @@ def test_parse_valid_message():
     assert ev.status == "coding"
 
 
-def test_parse_extracts_issue_and_defaults_timestamp():
+def test_parse_keys_an_issue_only_message_on_its_task_id_and_defaults_timestamp():
+    # #486: an issue number is not a correlation key; the task id is.
     raw = json.dumps({"metadata": {"githubIssueNumber": 7}, "id": "t9", "board_state": "done"})
     ev = parse_upstream_message(Service.PFACTORY, raw)
     assert ev is not None
-    assert ev.correlation_key == "7"
+    assert ev.correlation_key == "t9"
     assert ev.status == "done"
     assert ev.updated_at is not None  # defaulted
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        {"correlationKey": "o/r#7", "id": "t9", "githubIssueNumber": 7, "status": "coding"},
+        {
+            "type": "task",
+            "payload": {"correlationKey": "o/r#7", "taskId": "t9", "status": "coding"},
+        },
+    ],
+)
+def test_parse_takes_the_camelcase_correlation_key(msg):
+    ev = parse_upstream_message(Service.AIFACTORY, json.dumps(msg))
+    assert ev is not None
+    assert ev.correlation_key == "o/r#7"
 
 
 def test_parse_rejects_garbage():

@@ -84,3 +84,7 @@ with nothing to repair.
   `correlation_key` with the same value, so their assertions are unchanged.
 - Steps 1, 2 and 4 also removed imports and one comment left unused (`re`,
   `flag_modified`, `sanitize_log`; tfactory's source.json note).
+- Review (lead, Opus): `upstream_ws.py` `parse_upstream_message` was a fifth
+  issue-number fallback the issue did not list. Removed its five issue keys and
+  added `correlationKey` / `payload.correlationKey` (AIFactory sends camelCase);
+  `tests/test_upstream_ws.py` now keys an issue-only message on its task id.

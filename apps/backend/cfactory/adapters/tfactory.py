@@ -118,21 +118,8 @@ class TFactoryAdapter(BaseHTTPAdapter):
         task_id = first(row, "spec_id", "id", "task_id")
         if task_id is None:
             return None
-        # TFactory records its AIFactory provenance in source.json.
-        issue = first(
-            row,
-            "source.aifactory.github_issue",
-            "github_issue",
-            "githubIssueNumber",
-            "issue_number",
-            "metadata.githubIssueNumber",
-        )
         return AdapterItem(
-            # legacy (window, #484 follow-up): bare issue number
-            correlation_key=str(
-                first(row, "correlation_key", "correlationKey")
-                or (issue if issue is not None else task_id)
-            ),
+            correlation_key=str(first(row, "correlation_key", "correlationKey") or task_id),
             service=self.service,
             task_id=str(task_id),
             status=first(row, "status"),

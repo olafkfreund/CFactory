@@ -15,9 +15,9 @@ def _t(payload, status=200):
 
 def test_refresh_hydrates_and_reports_failures(store):
     pf = PFactoryAdapter("http://x", transport=_t(
-        [{"session_id": "s1", "board_state": "done", "github_issue": 7, "title": "X"}]))
+        [{"session_id": "s1", "board_state": "done", "correlation_key": "7", "title": "X"}]))
     ai = AIFactoryAdapter("http://x", transport=_t(
-        {"tasks": [{"id": "t1", "status": "coding", "metadata": {"githubIssueNumber": 7}}]}))
+        {"tasks": [{"id": "t1", "status": "coding", "correlation_key": "7"}]}))
     tf = TFactoryAdapter("http://x", transport=_t({"oops": 1}, status=500))  # service down
 
     app = create_app()

@@ -369,3 +369,15 @@ def test_criteria_only_still_works() -> None:
 
     assert brief.startswith("# Ship it")
     assert "- AC one" in brief
+
+
+def test_aifactory_upstream_key_is_project_scoped():
+    # #1972: the same spec id in two projects must not share a card key.
+    from cfactory.card_intake import _upstream_key
+
+    a = _upstream_key({"task_id": "p1:003-x", "spec_id": "003-x"}, "aifactory")
+    b = _upstream_key({"task_id": "p2:003-x", "spec_id": "003-x"}, "aifactory")
+    assert (a, b) == ("af-p1:003-x", "af-p2:003-x")
+    assert _upstream_key({"spec_id": "003-x"}, "aifactory") is None
+    long_id = "p:" + "x" * 130
+    assert _upstream_key({"task_id": long_id, "spec_id": "x"}, "aifactory") is None

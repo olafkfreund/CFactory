@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 486
 intent: intent/2026-10-30-486-remove-legacy-correlation-keys.md
 ---

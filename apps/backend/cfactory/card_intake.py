@@ -47,6 +47,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from factory_common.logsafe import sanitize_log
 
 from .actions import PreparedAction, execute_action
 from .cards import Card, CardStore
@@ -521,7 +522,10 @@ def _upstream_key(body: Any, service: str | None = None) -> str | None:
     if service == "aifactory" and not body.get("correlation_key") and body.get("spec_id"):
         key = f"af-{body['task_id']}" if body.get("task_id") else None
         if key and len(key) > _MAX_KEY_LEN:  # never truncate (AIFactory#1972)
-            logger.warning("aifactory task id %r is too long for a key; none set", body["task_id"])
+            logger.warning(
+                "aifactory task id %s is too long for a key; none set",
+                sanitize_log(body["task_id"]),
+            )
             key = None
         return key
     for key in ("correlation_key", "task_id", "session_id", "id", "spec_id"):

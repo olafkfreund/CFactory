@@ -315,3 +315,18 @@ def test_a_structured_upstream_error_is_coerced_to_str():
         assert "7" in exc.detail
     else:  # pragma: no cover
         raise AssertionError("409 did not raise")
+
+
+def test_build_adapters_carry_their_own_token():
+    from cfactory.adapters import build_adapters
+    from cfactory.config import Settings
+
+    s = Settings(
+        upstream_token="shared", pfactory_token="p", aifactory_token="a", tfactory_token="t"
+    )
+    tokens = {type(a): a._client.headers.get("Authorization") for a in build_adapters(s)}
+    assert tokens == {
+        PFactoryAdapter: "Bearer p",
+        AIFactoryAdapter: "Bearer a",
+        TFactoryAdapter: "Bearer t",
+    }

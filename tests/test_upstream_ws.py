@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
+from cfactory import upstream_ws
 from cfactory.config import Settings
 from cfactory.models import Service
 from cfactory.upstream_ws import handle_message, parse_upstream_message
@@ -199,3 +201,21 @@ def test_garbage_is_still_rejected():
     assert parse_upstream_message(Service.PFACTORY, json.dumps({"type": "ping"})) is None
     assert parse_upstream_message(Service.PFACTORY, json.dumps({"payload": {}})) is None
     assert parse_upstream_message(Service.PFACTORY, "not json") is None
+
+
+@pytest.mark.asyncio
+async def test_start_subscribers_passes_each_service_its_own_header(monkeypatch, store):
+    seen: dict[str, dict[str, str]] = {}
+
+    async def fake_subscribe(service, *_a, headers=None, **_k):
+        seen[service.value] = headers
+
+    monkeypatch.setattr(upstream_ws, "subscribe", fake_subscribe)
+    settings = Settings(upstream_token="shared", pfactory_token="p", aifactory_token="a")  # noqa: S106
+    tasks = upstream_ws.start_subscribers(store, ConnectionManager(), settings)
+    await asyncio.gather(*tasks)
+    assert seen == {
+        "pfactory": {"Authorization": "Bearer p"},
+        "aifactory": {"Authorization": "Bearer a"},
+        "tfactory": {"Authorization": "Bearer shared"},
+    }

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 1959
 repo-issue: olafkfreund/Factory#1959
 spec: spec/2026-11-14-1959-copilot-gateway-flag.md

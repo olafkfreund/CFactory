@@ -178,3 +178,13 @@ Implementers never stage, commit, push or switch branches.
 
 Revert the PR. With the flag unset the change is inert, so there is nothing to
 roll back in a deployment.
+
+## Deviations during implementation
+
+- Step 1: `routes_copilot.py` was to need no change. The docstring of
+  `GET /api/copilot/provider` described only the `{base}/models` probe, so it
+  gained one sentence about the gateway health check (final review, nit).
+- Tests: the frontend build and tests could not be run locally (the main
+  clone's `node_modules` is stale: zod 3 against `^4`). CI is the check.
+  Two tests in `tests/test_ratchet_foreign_errors.py` fail locally because
+  mypy cannot run on this host; they do not touch this change.

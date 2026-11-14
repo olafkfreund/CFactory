@@ -246,6 +246,7 @@ def test_provider_status_gateway_health_check(monkeypatch, provider):
         Settings(
             _env_file=None,
             copilot_provider=provider,
+            copilot_model="claude-opus-4-8",
             ollama_api_key="provider-marker",
             model_gateway_url="  https://gateway.example/  ",
             model_gateway_token="gateway-token\n",  # noqa: S106 — fake test credential

@@ -68,7 +68,7 @@ def upstream_ws_url(settings: Settings, spec_id: str) -> str:
 
 
 def _auth_headers(settings: Settings) -> dict[str, str]:
-    token = settings.aifactory_token or settings.upstream_token
+    token = settings.token_for("aifactory")
     if token:
         return {"Authorization": f"Bearer {token}"}
     return {}

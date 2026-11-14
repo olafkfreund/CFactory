@@ -623,3 +623,20 @@ def client_with_transport(store, tmp_path):
     audit = AuditStore(f"sqlite:///{tmp_path / 'audit.db'}")
     app.dependency_overrides[audit_dep] = lambda: audit
     return TestClient(app), recorder
+
+
+@pytest.mark.parametrize("upstream", ["shared", None])  # None: the guard must test the selected token
+@pytest.mark.parametrize(
+    ("svc", "expected"), [("pfactory", "p"), ("aifactory", "a"), ("tfactory", "t")]
+)
+def test_execute_action_sends_the_targets_own_token(svc, expected, upstream):
+    recorder = _RecordingTransport()
+    action = PreparedAction(
+        kind="recover", correlation_key="42", target_service=svc,
+        method="POST", endpoint="/api/tasks/x/recover", payload={}, rationale="why",
+    )
+    settings = Settings(
+        upstream_token=upstream, pfactory_token="p", aifactory_token="a", tfactory_token="t"
+    )
+    execute_action(action, settings=settings, transport=recorder)
+    assert recorder.requests[0].headers.get("authorization") == f"Bearer {expected}"

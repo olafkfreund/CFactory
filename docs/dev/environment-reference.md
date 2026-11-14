@@ -37,7 +37,9 @@ Conventions in the tables below:
 | `CFACTORY_TFACTORY_API_URL` | `http://localhost:3103` | no | TFactory (Verify) upstream REST base. Editable at runtime. |
 | `CFACTORY_OBSERVE_API_URL` | `http://localhost:5080` | no | OpenObserve health-probe base for the Services reachability view (not a PARR factory; never polled/hydrated). In-cluster: `http://observe.factory.svc.cluster.local:5080`. |
 | `CFACTORY_UPSTREAM_TOKEN` | _(unset)_ | in hosted | Shared bearer token sent as `Authorization: Bearer <token>` on every adapter call, live-progress poll and upstream WS subscription. Leave unset only for local dev where the factories run `APP_DISABLE_AUTH=true`. Server-side only. |
-| `CFACTORY_AIFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | Service token for AIFactory's live-agent console WebSocket. Server-side only. |
+| `CFACTORY_AIFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | Scoped key for every AIFactory call (adapter, actions, `/ws/events`, live-agent console). Server-side only. |
+| `CFACTORY_PFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | Scoped key for every PFactory call. Server-side only. |
+| `CFACTORY_TFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | Scoped key for every TFactory call. Server-side only. |
 | `CFACTORY_INTAKE_PROJECT_ID` | _(unset)_ | **DEPRECATED — a one-release seed** | AIFactory project id a dispatched planning card is built into (RFC-0019 §3.2). **RFC-0020 §3.3 retired it as configuration:** it is now the tenant's `aifactory_project_id`, editable in Settings > Git integration. It survives ONE release as a seed — on first boot a tenant with no stored git config materialises one from it, after which the stored value is authoritative and a restart never overwrites an edit. Removed next release; do not set it on a new deployment. Note it is an AIFactory project id, **not** a repository path. Unset and unconfigured = a `low`/`medium` card promoted to `ready` is moved to `blocked` with that reason (loud, never silently accepted); `hard` cards route to PFactory and need no project. Recommended value and the full story: [the planning-board guide](../guides/planning-board.md#git-integration-the-settings-panel). |
 | `CFACTORY_DATABASE_URL` | _(unset)_ | no | Postgres connection string for the WorkItem correlation store. Unset = local SQLite under the workspace root. Also stores the RFC-0019 planning cards, in their own table. |
 | `CFACTORY_SUBSCRIBE_UPSTREAMS` | `false` | no | On: connect to each upstream `/ws/events` feed at startup. Off: no upstream WS (avoids reconnect loops against down services). |
@@ -198,7 +200,7 @@ Set these to real values in any hosted/shared deployment — never commit them:
 
 - `CFACTORY_AUDIT_HMAC_SECRET` — overrides the clearly-labelled dev default; startup hard-warns if the default is left in a non-local posture.
 - `CFACTORY_CREDENTIAL_KEY` — encrypts every per-tenant git credential. Without it, no credential can be stored; **lose it and the stored credentials are unrecoverable**. Back it up alongside the audit secret.
-- `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_AIFACTORY_TOKEN` — upstream factory auth.
+- `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_{AIFACTORY,PFACTORY,TFACTORY}_TOKEN` — upstream factory auth.
 - `CFACTORY_API_KEYS` — scoped keys that gate the cockpit API.
 - `CFACTORY_MCP_SECRET` — legacy full-scope credential for the MCP transport (`CFACTORY_API_KEYS` also gates `/mcp`, per declared tool scope).
 - `CFACTORY_INTAKE_PROJECT_ID` — not a secret, and **no longer where this is set**: since RFC-0020 §3.3 it seeds the tenant's git config once, and the AIFactory project autonomous card-driven builds land in is edited in Settings > Git integration. Still the one value a hosted deploy must decide deliberately.

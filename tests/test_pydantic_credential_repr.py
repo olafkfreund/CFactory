@@ -193,6 +193,8 @@ def test_settings_does_not_render_its_credentials() -> None:
     settings = Settings(
         upstream_token=secret,
         aifactory_token=secret,
+        pfactory_token=secret,
+        tfactory_token=secret,
         github_token=secret,
         git_provider_token=secret,
         ollama_api_key=secret,

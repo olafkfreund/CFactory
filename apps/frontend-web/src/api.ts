@@ -606,6 +606,7 @@ export const CopilotSettingsSchema = z.object({
   reachable: z.boolean().nullable().optional(), // null = not an OpenAI-compatible provider / no probe
   models: z.array(z.string()).optional(), // available cloud models (when reachable)
   error: z.string().optional(),
+  gateway: z.boolean().optional(), // true = OpenAI-compatible chat is routed through the model gateway
 });
 export type CopilotSettings = z.infer<typeof CopilotSettingsSchema>;
 

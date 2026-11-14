@@ -31,7 +31,8 @@ reviewers:
   to the provider.
 - Chat, flag off or provider `claude`: unchanged.
 - Status, flag on, **any** provider: exactly one request,
-  `GET {url}/healthz`, 10 s timeout, no `Authorization`. Result:
+  `GET {url}/healthz`, 10 s timeout, no `Authorization`; success is
+  `resp.raise_for_status()` passing, the body is not parsed. Result:
   `{provider, model, gateway: True, has_key: bool(token), reachable}`; on
   failure `reachable: False, error: "gateway probe failed"` and a logged
   exception. No `models`, no `base_url`. `provider` is never rewritten.
@@ -41,10 +42,22 @@ reviewers:
   more. Said in the docstring and in the UI.
 - UI: when `settings.gateway` is true the pill reads "Model gateway
   responding" / "Model gateway unreachable", followed by the hint "Health
-  check only — ask the copilot a question to test the full path."; the
+  check only. To test the full path, save this provider and ask the copilot
+  a question." (the row shows for a provider selected but not yet saved, and
+  chat follows the saved one); the
   missing-key hint reads "No CFACTORY_MODEL_GATEWAY_TOKEN configured — set it
   in the deployment."
 - No deployment change. The deployed flag stays off.
+- Turning it on later (owner, not this PR; goes in the PR body): the gateway
+  must be configured and have egress (factory-gitops spec
+  `2026-11-14-1959-gateway-stage1-secretref`); set both
+  `CFACTORY_MODEL_GATEWAY_URL` and `CFACTORY_MODEL_GATEWAY_TOKEN` on the
+  Deployment (a restart: settings are read once); save provider `ollama` and
+  a model the upstream serves in Settings (default is `claude`, and
+  `copilot-settings.json` overrides env). Turning it off: unset the URL.
+- Known and unchanged: a failed chat call surfaces as HTTP 500 without the
+  cause (`routes_copilot.py` catches nothing), and the Settings connection
+  row only shows for `ollama`, not `openai` / `openai_compatible`.
 
 Commands, from the repo root. A fresh worktree has no venv or node_modules:
 use the main clone's
@@ -76,17 +89,19 @@ Implementers never stage, commit, push or switch branches.
      - `provider_status` (~l.149): when the gateway URL is non-empty, return
        the gateway status described above before any provider logic. Update
        the docstring. Keep the existing `except Exception` + `logger.exception`
-       shape; the log line must not include the token.
+       shape; the log line must not include the token. Use
+       `resp.raise_for_status()` and do not call `resp.json()`.
    - Verify: lint both files.
    - Traps: do not use `SecretStr` (see the `Settings` docstring: it sends
-     `Bearer **********`). Do not log or return the URL's credentials or the
-     token. `Settings` is cached (`get_settings`); do not add another cache.
+     `Bearer **********`). Do not log or return the token. `Settings` is cached (`get_settings`); do not add another cache.
      `routes_copilot.py` needs no change.
 
 2. `tests/test_copilot_provider.py`: add the cases below, in the file's
    existing style (`httpx.MockTransport` behind a monkeypatched `httpx.post` /
-   `httpx.get`; `Settings(...)` built explicitly so ambient env cannot leak —
-   pass `ollama_api_key=None` or a marker value on purpose).
+   `httpx.get`; `Settings(...)` built explicitly so ambient config cannot leak:
+   every new test passes `_env_file=None` (the class reads `.env`, which
+   `monkeypatch.delenv` does not touch) and sets or clears both gateway
+   settings and `ollama_api_key` on purpose).
    - flag off: `make_runner` still passes `ollama_cloud_base_url` and
      `ollama_api_key`.
    - flag on, provider `ollama`, token set: URL is
@@ -104,7 +119,8 @@ Implementers never stage, commit, push or switch branches.
    - status, flag on, for provider `ollama` and for provider `claude` with an
      `ollama_api_key` marker: exactly one GET, path `/healthz`, no
      `Authorization` header; result has `gateway is True`, `reachable is
-     True`, no `models`, no `base_url`; neither the token nor the marker
+     True`, no `models`, no `base_url`; the mocked `/healthz` answers 200
+     with an empty body (it must not be parsed); neither the token nor the marker
      appears in `repr(result)`.
    - status, flag on, `/healthz` → 500, and transport raising
      `httpx.ConnectError`: `reachable is False`, `error` set, no secret in
@@ -113,8 +129,11 @@ Implementers never stage, commit, push or switch branches.
      `tok-123`.
    - Verify: the test command above passes; lint the test file.
    - Traps: `Settings` reads `.env` and the process environment; a test that
-     relies on a default must clear `CFACTORY_MODEL_GATEWAY_URL` /
-     `CFACTORY_MODEL_GATEWAY_TOKEN` with `monkeypatch.delenv(..., raising=False)`.
+     relies on a default passes `_env_file=None` **and** clears
+     `CFACTORY_MODEL_GATEWAY_URL` / `CFACTORY_MODEL_GATEWAY_TOKEN` with
+     `monkeypatch.delenv(..., raising=False)`. The existing tests in the file
+     that expect the direct path get the same treatment if they would break
+     under a developer's `.env`.
 
 3. Frontend and API description.
    - `apps/frontend-web/src/api.ts`, `CopilotSettingsSchema` (~l.600): add
@@ -124,11 +143,15 @@ Implementers never stage, commit, push or switch branches.
      No new component, no new CSS.
    - `openapi.yaml`: the two response schemas that list `has_key` /
      `reachable` (~l.287 and ~l.320): add `gateway: { type: boolean }`.
-   - Verify: in `apps/frontend-web`, `npx tsc --noEmit` and `npx vitest run`
-     (node_modules: symlink or use the main clone's; do not `npm install` in
-     the worktree); `python -c "import yaml,sys; yaml.safe_load(open('openapi.yaml'))"`.
-   - Traps: `src/apiContract.test.ts` pins contract fields; if it lists the
-     copilot settings fields, add `gateway` there too.
+   - `apps/frontend-web/src/api.test.ts`: one case that
+     `CopilotSettingsSchema` parses a gateway status
+     (`{provider, model, providers, gateway: true, has_key: true, reachable: true}`)
+     and keeps `gateway`.
+   - Verify: `python -c "import yaml; yaml.safe_load(open('openapi.yaml'))"`.
+     The frontend build and tests are run by the lead (below); the coder does
+     not `npm install`.
+   - Traps: `src/apiContract.test.ts` deliberately excludes the copilot
+     settings; leave it alone.
 
 4. Docs.
    - `.env.example`, Copilot block (after `#CFACTORY_OLLAMA_API_KEY=`, ~l.75):
@@ -136,8 +159,8 @@ Implementers never stage, commit, push or switch branches.
      (`#CFACTORY_MODEL_GATEWAY_URL=`, `#CFACTORY_MODEL_GATEWAY_TOKEN=`).
    - `docs/dev/environment-reference.md`, after the `CFACTORY_OLLAMA_API_KEY`
      row (~l.50): one row per variable, same column layout.
-   - Verify: `grep -n MODEL_GATEWAY .env.example docs/dev/environment-reference.md`
-     shows four lines.
+   - Verify: `grep -c MODEL_GATEWAY .env.example docs/dev/environment-reference.md`
+     shows both variables in both files.
    - Traps: none.
 
 ## Tests
@@ -146,7 +169,9 @@ Implementers never stage, commit, push or switch branches.
   suite, once, by the lead).
 - `ruff check` and `ruff format --check` clean on touched Python files;
   `scripts/ratchet_lint.py` as CI runs it, if it can run locally.
-- Frontend: `npx tsc --noEmit`, `npx vitest run`.
+- Frontend, by the lead, in `apps/frontend-web` with `node_modules`
+  symlinked from the main clone and the symlink removed afterwards:
+  `npm run build` (tsc + vite) and `npm test` (vitest).
 - CI green on the PR.
 
 ## Rollback

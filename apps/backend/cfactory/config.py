@@ -240,6 +240,13 @@ class Settings(BaseSettings):
         repr=False,
     )
 
+    # Opt-in model gateway for OpenAI-compatible copilot chat and provider status.
+    # URL is the origin without /v1, unlike ollama_cloud_base_url. Only the
+    # CFACTORY_-prefixed names are accepted so ambient env cannot enable it
+    # accidentally (see github_token above).
+    model_gateway_url: str = ""
+    model_gateway_token: str | None = Field(default=None, repr=False)
+
     # Scoped API keys (#20). When empty/None, API requests are denied unless
     # api_dev_open is enabled. When set, requests must carry a known key with
     # the required scope. Format: "<key>:read,write;<key2>:read".

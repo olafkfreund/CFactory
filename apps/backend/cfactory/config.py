@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     live secrets one unhandled exception away from the log sink.
 
     ``repr=False`` rather than ``SecretStr`` here, deliberately. Settings values
-    are interpolated directly — ``f"Bearer {settings.upstream_token}"`` in
+    are interpolated directly — ``f"Bearer {token}"`` (from ``token_for``) in
     :mod:`cfactory.actions` and :mod:`cfactory.upstream_ws` — and under
     ``SecretStr`` that line still compiles while silently sending
     ``Authorization: Bearer **********``. A masked credential at the point of use
@@ -83,12 +83,14 @@ class Settings(BaseSettings):
     # with APP_DISABLE_AUTH=true. Stays server-side — never sent to the browser.
     upstream_token: str | None = Field(default=None, repr=False)
 
-    # Service token for AIFactory's live agent console WebSocket (#34). When set,
-    # the live-agents proxy sends it as `Authorization: Bearer <token>` to the
-    # upstream rmux WS. Falls back to `upstream_token` when unset. Leave both unset
-    # for local dev where AIFactory runs with DISABLE_AUTH. The token stays
-    # server-side — it is never sent to the browser.
+    # Per-factory scoped keys (#312). When set, every outbound call to that
+    # factory (adapter, action chain, upstream WS, live-agents proxy) sends it as
+    # `Authorization: Bearer <token>`. Each falls back to `upstream_token` when
+    # unset (see `token_for`). Leave all unset for local dev where the factories
+    # run with DISABLE_AUTH. Tokens stay server-side — never sent to the browser.
     aifactory_token: str | None = Field(default=None, repr=False)
+    pfactory_token: str | None = Field(default=None, repr=False)
+    tfactory_token: str | None = Field(default=None, repr=False)
 
     # ── DEPRECATED: a one-release SEED, not configuration (RFC-0020 §3.3) ────
     # AIFactory project a dispatched planning card is built in (RFC-0019 §3.2).
@@ -239,6 +241,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CFACTORY_OLLAMA_API_KEY", "OLLAMA_API_KEY"),
         repr=False,
     )
+
+    # Opt-in model gateway for OpenAI-compatible copilot chat and provider status.
+    # URL is the origin without /v1, unlike ollama_cloud_base_url. Only the
+    # CFACTORY_-prefixed names are accepted so ambient env cannot enable it
+    # accidentally (see github_token above).
+    model_gateway_url: str = ""
+    model_gateway_token: str | None = Field(default=None, repr=False)
 
     # Scoped API keys (#20). When empty/None, API requests are denied unless
     # api_dev_open is enabled. When set, requests must carry a known key with
@@ -402,6 +411,15 @@ class Settings(BaseSettings):
     # wants. This only ever forgives a `forked` classification — a mutated,
     # duplicate or dangling entry is reported whatever is listed here.
     audit_acknowledged_forks: str = ""
+
+    def token_for(self, service: str) -> str | None:
+        """Bearer token for ``service``: its own key, else the shared upstream one."""
+        own = {
+            "pfactory": self.pfactory_token,
+            "aifactory": self.aifactory_token,
+            "tfactory": self.tfactory_token,
+        }.get(service)
+        return own or self.upstream_token
 
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""

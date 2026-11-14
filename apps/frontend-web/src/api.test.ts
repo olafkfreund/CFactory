@@ -4,6 +4,7 @@ import {
   approvalBlockReason,
   BillingSummarySchema,
   blockingLenses,
+  CopilotSettingsSchema,
   CostRoutingSchema,
   FeedMessageSchema,
   HealthSchema,
@@ -387,6 +388,20 @@ describe("BillingSummarySchema by_mode keys are open (#353)", () => {
   it("carries the unrecognised mode through instead of erasing it", () => {
     const parsed = BillingSummarySchema.parse(withBedrock);
     expect(parsed.by_mode.bedrock?.total_tokens).toBe(7);
+  });
+});
+
+describe("CopilotSettingsSchema gateway status", () => {
+  it("keeps the gateway flag", () => {
+    const parsed = CopilotSettingsSchema.parse({
+      provider: "ollama",
+      model: "m",
+      providers: ["claude", "ollama"],
+      gateway: true,
+      has_key: true,
+      reachable: true,
+    });
+    expect(parsed.gateway).toBe(true);
   });
 });
 

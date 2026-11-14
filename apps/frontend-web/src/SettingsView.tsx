@@ -139,10 +139,25 @@ export default function SettingsView({ reloadSignal }: { reloadSignal: number })
             <div className="set-conn">
               <span className={`status-pill ${reachable ? "ok" : "warn"}`}>
                 <span className="dot" />
-                {reachable ? "Ollama Cloud reachable" : "Ollama Cloud unreachable"}
+                {settings?.gateway
+                  ? reachable
+                    ? "Model gateway responding"
+                    : "Model gateway unreachable"
+                  : reachable
+                    ? "Ollama Cloud reachable"
+                    : "Ollama Cloud unreachable"}
               </span>
+              {settings?.gateway && (
+                <span className="set-hint">
+                  Health check only. To test the full path, save this provider and ask the copilot a question.
+                </span>
+              )}
               {!hasKey && (
-                <span className="set-hint">No OLLAMA_API_KEY configured — set it in the deployment.</span>
+                <span className="set-hint">
+                  {settings?.gateway
+                    ? "No CFACTORY_MODEL_GATEWAY_TOKEN configured — set it in the deployment."
+                    : "No OLLAMA_API_KEY configured — set it in the deployment."}
+                </span>
               )}
               {settings?.base_url && <span className="set-hint mono">{settings.base_url}</span>}
             </div>

@@ -285,6 +285,7 @@ paths:
                   model: { type: string }
                   base_url: { type: string }
                   has_key: { type: boolean }
+                  gateway: { type: boolean }
                   reachable:
                     type: boolean
                     nullable: true
@@ -318,6 +319,7 @@ paths:
                       providers: { type: array, items: { type: string } }
                       base_url: { type: string }
                       has_key: { type: boolean }
+                      gateway: { type: boolean }
                       reachable: { type: boolean, nullable: true }
                       models: { type: array, items: { type: string } }
 

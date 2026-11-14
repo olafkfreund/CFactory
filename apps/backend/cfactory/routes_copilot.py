@@ -38,7 +38,8 @@ async def copilot_ask(
 async def copilot_provider() -> dict[str, object]:
     """Active copilot LLM provider (#59). For an OpenAI-compatible endpoint
     (e.g. Ollama Cloud) this probes {base}/models so the cockpit can confirm
-    connectivity and list the available cloud models."""
+    connectivity and list the available cloud models. With the model gateway
+    flag on it reports the gateway's health check instead (Factory#1959)."""
     settings = get_settings()
     return await run_in_threadpool(provider_status, settings)
 

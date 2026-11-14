@@ -456,8 +456,9 @@ def execute_action(
             }
 
     headers = {}
-    if settings.upstream_token:
-        headers["Authorization"] = f"Bearer {settings.upstream_token}"
+    token = settings.token_for(action.target_service)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     results: list[dict[str, Any]] = []
     try:

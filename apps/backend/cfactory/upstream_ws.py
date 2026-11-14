@@ -142,11 +142,12 @@ async def handle_message(
     return event
 
 
-def _auth_headers(settings: Settings) -> dict[str, str]:
+def _auth_headers(settings: Settings, service: str) -> dict[str, str]:
     """Bearer header for the upstream WS feeds, matching the factories' REST auth.
     Empty when no token is configured (local dev with auth disabled)."""
-    if settings.upstream_token:
-        return {"Authorization": f"Bearer {settings.upstream_token}"}
+    token = settings.token_for(service)
+    if token:
+        return {"Authorization": f"Bearer {token}"}
     return {}
 
 
@@ -199,10 +200,11 @@ def start_subscribers(
 ) -> list[asyncio.Task[None]]:
     """Spawn one subscriber task per service. Caller cancels them on shutdown."""
     settings = settings or get_settings()
-    headers = _auth_headers(settings)
     tasks: list[asyncio.Task[None]] = []
     for name, url in settings.upstream_ws_urls().items():
         tasks.append(
-            asyncio.create_task(subscribe(Service(name), url, store, manager, headers=headers))
+            asyncio.create_task(
+                subscribe(Service(name), url, store, manager, headers=_auth_headers(settings, name))
+            )
         )
     return tasks

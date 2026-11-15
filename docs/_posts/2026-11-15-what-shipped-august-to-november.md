@@ -42,9 +42,9 @@ The full list is the
 
 Stalled or stuck work items are kept on the board with their history and their
 "needs you" count, instead of being deleted by the progress poller. A dead item
-is removed after 24 hours without an update (`CFACTORY_STALLED_PRUNE_HOURS`). A
+is removed, by default after 24 hours without an update (`CFACTORY_STALLED_PRUNE_HOURS`, configurable). A
 running stage is never deleted by that sweep, however old. It is flagged stalled
-after an idle deadline instead (default 900 s,
+after an idle deadline instead (default 900 s, configurable with
 `CFACTORY_STALL_DEADLINE_SECONDS`)
 ([#483](https://github.com/olafkfreund/CFactory/pull/483), shipped by
 [#485](https://github.com/olafkfreund/CFactory/pull/485)). One limit is recorded
@@ -69,8 +69,9 @@ recreates the row with a fresh clock
   readable, but a bare key is only matched exactly
   ([#506](https://github.com/olafkfreund/CFactory/pull/506), shipped by
   [#507](https://github.com/olafkfreund/CFactory/pull/507)).
-- Cards join AIFactory's project-scoped `af-<project_id>:<spec_id>` key
-  ([#509](https://github.com/olafkfreund/CFactory/pull/509)). Its PR body
+- Cards join AIFactory's project-scoped `af-<project_id>:<spec_id>` key.
+  With no task id no key is set, and a derived key over 128 characters is not
+  set ([#509](https://github.com/olafkfreund/CFactory/pull/509)). Its PR body
   reports no `af-` rows in production, so it needed no migration.
 
 ## Copilot and approval actions that do what they say
@@ -131,6 +132,28 @@ recreates the row with a fresh clock
   frontend's zod schemas and diffs a golden file. It runs in CI only
   ([#445](https://github.com/olafkfreund/CFactory/pull/445), shipped by
   [#446](https://github.com/olafkfreund/CFactory/pull/446)).
+
+## Security hygiene and dependencies
+
+- CodeQL log-injection, stack-trace-exposure, empty-except and dead-code alerts
+  were closed ([#372](https://github.com/olafkfreund/CFactory/pull/372),
+  [#378](https://github.com/olafkfreund/CFactory/pull/378),
+  [#380](https://github.com/olafkfreund/CFactory/pull/380),
+  [#409](https://github.com/olafkfreund/CFactory/pull/409)).
+- Error responses no longer name internal endpoints or return raw exception text
+  ([#383](https://github.com/olafkfreund/CFactory/pull/383),
+  [#391](https://github.com/olafkfreund/CFactory/pull/391),
+  [#402](https://github.com/olafkfreund/CFactory/pull/402)).
+- Shared code was re-vendored from the hub, and one change closes a WIQL injection
+  in the vendored factory-github
+  ([#385](https://github.com/olafkfreund/CFactory/pull/385),
+  [#387](https://github.com/olafkfreund/CFactory/pull/387),
+  [#415](https://github.com/olafkfreund/CFactory/pull/415),
+  [#474](https://github.com/olafkfreund/CFactory/pull/474)).
+- Frontend zod moved from 3 to 4.6.6 for CVE-2023-54404
+  ([#496](https://github.com/olafkfreund/CFactory/pull/496)), and Debian security
+  updates were applied to the backend base image
+  ([#400](https://github.com/olafkfreund/CFactory/pull/400)).
 
 ## In progress
 

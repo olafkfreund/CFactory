@@ -56,8 +56,8 @@ persistent dashboard):
 ## The linchpin: the WorkItem
 
 The one thing the family lacks today is a shared identity for a unit of work.
-CFactory introduces it. A `WorkItem` is keyed by the **GitHub issue number**
-(synthetic fallback otherwise) and threads the chain:
+CFactory introduces it. A `WorkItem` is keyed by the **repo-scoped correlation key**
+(`<repo>#<n>`; a synthetic fallback otherwise) and threads the chain:
 
 ```
 pfactory.session_id → github issue # → aifactory.task_id → branch / PR # → tfactory.spec_id
@@ -98,8 +98,7 @@ The RFC-0016 concurrency model runs each task as its own Kubernetes Job rather
 than inside a long-lived worker; RFC-0017 (#680) makes the build itself
 Job-native, which brings the task's logs with it. The task-detail **live terminal**
 panel is the consumer: when a task runs as a Job, its log stream surfaces there
-instead of "no active session". Job-native execution is specified in RFC-0017, which is the place to check how far
-the rollout has gone. The
+instead of "no active session". Job-native build and verify execution is live: the reference deployment runs both as Jobs ([RFC-0017](https://factory.freundcloud.com/rfc/job-native-scale-out/), *Implemented*). The
 panel stays honest: with no session it says so rather than implying a stream.
 
 ## Live execution diagram

@@ -20,7 +20,7 @@ deep.
 - Adopt a shared correlation key end-to-end (now repo-scoped, `<repo>#<n>`; see RFC-0001)
 - Normalize the completion-event envelope across all three services
 - Resolve the PFactory/TFactory port collision (canonical map, UI/API: AIFactory
-  3100/3101, TFactory 3102/3103, PFactory 3104/3105, CFactory 3110/3111)
+  3100/3101, TFactory 3103 (API), PFactory 3114/3115, CFactory UI 3110 / API 3111)
 
 ## Phase 1 — Skeleton, correlation store & read-only cockpit *(shipped ✅)*
 
@@ -103,8 +103,9 @@ and the post
   [#437](https://github.com/olafkfreund/CFactory/pull/437)); the cockpit
   refetches after a websocket drop
   ([#443](https://github.com/olafkfreund/CFactory/pull/443)).
-- **Stalled work stays on the board** — flagged after 900 s idle, deleted after
-  24 h, running stages never pruned
+- **Stalled work stays on the board** — flagged after 900 s idle (default,
+  `CFACTORY_STALL_DEADLINE_SECONDS`), deleted after 24 h (default,
+  `CFACTORY_STALLED_PRUNE_HOURS`), running stages never pruned
   ([#483](https://github.com/olafkfreund/CFactory/pull/483)).
 - **Correlation across the three services** — repo-scoped keys, and bare-number
   fallbacks removed

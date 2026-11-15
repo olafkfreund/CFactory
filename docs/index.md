@@ -38,7 +38,7 @@ agentic SDLC needs.
 
 ## What CFactory does
 
-- **Threads work across services.** A single `WorkItem`, keyed by GitHub issue,
+- **Threads work across services.** A single `WorkItem`, keyed by a repo-scoped correlation key,
   follows the chain `plan → code → branch/PR → tests` so you always know where
   something is.
 - **One live cockpit.** A read-first board shows every WorkItem across the
@@ -52,10 +52,9 @@ agentic SDLC needs.
   a plan gate, Approve review (accept code, open the PR, then merge), Reject,
   Recover, or Remove a failed task — but every write waits for an explicit human
   click and is audited. Human-in-the-loop by design.
-- **Stalled work stays visible.** A non-terminal stage idle for more than 900
-  seconds is flagged stalled (`CFACTORY_STALL_DEADLINE_SECONDS`). A stalled or
+- **Stalled work stays visible.** A non-terminal stage idle for more than the deadline is flagged stalled (default 900 s, set with `CFACTORY_STALL_DEADLINE_SECONDS`). A stalled or
   stuck work item stays on the board with its history and counts under "Needs
-  you"; a dead stage is deleted after 24 hours without an update
+  you"; a dead stage is deleted after 24 hours without an update by default
   (`CFACTORY_STALLED_PRUNE_HOURS`). A running stage is never pruned, however old,
   and a `*_review` or queued frontier waiting on a human is never touched
   ([#483](https://github.com/olafkfreund/CFactory/pull/483)).

@@ -8,7 +8,7 @@ permalink: /guides/cockpit-gallery/
 
 A captioned tour of the CFactory cockpit, captured against the live cluster on
 21 June 2026. The screenshots predate the Needs you, Backlog and Planning board
-views, which are described in the [architecture]({{ '/architecture/' | relative_url }}#what-the-cockpit-shows). Every shot is real data from the running control tower -- real work
+views. The cockpit has ten views today: Mission Control, Needs you, Backlog, Planning board, Pipeline, Active tasks, Tokens, Audit, Services and Settings (see the [architecture]({{ '/architecture/' | relative_url }}#what-the-cockpit-shows)). Every shot is real data from the running control tower -- real work
 items, real failures, real in-flight runs. For the story behind this set, see the
 blog post [The cockpit shows the graph, the mode, and the logs](/blog/2026/06/21/the-cockpit-shows-the-graph-the-mode-and-the-logs/).
 

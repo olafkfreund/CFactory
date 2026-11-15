@@ -21,7 +21,7 @@ PFactory  →  AIFactory  →  TFactory        … all observed and steered by �
 ### PFactory — *Prepare / Plan + Review*
 The planning & governance layer that sits **in front of** coding agents. It ingests
 plans, enriches them with **live** organizational context (cloud, Backstage, infra),
-runs architecture/security/feasibility review gates with citations, records human
+reviews them through seven lenses (feasibility, architecture, security, compliance, best-practices, completeness, red-team) and a hard readiness gate, with citations, records human
 approval, and emits governed GitHub issues.
 → [pfactory.freundcloud.com](https://pfactory.freundcloud.com/) ·
 [GitHub](https://github.com/olafkfreund/PFactory)
@@ -29,7 +29,7 @@ approval, and emits governed GitHub issues.
 ### AIFactory — *Act*
 The execution engine. Spec-first plan → code → QA, multi-provider (and able to
 *delegate* to GitHub Copilot / GitLab Duo), enterprise-grade (SAML/SCIM, tenant
-isolation, audit, LiteLLM gateway). Produces merge-ready branches and PRs.
+isolation, audit, and a LiteLLM gateway: the in-house gateway image is published but not deployed yet, and the LiteLLM sub-chart is deprecated but still works). Produces merge-ready branches and PRs.
 → [aifactory.freundcloud.com](https://aifactory.freundcloud.com/) ·
 [GitHub](https://github.com/olafkfreund/AIFactory)
 

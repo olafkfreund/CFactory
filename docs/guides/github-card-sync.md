@@ -104,7 +104,7 @@ configuration, once, on first boot — so an existing deployment keeps working w
 no operator action and finds its values already filled in. They are removed one
 release from now. The full write-up, with every option and its failure
 behaviour, is in
-[the planning-board guide](planning-board.md#git-integration-the-settings-panel).
+[the planning-board guide](/guides/planning-board/#git-integration-the-settings-panel).
 
 ## Other git hosts: GitLab and Azure DevOps (RFC-0020 phases 1 and 2)
 

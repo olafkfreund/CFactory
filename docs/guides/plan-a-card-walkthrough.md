@@ -16,7 +16,7 @@ minutes, no prior CFactory knowledge assumed.
 
 Every step says what you should see, and what it means if you see something
 else. For the reference material behind any step, see
-[The agent-native planning board](planning-board.md).
+[The agent-native planning board](/guides/planning-board/).
 
 ---
 
@@ -51,7 +51,7 @@ the sacrificial demo repo — an autonomous build writes real code, so the defau
 destination should be somewhere a wrong build costs nothing. Since RFC-0020
 section 3.3 you set it in the cockpit (**Settings > Git integration**) rather
 than by redeploying with `CFACTORY_INTAKE_PROJECT_ID`; see
-[Git integration: the settings panel](planning-board.md#git-integration-the-settings-panel).
+[Git integration: the settings panel](/guides/planning-board/#git-integration-the-settings-panel).
 
 Throughout, `$CF` is your CFactory base URL:
 
@@ -342,6 +342,6 @@ it arrived over `/api/cards` or over `/mcp`.
 - Once joined, the pipeline writes the card's status — and refuses to call a
   finished plan "done".
 
-Next: [The agent-native planning board](planning-board.md) for every field,
+Next: [The agent-native planning board](/guides/planning-board/) for every field,
 option and failure mode, or the
 [Environment reference](../dev/environment-reference.md) for the variables.

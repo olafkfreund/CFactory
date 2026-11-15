@@ -37,17 +37,21 @@ Conventions in the tables below:
 | `CFACTORY_TFACTORY_API_URL` | `http://localhost:3103` | no | TFactory (Verify) upstream REST base. Editable at runtime. |
 | `CFACTORY_OBSERVE_API_URL` | `http://localhost:5080` | no | OpenObserve health-probe base for the Services reachability view (not a PARR factory; never polled/hydrated). In-cluster: `http://observe.factory.svc.cluster.local:5080`. |
 | `CFACTORY_UPSTREAM_TOKEN` | _(unset)_ | in hosted | Shared bearer token sent as `Authorization: Bearer <token>` on every adapter call, live-progress poll and upstream WS subscription. Leave unset only for local dev where the factories run `APP_DISABLE_AUTH=true`. Server-side only. |
-| `CFACTORY_AIFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | Service token for AIFactory's live-agent console WebSocket. Server-side only. |
-| `CFACTORY_INTAKE_PROJECT_ID` | _(unset)_ | **DEPRECATED — a one-release seed** | AIFactory project id a dispatched planning card is built into (RFC-0019 §3.2). **RFC-0020 §3.3 retired it as configuration:** it is now the tenant's `aifactory_project_id`, editable in Settings > Git integration. It survives ONE release as a seed — on first boot a tenant with no stored git config materialises one from it, after which the stored value is authoritative and a restart never overwrites an edit. Removed next release; do not set it on a new deployment. Note it is an AIFactory project id, **not** a repository path. Unset and unconfigured = a `low`/`medium` card promoted to `ready` is moved to `blocked` with that reason (loud, never silently accepted); `hard` cards route to PFactory and need no project. Recommended value and the full story: [the planning-board guide](../guides/planning-board.md#git-integration-the-settings-panel). |
+| `CFACTORY_AIFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | **In progress (`dev` only, [#510](https://github.com/olafkfreund/CFactory/pull/510)), not on `main`.** Scoped key for every AIFactory call (adapter, actions, `/ws/events`, live-agent console). Server-side only. |
+| `CFACTORY_PFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | **In progress (`dev` only, [#510](https://github.com/olafkfreund/CFactory/pull/510)), not on `main`.** Scoped key for every PFactory call. Server-side only. |
+| `CFACTORY_TFACTORY_TOKEN` | _(unset; falls back to `CFACTORY_UPSTREAM_TOKEN`)_ | no | **In progress (`dev` only, [#510](https://github.com/olafkfreund/CFactory/pull/510)), not on `main`.** Scoped key for every TFactory call. Server-side only. |
+| `CFACTORY_INTAKE_PROJECT_ID` | _(unset)_ | **DEPRECATED — a one-release seed** | AIFactory project id a dispatched planning card is built into (RFC-0019 §3.2). **RFC-0020 §3.3 retired it as configuration:** it is now the tenant's `aifactory_project_id`, editable in Settings > Git integration. It survives ONE release as a seed — on first boot a tenant with no stored git config materialises one from it, after which the stored value is authoritative and a restart never overwrites an edit. Removed next release; do not set it on a new deployment. Note it is an AIFactory project id, **not** a repository path. Unset and unconfigured = a `low`/`medium` card promoted to `ready` is moved to `blocked` with that reason (loud, never silently accepted); `hard` cards route to PFactory and need no project. Recommended value and the full story: [the planning-board guide]({{ '/guides/planning-board/' | relative_url }}#git-integration-the-settings-panel). |
 | `CFACTORY_DATABASE_URL` | _(unset)_ | no | Postgres connection string for the WorkItem correlation store. Unset = local SQLite under the workspace root. Also stores the RFC-0019 planning cards, in their own table. |
 | `CFACTORY_SUBSCRIBE_UPSTREAMS` | `false` | no | On: connect to each upstream `/ws/events` feed at startup. Off: no upstream WS (avoids reconnect loops against down services). |
 | `CFACTORY_LIVE_PROGRESS` | `false` | no | On: poll PFactory/TFactory + subscribe AIFactory progress and broadcast `{type:"progress"}`. Off: no live-progress. |
 | `CFACTORY_POLL_INTERVAL_SECONDS` | `3.0` | no | Live-progress poll interval, seconds. Only relevant when `CFACTORY_LIVE_PROGRESS` is on. |
-| `CFACTORY_STALL_DEADLINE_SECONDS` | `900.0` | no | Idle budget (seconds) before an active, non-terminal stage is flagged stalled and pruned from the board. Values `<= 0` or unparseable fall back to the default. Read directly in `store.py`. |
+| `CFACTORY_STALL_DEADLINE_SECONDS` | `900.0` | no | Idle budget (seconds) before an active, non-terminal stage is flagged stalled. A stalled or stuck item is removed from the board after `CFACTORY_STALLED_PRUNE_HOURS` (default 24) without an update; a running stage is never deleted, however old. Values `<= 0` or unparseable fall back to the default. Read directly in `store.py`. |
 | `CFACTORY_COPILOT_MODEL` | `claude-opus-4-8` | no | Copilot model id; meaning depends on `CFACTORY_COPILOT_PROVIDER`. Editable at runtime from the Settings view. |
 | `CFACTORY_COPILOT_PROVIDER` | `claude` | no | Copilot LLM provider: `claude` (Claude Agent SDK, reads `ANTHROPIC_API_KEY`) or `ollama`/`openai_compatible` (any OpenAI-compatible chat endpoint). |
 | `CFACTORY_OLLAMA_CLOUD_BASE_URL` | `https://ollama.com/v1` | no | OpenAI-compatible copilot base URL (includes `/v1`). Also accepts the bare `OLLAMA_CLOUD_BASE_URL`. Only used when provider is not `claude`. |
 | `CFACTORY_OLLAMA_API_KEY` | _(unset)_ | if provider is ollama | Bearer key for the OpenAI-compatible copilot endpoint. Also accepts the bare `OLLAMA_API_KEY` (shared factory secret). Server-side only. |
+| `CFACTORY_MODEL_GATEWAY_URL` | _(unset)_ | no | **In progress (`dev` only, [#513](https://github.com/olafkfreund/CFactory/pull/513), off by default), not on `main`.** Model gateway origin, without `/v1`. Set = copilot chat for `ollama`/`openai`/`openai_compatible` goes to `{url}/v1/chat/completions` with the gateway token and never falls back to the provider; the Settings status probes `{url}/healthz`. Unset or blank = off. Only the `CFACTORY_` name is read. |
+| `CFACTORY_MODEL_GATEWAY_TOKEN` | _(unset)_ | if gateway URL is set | **In progress (`dev` only, [#513](https://github.com/olafkfreund/CFactory/pull/513), off by default), not on `main`.** Bearer token for the model gateway. Missing = copilot chat fails with "model gateway token is not configured". Server-side only. |
 | `CFACTORY_API_KEYS` | _(unset)_ | in hosted | Scoped API keys `<key>:read,write;<key2>:read`. Unset = `/api` and `/connect` DENY with a 401 unless `CFACTORY_API_DEV_OPEN=true` (Factory#312); set = requests must carry a known key with the required scope. Also gates `/mcp` per declared tool scope, so a `read` key can enumerate the planning backlog and never change it (RFC-0019 Phase 2a). Recommended: one `read` key per watcher, one `read,write` key per agent that plans — never one shared key. Server-side only. |
 | `CFACTORY_API_DEV_OPEN` | `false` | no | Explicit local-dev opt-in (only a case-insensitive `true` counts) that reopens `/api` and `/connect` when NO keys are configured (the nix dev shell sets it). Unconfigured otherwise means DENY (Factory#312) — never set this in a hosted deploy. Ignored once `CFACTORY_API_KEYS` is set. |
 | `CFACTORY_MCP_SECRET` | _(unset)_ | in hosted | LEGACY full-scope bearer for the MCP transport (`POST /mcp`) — a caller presenting it holds `read` and `write`, including every board write tool. Still the supported prod credential; scoped `CFACTORY_API_KEYS` work alongside it and are preferred for new clients. A wrong token against a configured server is a loud 401. Server-side only. |
@@ -90,7 +94,7 @@ Conventions in the tables below:
 > their own rather than depending on somebody else's credentials. The full runbook
 > — permissions to select, events to leave unticked, the callback URL to enter,
 > and what to do with the private key — is
-> [Registering the GitHub App and the GitLab OAuth application](../guides/git-app-install.md).
+> [Registering the GitHub App and the GitLab OAuth application](/guides/git-app-install/).
 >
 > **Azure DevOps has no install flow** (RFC-0020 §3.4, deliberately). It keeps the
 > pasted-credential path above, and no install button is offered for it.
@@ -198,7 +202,7 @@ Set these to real values in any hosted/shared deployment — never commit them:
 
 - `CFACTORY_AUDIT_HMAC_SECRET` — overrides the clearly-labelled dev default; startup hard-warns if the default is left in a non-local posture.
 - `CFACTORY_CREDENTIAL_KEY` — encrypts every per-tenant git credential. Without it, no credential can be stored; **lose it and the stored credentials are unrecoverable**. Back it up alongside the audit secret.
-- `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_AIFACTORY_TOKEN` — upstream factory auth.
+- `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_{AIFACTORY,PFACTORY,TFACTORY}_TOKEN` — upstream factory auth.
 - `CFACTORY_API_KEYS` — scoped keys that gate the cockpit API.
 - `CFACTORY_MCP_SECRET` — legacy full-scope credential for the MCP transport (`CFACTORY_API_KEYS` also gates `/mcp`, per declared tool scope).
 - `CFACTORY_INTAKE_PROJECT_ID` — not a secret, and **no longer where this is set**: since RFC-0020 §3.3 it seeds the tenant's git config once, and the AIFactory project autonomous card-driven builds land in is edited in Settings > Git integration. Still the one value a hosted deploy must decide deliberately.
@@ -214,7 +218,7 @@ Set these to real values in any hosted/shared deployment — never commit them:
 - The planning board reads `CFACTORY_API_KEYS` / `CFACTORY_MCP_SECRET` (board
   tool scopes) and `CFACTORY_MULTI_TENANT` (card partitioning). Each is written
   up with its user story, options and failure behaviour in
-  [the planning-board guide](../guides/planning-board.md).
+  [the planning-board guide]({{ '/guides/planning-board/' | relative_url }}).
 - **Which git host and project the board syncs with is no longer an environment
   variable.** RFC-0020 §3.3 made it a tenant resource, edited in Settings > Git
   integration and reachable at `/api/tenants/{tenant}/git-config` (with MCP

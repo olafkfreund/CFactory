@@ -17,7 +17,7 @@ deep.
 ## Phase 0 — Standardize the spine *(prerequisite, tracked in the Factory repo)*
 
 - Wire PFactory → AIFactory inbound handoff with provenance
-- Adopt a shared correlation key (the GitHub issue number) end-to-end
+- Adopt a shared correlation key end-to-end (now repo-scoped, `<repo>#<n>`; see RFC-0001)
 - Normalize the completion-event envelope across all three services
 - Resolve the PFactory/TFactory port collision (canonical map, UI/API: AIFactory
   3100/3101, TFactory 3102/3103, PFactory 3104/3105, CFactory 3110/3111)
@@ -87,6 +87,49 @@ deep.
 - All three stages now emit the RFC-0001 `usage` block on completion
   (AIFactory, PFactory and TFactory) ✅
 - The Tokens & cost page totals real per-service, per-work-item spend ✅
+
+## Recently shipped — August to November 2026
+
+CFactory has no releases or version numbers. "Shipped" here means merged to
+`main`; the last commit on `main` is [#509](https://github.com/olafkfreund/CFactory/pull/509)
+(2026-10-30). See the
+[merged pull requests](https://github.com/olafkfreund/CFactory/pulls?q=is%3Apr+is%3Amerged+base%3Amain),
+and the post
+[What shipped, August to November]({{ '/blog/2026/11/15/what-shipped-august-to-november/' | relative_url }}).
+
+- **A cockpit that does not overstate** — a test lane that did not run no longer
+  renders as passed
+  ([#432](https://github.com/olafkfreund/CFactory/pull/432),
+  [#437](https://github.com/olafkfreund/CFactory/pull/437)); the cockpit
+  refetches after a websocket drop
+  ([#443](https://github.com/olafkfreund/CFactory/pull/443)).
+- **Stalled work stays on the board** — flagged after 900 s idle, deleted after
+  24 h, running stages never pruned
+  ([#483](https://github.com/olafkfreund/CFactory/pull/483)).
+- **Correlation across the three services** — repo-scoped keys, and bare-number
+  fallbacks removed
+  ([#487](https://github.com/olafkfreund/CFactory/pull/487),
+  [#506](https://github.com/olafkfreund/CFactory/pull/506)).
+- **Access control, staged** — `/api` fails closed without keys; events auth and
+  legacy MCP secret use are warn-only for now
+  ([#500](https://github.com/olafkfreund/CFactory/pull/500),
+  [#502](https://github.com/olafkfreund/CFactory/pull/502),
+  [#504](https://github.com/olafkfreund/CFactory/pull/504)).
+- **CI and supply-chain gates** — gitleaks, a blocking security-sink gate, and a
+  weekly CodeQL ratchet at a zero baseline
+  ([#384](https://github.com/olafkfreund/CFactory/pull/384),
+  [#371](https://github.com/olafkfreund/CFactory/pull/371),
+  [#494](https://github.com/olafkfreund/CFactory/pull/494)).
+
+## Next
+
+On `dev`, not yet on `main`: a model-gateway route for the copilot, off unless
+`CFACTORY_MODEL_GATEWAY_URL` is set
+([#513](https://github.com/olafkfreund/CFactory/pull/513)), and per-factory
+scoped tokens, step 1 of a four-PR set
+([#510](https://github.com/olafkfreund/CFactory/pull/510)). The `enforce` modes
+for events auth and the legacy MCP secret exist but default to non-enforcing;
+no date is set.
 
 ---
 

@@ -92,16 +92,14 @@ attaches or forwards keystrokes, and the AIFactory URL and token never leave the
 backend — the browser only ever talks to CFactory. It degrades cleanly when
 rmux is disabled or no agents are running.
 
-### Job-native log streaming (RFC-0017, mid-rollout)
+### Job-native log streaming (RFC-0017)
 
 The RFC-0016 concurrency model runs each task as its own Kubernetes Job rather
 than inside a long-lived worker; RFC-0017 (#680) makes the build itself
 Job-native, which brings the task's logs with it. The task-detail **live terminal**
 panel is the consumer: when a task runs as a Job, its log stream surfaces there
-instead of "no active session". As of this writing the cockpit surface is in
-place and the multi-replica flip is live, but the build and verify default flips
-were both reverted to safe in-pod defaults pending re-validation — so **across the
-fleet the factory is still on safe defaults** while those are fixed and re-validated. The
+instead of "no active session". Job-native execution is specified in RFC-0017, which is the place to check how far
+the rollout has gone. The
 panel stays honest: with no session it says so rather than implying a stream.
 
 ## Live execution diagram
@@ -205,25 +203,41 @@ cockpit.
 
 ## What the cockpit shows
 
-The UI is organised as seven views over the same correlated state:
+The UI is organised as ten views over the same correlated state (the `NAV`
+list in `apps/frontend-web/src/dashboard.ts`). It is a single page that switches
+on a view, not a URL router:
 
 - **Mission Control** — the whole factory at a glance: PARR pipeline counts,
   anomalies, a live agent roster, and a "Cost & tokens by task" panel ranking
   work items by spend.
+- **Needs you** — work parked on a human: review-parked items and stalled work.
+- **Backlog** and **Planning board** — the RFC-0019 planning surface: cards and
+  the status Kanban in front of the pipeline (see the
+  [Planning board guide](/guides/planning-board/)).
 - **Pipeline** — every work item as a card, threaded across plan → code → test by
-  its issue number; click for a detail drawer with the **live execution diagram**
-  (the animated stage DAG), live process output and the agent's **rmux** terminal.
-- **Running tasks** — live progress across every sibling, filterable by
+  its repo-scoped correlation key; click for a detail drawer with the **live
+  execution diagram** (the animated stage DAG), live process output and the
+  agent's **rmux** terminal.
+- **Active tasks** — live progress across every sibling, filterable by
   `All / Running / Failed / Done`, with per-task phase and progress.
-- **Tokens & cost** — real LLM spend, totalled per service and per work item.
-- **Copilot** — the agentic chat plus proactive insight cards.
+- **Tokens** — real LLM spend, totalled per service and per work item.
 - **Audit** — the live completion-activity feed and the confirmed-actions log.
 - **Services** — per-service health with **editable upstream endpoints**, so the
   cockpit can be repointed at a different PFactory/AIFactory/TFactory without a
   redeploy.
+- **Settings** — including the git-provider connection (see
+  [Git integration]({{ '/guides/planning-board/' | relative_url }}#git-integration-the-settings-panel)).
 
-For a captioned, screenshot-by-screenshot tour of every view against live data,
-see the [Cockpit gallery](/guides/cockpit-gallery/).
+The Copilot is a panel in the shell, not a view. For a captioned tour with screenshots, see the [Cockpit gallery](/guides/cockpit-gallery/); the screenshots date from June 2026.
+
+## API access
+
+With no `CFACTORY_API_KEYS` set, `/api/*` and `/connect/*` return 401 unless
+`CFACTORY_API_DEV_OPEN=true` (default off)
+([#500](https://github.com/olafkfreund/CFactory/pull/500)). `/api/events*`
+checks for a write-scoped key in warn mode by default
+(`CFACTORY_EVENTS_AUTH_MODE`: `warn` accepts, logs and counts; `enforce`
+rejects) ([#502](https://github.com/olafkfreund/CFactory/pull/502)).
 
 ## Deployment
 

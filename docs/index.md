@@ -52,11 +52,13 @@ agentic SDLC needs.
   a plan gate, Approve review (accept code, open the PR, then merge), Reject,
   Recover, or Remove a failed task — but every write waits for an explicit human
   click and is audited. Human-in-the-loop by design.
-- **A self-cleaning board.** Stuck and stalled cards no longer linger as phantom
-  "running" tasks: a stage an upstream reports as `stalled` is filtered from the
-  live feed and pruned, and a silent *running* frontier past the stall deadline
-  is age-pruned each poll cycle. A `*_review` or queued frontier waiting on a
-  human is never touched.
+- **Stalled work stays visible.** A non-terminal stage idle for more than 900
+  seconds is flagged stalled (`CFACTORY_STALL_DEADLINE_SECONDS`). A stalled or
+  stuck work item stays on the board with its history and counts under "Needs
+  you"; a dead stage is deleted after 24 hours without an update
+  (`CFACTORY_STALLED_PRUNE_HOURS`). A running stage is never pruned, however old,
+  and a `*_review` or queued frontier waiting on a human is never touched
+  ([#483](https://github.com/olafkfreund/CFactory/pull/483)).
 - **Watch agents work, live.** When a build is running, the cockpit streams each
   AIFactory agent's terminal straight into Mission Control — a read-only window
   into what the agent is doing *right now*, no extra tabs. The LIVE AGENTS panel
@@ -76,17 +78,17 @@ agentic SDLC needs.
 
 [See the architecture →](/architecture/) &nbsp; · &nbsp; [See the roadmap →](/roadmap/) &nbsp; · &nbsp; [Meet the family →](/family/)
 
-**Plan the work:** the [Planning board guide](guides/planning-board.md) — the
+**Plan the work:** the [Planning board guide]({{ '/guides/planning-board/' | relative_url }}) — the
 agent-native backlog RFC-0019 added in front of the pipeline: cards, board views,
 MCP board tools and scopes, and how promoting a card to `ready` dispatches it
 into the factory by itself. New here? Follow
-[Plan a card, watch it build](guides/plan-a-card-walkthrough.md) end to end.
+[Plan a card, watch it build]({{ '/guides/plan-a-card-walkthrough/' | relative_url }}) end to end.
 
-**See the cockpit:** the [Cockpit gallery](guides/cockpit-gallery.md) — a captioned tour of every view, captured against the live cluster, including the live execution graph across all three PARR stages.
+**See the cockpit:** the [Cockpit gallery]({{ '/guides/cockpit-gallery/' | relative_url }}) — a captioned tour of every view, captured against the live cluster, including the live execution graph across all three PARR stages.
 
-**Connect your editor:** see [Connecting editors & external clients](guides/token-gated-api.md) — how to point VS Code (and other clients) at CFactory in any deployment.
+**Connect your editor:** see [Connecting editors & external clients]({{ '/guides/token-gated-api/' | relative_url }}) — how to point VS Code (and other clients) at CFactory in any deployment.
 
-**Design system:** the [Factory Design System](guides/factory-design-system.md) — the shared brand & UI rules every Factory service follows so the suite looks like one product.
+**Design system:** the [Factory Design System]({{ '/guides/factory-design-system/' | relative_url }}) — the shared brand & UI rules every Factory service follows so the suite looks like one product.
 
 **Multi-tenant mode:** [Multi-Tenant Mode](guides/multi-tenant.md) — the `CFACTORY_MULTI_TENANT` flag, how `X-Tenant-Id` is resolved, and the operator flip steps.
 

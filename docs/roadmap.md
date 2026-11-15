@@ -8,7 +8,7 @@ permalink: /roadmap/
 
 CFactory is built in phases, tracked as epics in the
 [CFactory repo]({{ site.repo_url }}/issues) and rolled up in the
-[Factory program board](https://github.com/users/olafkfreund/projects/1).
+[Factory issue tracker](https://github.com/olafkfreund/Factory/issues).
 
 Sequencing principle: **spine first**. CFactory is only as good as the pipeline it
 observes, so the cross-repo PARR spine is standardized before the cockpit goes

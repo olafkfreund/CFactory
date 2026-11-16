@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 521
 spec: spec/2026-11-16-521-tenant-snapshots.md
 coders:

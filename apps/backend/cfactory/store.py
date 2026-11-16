@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from functools import cache
 from typing import cast
@@ -713,7 +714,7 @@ class WorkItemStore:
     def retenant(
         self,
         tenant: str,
-        keys: list[str],
+        keys: Iterable[str],
         from_tenant: str = DEFAULT_TENANT,
         *,
         dry_run: bool = False,

@@ -8,9 +8,9 @@ intent: intent/2026-11-16-521-tenant-snapshots.md
 
 ## Design
 
-- `ws.py`: `ConnectionManager.broadcast_snapshot(store, multi_tenant)`. Multi-tenant off: one unscoped `store.list()` to all (as today). On: for each distinct tenant among connected clients, `store.scoped(t).list()` sent only to that tenant's sockets. The DB read runs in a threadpool.
+- `ws.py`: `ConnectionManager.broadcast_snapshot(store, multi_tenant)`. Multi-tenant off: one unscoped `store.list()` to all (as today). On: for each distinct tenant among connected clients, `store.scoped(t).list()` sent only to that tenant's sockets. The DB read runs in a threadpool. `scoped()` copies from any store, so `/api/refresh` passes its injected (possibly already scoped) store and the test seam is kept.
 - `progress._poll_loop` and `routes_events.refresh` call it instead of building the snapshot inline.
-- `WorkItemStore.retenant(tenant, keys) -> int` (unscoped store only): sets `tenant_id` for the given correlation keys, returns rows changed. `scripts/retenant_work_items.py --tenant T --keys-file F [--dry-run]` wraps it and reads `CFACTORY_DATABASE_URL`. Rows hold no org, so the operator lists the keys (for example from the cockpit or `GET /api/workitems`).
+- `WorkItemStore.retenant(tenant, keys, from_tenant="default") -> int` (unscoped store only): sets `tenant_id` for the given correlation keys whose current tenant is `from_tenant`, returns rows changed; keys owned by another tenant are skipped, never moved. `scripts/retenant_work_items.py --tenant T --keys-file F [--dry-run]` wraps it and reads `CFACTORY_DATABASE_URL`. Rows hold no org, so the operator lists the keys (for example from the cockpit or `GET /api/workitems`).
 - Docs: env reference row for `CFACTORY_AIFACTORY_TOKEN` (merged to dev via #510, released to main by the next dev-to-main sync) and the ORG_TOKENS row (snapshots now scoped, migration command); roadmap and post state "as of 2026-11-14, main ended at #516; dev carries newer merges" with a pointer to the live merged-PR list instead of a claimed head.
 
 ## Alternatives rejected
@@ -19,6 +19,9 @@ intent: intent/2026-11-16-521-tenant-snapshots.md
 - Startup migration: cannot know which rows belong to which org.
 
 ## Risks
+
+Codex-confirmed limit, out of scope: `/api/refresh` still hydrates deployment-wide adapter results into the caller's scoped store (ownership of unseen primary-org keys); this change fixes what clients receive, not that write path. Follow-up.
+
 
 One list per connected tenant per poll cycle: cost grows with tenants, bounded by connected clients. A wrong key list moves the wrong rows; `--dry-run` shows the count first.
 

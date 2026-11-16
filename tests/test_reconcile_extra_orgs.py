@@ -62,3 +62,14 @@ def test_refresh_reconciles_with_extra_orgs(store, monkeypatch):
     TestClient(app).post("/api/refresh")
     assert _status(store, "B") == "coding"
     assert _status(store, "GONE") in (None, "")
+
+
+def test_poll_logs_warning_when_reconcile_skipped(store, monkeypatch, caplog):
+    monkeypatch.setattr(progress, "get_settings", lambda: _Cfg())
+    _seed(store)
+    with caplog.at_level("WARNING", logger="cfactory.adapters"):
+        poll_progress_once(LiveProgressHub(), [_adapter(b_down=True)], store)
+    msgs = [r.getMessage() for r in caplog.records if "reconcile skipped" in r.getMessage()]
+    assert msgs
+    assert "aifactory" in msgs[0]
+    assert _ORG_B not in msgs[0]

@@ -278,3 +278,37 @@ def test_poll_reconciles_with_extra_org_tokens_unless_one_is_down(monkeypatch, s
         a.down_extra = down_extra
         progress.poll_progress_once(progress.LiveProgressHub(), [a], store)
         assert len(calls) == expected
+
+
+def test_org_tokens_accept_a_tenant_binding():
+    s = Settings(aifactory_token="p", aifactory_org_tokens="acme=x, y,=z,w=p")  # noqa: S106
+    assert s.extra_org_bindings_for("aifactory") == [("acme", "x"), (None, "y"), (None, "z")]
+    assert s.extra_tokens_for("aifactory") == ["x", "y", "z"]
+
+
+class _FakeWS:
+    def __init__(self):
+        self.sent: list[dict] = []
+
+    async def send_json(self, msg):
+        self.sent.append(msg)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("multi", "a_gets"), [(True, 0), (False, 1)])
+async def test_bound_org_event_is_scoped_and_only_pushed_to_its_tenant(
+    monkeypatch, store, multi, a_gets
+):
+    """#517: a tenant-bound socket's event is stored and broadcast for that tenant only."""
+    monkeypatch.setattr(upstream_ws, "get_settings", lambda: Settings(multi_tenant=multi))
+    mgr = ConnectionManager()
+    a, b = _FakeWS(), _FakeWS()
+    mgr._active[a], mgr._active[b] = "a", "b"
+    raw = json.dumps({"correlation_key": "9", "task_id": "t", "status": "coding"})
+
+    await handle_message(Service.AIFACTORY, raw, store, mgr, tenant="b")
+
+    assert len(a.sent) == a_gets
+    assert len(b.sent) == 1
+    assert (store.scoped("b").get("9") is not None) is multi
+    assert store.scoped("a").get("9") is None

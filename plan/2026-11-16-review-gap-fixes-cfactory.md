@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 518
 spec: spec/2026-11-16-review-gap-fixes-cfactory.md
 coders:

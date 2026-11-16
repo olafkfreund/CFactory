@@ -169,7 +169,10 @@ def poll_progress_once(
                     if _current_task(store, o) in {i.task_id for i in groups[o.correlation_key]}
                 )
                 hydrate(store, live, newest_ids=newest_ids)
-                store.reconcile_snapshot(adapter.service, {i.task_id for i in live})
+                # Factory#3702: with extra org sockets the poll sees only the primary
+                # org, so reconciling would blank the other orgs' running stages.
+                if not get_settings().extra_tokens_for(adapter.service.value):
+                    store.reconcile_snapshot(adapter.service, {i.task_id for i in live})
                 # Drop orphaned duplicate cards left when an upstream re-keys a
                 # task (fallback id -> real GitHub-issue key); reconcile preserves
                 # their terminal stage, so prune by task_id->canonical-key here.

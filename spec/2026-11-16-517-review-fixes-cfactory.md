@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 517
 intent: intent/2026-11-16-517-review-fixes-cfactory.md
 ---

@@ -6,6 +6,7 @@ from functools import cache
 from typing import Any
 
 from fastapi import WebSocket
+from starlette.concurrency import run_in_threadpool
 
 
 class ConnectionManager:
@@ -37,6 +38,24 @@ class ConnectionManager:
                 dead.append(ws)
         for ws in dead:
             self.disconnect(ws)
+
+    async def broadcast_snapshot(self, store: Any, multi_tenant: bool) -> None:
+        """Push the board: one unscoped list, or one list per connected tenant (#521).
+
+        ``store.scoped`` re-scopes any store, so an already-scoped request store works.
+        """
+        if not multi_tenant:
+            items = await run_in_threadpool(store.list)
+            await self.broadcast(
+                {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in items]}
+            )
+            return
+        for tenant in set(self._active.values()):
+            items = await run_in_threadpool(store.scoped(tenant).list)
+            await self.broadcast(
+                {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in items]},
+                tenant=tenant,
+            )
 
 
 @cache

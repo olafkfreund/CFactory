@@ -91,8 +91,8 @@ deep.
 ## Recently shipped — August to November 2026
 
 CFactory has no releases or version numbers. "Shipped" here means merged to
-`main`; the last commit on `main` is [#509](https://github.com/olafkfreund/CFactory/pull/509)
-(2026-10-30). See the
+`main`. As of 2026-11-16, `main` is behind `dev`; check the merged
+list for the current head. See the
 [merged pull requests](https://github.com/olafkfreund/CFactory/pulls?q=is%3Apr+is%3Amerged+base%3Amain),
 and the post
 [What shipped, August to November]({{ '/blog/2026/11/15/what-shipped-august-to-november/' | relative_url }}).

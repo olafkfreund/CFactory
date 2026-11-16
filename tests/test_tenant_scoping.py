@@ -164,3 +164,13 @@ def test_resolve_tenant():
     assert resolve_tenant("  acme  ", on) == "acme"
     assert resolve_tenant(None, on) == "default"
     assert resolve_tenant("   ", on) == "default"
+
+
+def test_retenant_moves_only_default_rows(store):
+    store.upsert_from_event(_event("k1", "e1"))
+    store.scoped("b").upsert_from_event(_event("k2", "e2"))
+    assert store.retenant("a", ["k1", "k2", "nope"], dry_run=True) == 1
+    assert store.scoped("a").list() == []
+    assert store.retenant("a", ["k1", "k2", "nope"]) == 1
+    assert [w.correlation_key for w in store.scoped("a").list()] == ["k1"]
+    assert [w.correlation_key for w in store.scoped("b").list()] == ["k2"]

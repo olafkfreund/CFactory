@@ -249,24 +249,32 @@ async def test_extra_org_tokens_open_extra_sockets(monkeypatch, store):
     assert len(calls) == 5
 
 
-def test_poll_skips_reconcile_when_extra_org_tokens_set(monkeypatch, store):
-    """The poll sees one org; reconciling would blank the other orgs' stages."""
+def test_poll_reconciles_with_extra_org_tokens_unless_one_is_down(monkeypatch, store):
+    """#517: extra orgs are listed too; a failed extra listing skips reconcile."""
     calls = []
     monkeypatch.setattr(store, "reconcile_snapshot", lambda *a: calls.append(a) or 0)
 
     class A:
         service = Service.AIFACTORY
+        down = False
 
         def list_items(self):
+            if self.down:
+                raise progress.AdapterError("org down")
             return []
+
+        def with_token(self, token):
+            sibling = A()
+            sibling.down = self.down_extra
+            return sibling
 
         def close(self):
             pass
 
-    for extra, expected in ((None, 1), ("x", 0)):
+    monkeypatch.setattr(progress, "get_settings", lambda: Settings(aifactory_org_tokens="x"))
+    for down_extra, expected in ((False, 1), (True, 0)):
         calls.clear()
-        monkeypatch.setattr(
-            progress, "get_settings", lambda e=extra: Settings(aifactory_org_tokens=e)
-        )
-        progress.poll_progress_once(progress.LiveProgressHub(), [A()], store)
+        a = A()
+        a.down_extra = down_extra
+        progress.poll_progress_once(progress.LiveProgressHub(), [a], store)
         assert len(calls) == expected

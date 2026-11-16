@@ -20,6 +20,7 @@ from .api_deps import action_transport_dep, adapters_dep, audit_dep, cards_store
 from .audit import AuditStore
 from .card_intake import apply_status
 from .cards import CardStore
+from .config import get_settings
 from .error_ref import error_reference
 from .models import CompletionEvent
 from .store import WorkItemStore
@@ -87,7 +88,12 @@ async def refresh(
             # Reconcile: drop stale non-terminal stages the upstream no longer
             # reports, so finished/removed tasks stop showing as "running".
             live_ids = {i.task_id for i in items}
-            cleared = await run_in_threadpool(store.reconcile_snapshot, adapter.service, live_ids)
+            # Factory#3702: skip when extra org sockets exist (poll sees one org only).
+            cleared = 0
+            if not get_settings().extra_tokens_for(adapter.service.value):
+                cleared = await run_in_threadpool(
+                    store.reconcile_snapshot, adapter.service, live_ids
+                )
             result[adapter.service.value] = (
                 {"hydrated": hydrated, "cleared": cleared} if cleared else hydrated
             )

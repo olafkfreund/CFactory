@@ -6,7 +6,7 @@ import asyncio
 import json
 
 import pytest
-from cfactory import upstream_ws
+from cfactory import progress, upstream_ws
 from cfactory.config import Settings
 from cfactory.models import Service
 from cfactory.upstream_ws import handle_message, parse_upstream_message
@@ -219,3 +219,54 @@ async def test_start_subscribers_passes_each_service_its_own_header(monkeypatch,
         "aifactory": {"Authorization": "Bearer a"},
         "tfactory": {"Authorization": "Bearer shared"},
     }
+
+
+def test_extra_tokens_parse_dedupe_and_drop_primary():
+    s = Settings(aifactory_token="p", aifactory_org_tokens=" a, b ,a,,p ")  # noqa: S106
+    assert s.extra_tokens_for("aifactory") == ["a", "b"]
+    assert s.extra_tokens_for("tfactory") == []
+
+
+@pytest.mark.asyncio
+async def test_extra_org_tokens_open_extra_sockets(monkeypatch, store):
+    calls: list[tuple[str, str, dict[str, str]]] = []
+
+    async def fake_subscribe(service, url, *_a, headers=None, **_k):
+        calls.append((service.value, url, headers))
+
+    monkeypatch.setattr(upstream_ws, "subscribe", fake_subscribe)
+    base = Settings(aifactory_token="p")  # noqa: S106
+    tasks = upstream_ws.start_subscribers(store, ConnectionManager(), base)
+    await asyncio.gather(*tasks)
+    assert len(calls) == 3  # default: one per service
+
+    calls.clear()
+    s = Settings(aifactory_token="p", aifactory_org_tokens="x,y")  # noqa: S106
+    await asyncio.gather(*upstream_ws.start_subscribers(store, ConnectionManager(), s))
+    ai = [(u, h) for svc, u, h in calls if svc == "aifactory"]
+    assert len(ai) == 3 and len({u for u, _ in ai}) == 1
+    assert sorted(h["Authorization"] for _, h in ai) == ["Bearer p", "Bearer x", "Bearer y"]
+    assert len(calls) == 5
+
+
+def test_poll_skips_reconcile_when_extra_org_tokens_set(monkeypatch, store):
+    """The poll sees one org; reconciling would blank the other orgs' stages."""
+    calls = []
+    monkeypatch.setattr(store, "reconcile_snapshot", lambda *a: calls.append(a) or 0)
+
+    class A:
+        service = Service.AIFACTORY
+
+        def list_items(self):
+            return []
+
+        def close(self):
+            pass
+
+    for extra, expected in ((None, 1), ("x", 0)):
+        calls.clear()
+        monkeypatch.setattr(
+            progress, "get_settings", lambda e=extra: Settings(aifactory_org_tokens=e)
+        )
+        progress.poll_progress_once(progress.LiveProgressHub(), [A()], store)
+        assert len(calls) == expected

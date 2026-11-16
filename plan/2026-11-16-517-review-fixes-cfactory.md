@@ -18,7 +18,7 @@ view; skip on any extra-org failure; no behaviour change without extra keys.
 1. `apps/backend/cfactory/adapters/base.py`, `adapters/__init__.py`, `progress.py`,
    `routes_events.py`: add `with_token`, `live_ids_all_orgs`, replace both guards
    → verify by `pytest tests/test_reconcile_extra_orgs.py`. Traps: none.
-2. `tests/test_reconcile_extra_orgs.py`: three regression tests → full `pytest`, `ruff check`.
+2. `tests/test_reconcile_extra_orgs.py`, `tests/test_upstream_ws.py` (old skip-reconcile test rewritten): three regression tests → full `pytest`, `ruff check`.
 
 ## Tests
 

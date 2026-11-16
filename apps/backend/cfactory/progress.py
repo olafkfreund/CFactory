@@ -219,10 +219,7 @@ async def _poll_loop(
                 await manager.broadcast({"type": "progress", "item": lp.model_dump(mode="json")})
             # Push the reconciled board so cleared/updated stages reach the cockpit
             # live (stale "running" ghosts disappear without a manual refresh).
-            snapshot = await run_in_threadpool(store.list)
-            await manager.broadcast(
-                {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
-            )
+            await manager.broadcast_snapshot(store, settings.multi_tenant)
         except Exception as exc:  # noqa: BLE001 — best-effort, never crash the cockpit
             logger.debug("live-progress broadcast failed: %s", type(exc).__name__)
         await asyncio.sleep(interval)

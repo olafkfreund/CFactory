@@ -113,9 +113,5 @@ async def refresh(
             result[adapter.service.value] = {"error": f"the provider call failed (reference {ref})"}
         finally:
             adapter.close()
-    snapshot = await run_in_threadpool(store.list)
-    manager = get_manager()
-    await manager.broadcast(
-        {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
-    )
+    await get_manager().broadcast_snapshot(store, get_settings().multi_tenant)
     return {"refreshed": result}

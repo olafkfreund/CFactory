@@ -7,9 +7,9 @@ author: Factory Team
 ---
 
 CFactory has no releases or version numbers, so this post uses dates and pull
-requests. "Shipped" means merged to `main`. The last commit on `main` is
-[#509](https://github.com/olafkfreund/CFactory/pull/509) (2026-10-30), and
-everything merged on 2026-11-14 is on `dev` only, which is listed at the end.
+requests. "Shipped" means merged to `main`. As of 2026-11-15, `main` ended at the
+[#516](https://github.com/olafkfreund/CFactory/pull/516) sync (check the list below for the
+current head), and everything merged on 2026-11-14 is on `dev` only, which is listed at the end.
 The full list is the
 [merged pull request list](https://github.com/olafkfreund/CFactory/pulls?q=is%3Apr+is%3Amerged+base%3Amain).
 

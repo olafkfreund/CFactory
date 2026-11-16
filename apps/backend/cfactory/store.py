@@ -710,6 +710,31 @@ class WorkItemStore:
             rows = session.scalars(self._select().order_by(WorkItemRow.updated_at.desc()))
             return [r.to_model() for r in rows]
 
+    def retenant(
+        self,
+        tenant: str,
+        keys: list[str],
+        from_tenant: str = DEFAULT_TENANT,
+        *,
+        dry_run: bool = False,
+    ) -> int:
+        """Move rows owned by ``from_tenant`` to ``tenant`` (#521); others are skipped.
+
+        Unscoped store only. Run before binding an org key to a tenant, so the
+        scoped upsert does not collide on the global correlation key.
+        """
+        if self._tenant is not None:
+            raise ValueError("retenant needs the unscoped store")
+        moved = 0
+        with self._session.begin() as session:
+            for key in keys:
+                row = self._get_row(session, key)
+                if row is not None and row.tenant_id == from_tenant:
+                    if not dry_run:
+                        row.tenant_id = tenant
+                    moved += 1
+        return moved
+
     def delete(self, correlation_key: str) -> bool:
         """Remove a work item entirely from the cockpit store.
 

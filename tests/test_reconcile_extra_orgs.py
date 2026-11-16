@@ -14,6 +14,8 @@ _ORG_B = "org-b-key"
 
 
 class _Cfg:
+    multi_tenant = False
+
     def extra_tokens_for(self, service):
         return [_ORG_B]
 

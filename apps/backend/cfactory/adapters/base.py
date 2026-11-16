@@ -169,6 +169,7 @@ class BaseHTTPAdapter:
         # Each factory guards its API with `Authorization: Bearer <APP_API_TOKEN>`.
         # Send it as a default header on every request when configured; unset means
         # local dev against a factory running with auth disabled.
+        self._init = (base_url, timeout, transport)
         headers = {"Authorization": f"Bearer {token}"} if token else None
         self._client = httpx.Client(
             base_url=base_url, timeout=timeout, transport=transport, headers=headers
@@ -260,6 +261,11 @@ class BaseHTTPAdapter:
 
     def _normalize(self, row: dict[str, Any]) -> AdapterItem | None:  # pragma: no cover
         raise NotImplementedError
+
+    def with_token(self, token: str) -> BaseHTTPAdapter:
+        """A sibling adapter for the same service and endpoint under another key."""
+        base_url, timeout, transport = self._init
+        return type(self)(base_url, token=token, timeout=timeout, transport=transport)
 
     def close(self) -> None:
         self._client.close()

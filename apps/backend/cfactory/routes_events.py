@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends
 from starlette.concurrency import run_in_threadpool
 
 from . import card_ops
-from .adapters import AdapterError, BaseHTTPAdapter, hydrate
+from .adapters import AdapterError, BaseHTTPAdapter, hydrate, live_ids_all_orgs
 from .api_deps import action_transport_dep, adapters_dep, audit_dep, cards_store_dep, store_dep
 from .audit import AuditStore
 from .card_intake import apply_status
@@ -87,10 +87,15 @@ async def refresh(
             hydrated = await run_in_threadpool(hydrate, store, items)
             # Reconcile: drop stale non-terminal stages the upstream no longer
             # reports, so finished/removed tasks stop showing as "running".
-            live_ids = {i.task_id for i in items}
-            # Factory#3702: skip when extra org sockets exist (poll sees one org only).
+            # Factory#3702/#517: list the extra org keys too; None = one failed, skip.
+            live_ids = await run_in_threadpool(
+                live_ids_all_orgs,
+                adapter,
+                items,
+                get_settings().extra_tokens_for(adapter.service.value),
+            )
             cleared = 0
-            if not get_settings().extra_tokens_for(adapter.service.value):
+            if live_ids is not None:
                 cleared = await run_in_threadpool(
                     store.reconcile_snapshot, adapter.service, live_ids
                 )

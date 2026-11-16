@@ -20,6 +20,7 @@ __all__ = [
     "TFactoryAdapter",
     "build_adapters",
     "hydrate",
+    "live_ids_all_orgs",
 ]
 
 
@@ -47,3 +48,23 @@ def hydrate(
             newest=item.task_id in newest_ids,
         )
     return len(items)
+
+
+def live_ids_all_orgs(
+    adapter: BaseHTTPAdapter, items: list[AdapterItem], extra_tokens: list[str]
+) -> set[str] | None:
+    """Task ids live across the primary org and every extra org-bound key (#517).
+
+    Reconcile needs the whole picture or it blanks other orgs' running stages.
+    Returns ``None`` when any extra org cannot be listed: skip reconcile then,
+    a partial view must never clear anything."""
+    ids = {i.task_id for i in items}
+    for token in extra_tokens:
+        sibling = adapter.with_token(token)
+        try:
+            ids |= {i.task_id for i in sibling.list_items()}
+        except AdapterError:
+            return None
+        finally:
+            sibling.close()
+    return ids

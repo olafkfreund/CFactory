@@ -428,16 +428,29 @@ class Settings(BaseSettings):
         }.get(service)
         return own or self.upstream_token
 
-    def extra_tokens_for(self, service: str) -> list[str]:
-        """Extra org-bound keys for ``service``: stripped, de-duplicated, minus the primary."""
+    def extra_org_bindings_for(self, service: str) -> list[tuple[str | None, str]]:
+        """Extra org-bound keys as ``(tenant, key)``: entries are ``key`` or ``tenant=key``.
+
+        Stripped, de-duplicated by key, minus the primary. A tenant binds the
+        socket's events to that tenant when multi-tenant mode is on.
+        """
         raw = {
             "pfactory": self.pfactory_org_tokens,
             "aifactory": self.aifactory_org_tokens,
             "tfactory": self.tfactory_org_tokens,
         }.get(service)
         primary = self.token_for(service)
-        parts = dict.fromkeys(p.strip() for p in (raw or "").split(","))
-        return [p for p in parts if p and p != primary]
+        out: dict[str, str | None] = {}
+        for part in (p.strip() for p in (raw or "").split(",")):
+            head, sep, tail = part.partition("=")
+            tenant, key = ((head.strip() or None), tail.strip()) if sep else (None, part)
+            if key and key != primary:
+                out.setdefault(key, tenant)
+        return [(tenant, key) for key, tenant in out.items()]
+
+    def extra_tokens_for(self, service: str) -> list[str]:
+        """Extra org-bound keys for ``service``: stripped, de-duplicated, minus the primary."""
+        return [key for _, key in self.extra_org_bindings_for(service)]
 
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""

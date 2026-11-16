@@ -92,6 +92,13 @@ class Settings(BaseSettings):
     pfactory_token: str | None = Field(default=None, repr=False)
     tfactory_token: str | None = Field(default=None, repr=False)
 
+    # Extra org-bound keys per factory (Factory#3702), comma separated. Each opens
+    # one more upstream `/ws/events` socket, so a cockpit watching several orgs
+    # sees them all. Every key stays bound to ONE org upstream. Unset = no change.
+    aifactory_org_tokens: str | None = Field(default=None, repr=False)
+    pfactory_org_tokens: str | None = Field(default=None, repr=False)
+    tfactory_org_tokens: str | None = Field(default=None, repr=False)
+
     # ── DEPRECATED: a one-release SEED, not configuration (RFC-0020 §3.3) ────
     # AIFactory project a dispatched planning card is built in (RFC-0019 §3.2).
     # AIFactory's `/api/tasks/from-issue` requires a project_id and a card
@@ -420,6 +427,17 @@ class Settings(BaseSettings):
             "tfactory": self.tfactory_token,
         }.get(service)
         return own or self.upstream_token
+
+    def extra_tokens_for(self, service: str) -> list[str]:
+        """Extra org-bound keys for ``service``: stripped, de-duplicated, minus the primary."""
+        raw = {
+            "pfactory": self.pfactory_org_tokens,
+            "aifactory": self.aifactory_org_tokens,
+            "tfactory": self.tfactory_org_tokens,
+        }.get(service)
+        primary = self.token_for(service)
+        parts = dict.fromkeys(p.strip() for p in (raw or "").split(","))
+        return [p for p in parts if p and p != primary]
 
     def upstream_ws_urls(self) -> dict[str, str]:
         """Derive ws(s):// URLs for each service's live feed from its API URL."""

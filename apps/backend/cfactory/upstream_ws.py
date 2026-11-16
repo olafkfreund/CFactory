@@ -207,4 +207,17 @@ def start_subscribers(
                 subscribe(Service(name), url, store, manager, headers=_auth_headers(settings, name))
             )
         )
+        # Factory#3702: one more socket per extra org-bound key, same URL.
+        for token in settings.extra_tokens_for(name):
+            tasks.append(
+                asyncio.create_task(
+                    subscribe(
+                        Service(name),
+                        url,
+                        store,
+                        manager,
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                )
+            )
     return tasks

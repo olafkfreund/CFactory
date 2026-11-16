@@ -442,8 +442,8 @@ class Settings(BaseSettings):
         primary = self.token_for(service)
         out: dict[str, str | None] = {}
         for part in (p.strip() for p in (raw or "").split(",")):
-            tenant, sep, key = part.partition("=")
-            tenant, key = (tenant.strip() or None, key.strip()) if sep else (None, part)
+            head, sep, tail = part.partition("=")
+            tenant, key = ((head.strip() or None), tail.strip()) if sep else (None, part)
             if key and key != primary:
                 out.setdefault(key, tenant)
         return [(tenant, key) for key, tenant in out.items()]

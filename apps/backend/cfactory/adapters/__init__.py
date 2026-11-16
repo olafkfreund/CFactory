@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from cfactory.config import Settings, get_settings
 from cfactory.store import WorkItemStore
 
@@ -9,6 +11,8 @@ from .aifactory import AIFactoryAdapter
 from .base import AdapterError, AdapterItem, BaseHTTPAdapter, ServiceProbe
 from .pfactory import PFactoryAdapter
 from .tfactory import TFactoryAdapter
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "AIFactoryAdapter",
@@ -63,7 +67,13 @@ def live_ids_all_orgs(
         sibling = adapter.with_token(token)
         try:
             ids |= {i.task_id for i in sibling.list_items()}
-        except AdapterError:
+        except AdapterError as exc:
+            # Never log the token or error text; the class names the cause (401 = revoked key).
+            logger.warning(
+                "reconcile skipped for %s: an extra org key could not be listed (%s)",
+                adapter.service.value,
+                type(exc).__name__,
+            )
             return None
         finally:
             sibling.close()

@@ -458,6 +458,14 @@ class WorkItemStore:
         view._tenant = tenant
         return view
 
+    def unscoped(self) -> WorkItemStore:
+        """A view with no tenant filter, as the background poll loop uses (#521)."""
+        import copy  # noqa: PLC0415 — trivial stdlib, view-only
+
+        view = copy.copy(self)
+        view._tenant = None
+        return view
+
     def _select(self) -> Select[tuple[WorkItemRow]]:
         """Base SELECT honouring the tenant scope (no filter when unscoped)."""
         stmt = select(WorkItemRow)

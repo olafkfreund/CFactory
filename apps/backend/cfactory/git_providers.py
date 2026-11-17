@@ -51,8 +51,10 @@ from runners.github.providers.protocol import (
     IssueComment,
     IssueData,
     IssueFilters,
+    IssueRef,
     ProviderCommentError,
     ProviderType,
+    as_issue_int,
     oldest_first,
     to_iso_utc,
 )
@@ -116,7 +118,7 @@ class IssueProvider(Protocol):
         assignees: list[str] | None = None,
     ) -> IssueData: ...
 
-    async def fetch_issue(self, number: int) -> IssueData: ...
+    async def fetch_issue(self, number: IssueRef) -> IssueData: ...
 
     async def fetch_issues(self, filters: IssueFilters | None = None) -> list[IssueData]: ...
 
@@ -127,12 +129,12 @@ class IssueProvider(Protocol):
     # backfill fans out over. Neither returns a partial thread — see
     # ``ProviderCommentError``.
     async def fetch_comments(
-        self, issue_number: int, since: datetime | None = None
+        self, issue_number: IssueRef, since: datetime | None = None
     ) -> list[IssueComment]: ...
 
     async def fetch_comments_bulk(
-        self, issue_numbers: list[int], since: datetime | None = None
-    ) -> dict[int, list[IssueComment]]: ...
+        self, issue_numbers: list[IssueRef], since: datetime | None = None
+    ) -> dict[IssueRef, list[IssueComment]]: ...
 
     async def get_repository_info(self) -> dict[str, Any]: ...
 
@@ -222,9 +224,9 @@ class HttpGitHubProvider:
             resp.raise_for_status()
             return self._parse_issue(resp.json())
 
-    async def fetch_issue(self, number: int) -> IssueData:
+    async def fetch_issue(self, number: IssueRef) -> IssueData:
         async with self._client() as client:
-            resp = await client.get(f"/repos/{self._repo}/issues/{number}")
+            resp = await client.get(f"/repos/{self._repo}/issues/{as_issue_int(number, 'GitHub')}")
             resp.raise_for_status()
             return self._parse_issue(resp.json())
 
@@ -280,7 +282,7 @@ class HttpGitHubProvider:
         return issues[: filters.limit]
 
     async def fetch_comments(
-        self, issue_number: int, since: datetime | None = None
+        self, issue_number: IssueRef, since: datetime | None = None
     ) -> list[IssueComment]:
         """Read ONE issue's comment thread (Factory#375).
 
@@ -291,13 +293,14 @@ class HttpGitHubProvider:
         params: dict[str, Any] = {}
         if since is not None:
             params["since"] = to_iso_utc(since)
-        path = f"/repos/{self._repo}/issues/{issue_number}/comments"
+        number = as_issue_int(issue_number, "GitHub")
+        path = f"/repos/{self._repo}/issues/{number}/comments"
         raw = await self._comment_pages(path, params)
-        return oldest_first([self._parse_comment(item, issue_number) for item in raw])
+        return oldest_first([self._parse_comment(item, str(number)) for item in raw])
 
     async def fetch_comments_bulk(
-        self, issue_numbers: list[int], since: datetime | None = None
-    ) -> dict[int, list[IssueComment]]:
+        self, issue_numbers: list[IssueRef], since: datetime | None = None
+    ) -> dict[IssueRef, list[IssueComment]]:
         """Read MANY issues' threads — the call the poll actually makes.
 
         ``GET /repos/{repo}/issues/comments`` streams every issue comment in the
@@ -313,7 +316,7 @@ class HttpGitHubProvider:
         list and independent of how big the repository is. Same reasoning, same
         shape, as the canonical ``GitHubProvider``; only the transport differs.
         """
-        wanted = sorted({int(number) for number in issue_numbers})
+        wanted = [str(n) for n in sorted({as_issue_int(n, "GitHub") for n in issue_numbers})]
         if not wanted:
             return {}
         if since is None:
@@ -328,7 +331,7 @@ class HttpGitHubProvider:
             f"/repos/{self._repo}/issues/comments",
             {"since": to_iso_utc(since), "sort": "updated", "direction": "asc"},
         )
-        grouped: dict[int, list[IssueComment]] = {number: [] for number in wanted}
+        grouped: dict[IssueRef, list[IssueComment]] = {number: [] for number in wanted}
         for item in raw:
             number = _issue_number_from_url(item.get("issue_url", ""))
             # A repository-wide read answers for issues this board does not track
@@ -371,7 +374,7 @@ class HttpGitHubProvider:
             "narrow the `since` window rather than accept a truncated thread"
         )
 
-    def _parse_comment(self, data: dict[str, Any], issue_number: int) -> IssueComment:
+    def _parse_comment(self, data: dict[str, Any], issue_number: IssueRef) -> IssueComment:
         """GitHub's comment JSON as the provider-neutral :class:`IssueComment`."""
         user = data.get("user")
         author = user.get("login", "") if isinstance(user, dict) else str(user or "")
@@ -414,7 +417,7 @@ class HttpGitHubProvider:
         if not isinstance(number, int):
             raise ValueError(f"{self._repo}: response carried no issue number")
         return IssueData(
-            number=number,
+            number=str(number),
             title=str(issue.get("title") or ""),
             body=str(issue.get("body") or ""),
             author=str((issue.get("user") or {}).get("login") or ""),
@@ -440,14 +443,14 @@ class HttpGitHubProvider:
         )
 
 
-def _issue_number_from_url(url: str) -> int | None:
+def _issue_number_from_url(url: str) -> IssueRef | None:
     """Recover the issue number from a comment's ``issue_url``.
 
     The repository-wide comments endpoint does not carry the issue number as a
     field; the only link back is the URL it was made against.
     """
     tail = (url or "").rstrip("/").rsplit("/", 1)[-1]
-    return int(tail) if tail.isdigit() else None
+    return str(int(tail)) if tail.isdigit() else None
 
 
 def _milestone_title(milestone: Any) -> str | None:

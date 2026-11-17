@@ -2,7 +2,7 @@
 
 ``gh_client.py``, ``rate_limiter.py`` and ``providers/`` are a **byte-identical**
 copy of the Factory hub's single source of truth at ``shared/factory-github/``,
-taken at hub commit ``15475fd87316a4812ea24a347873c1d7b1013f26``. This is the
+taken at hub commit ``92d2508e057524c054c6842b0170168ff7213c25``. This is the
 same vendor-canonical + drift-gate model AIFactory, PFactory and TFactory use;
 ``.github/workflows/factory-github-drift.yml`` fetches the canonical at that
 pinned SHA and fails the build if a byte here differs.

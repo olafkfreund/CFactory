@@ -81,10 +81,13 @@ async def refresh(
     """Poll every upstream service and hydrate the store. Best-effort:
     an unreachable service is reported, not fatal."""
     result: dict[str, object] = {}
+    # The adapters list the deployment's keys, not the caller's tenant: write like
+    # the poll loop (unscoped) instead of filing them under the caller (#521).
+    db = store.unscoped()
     for adapter in adapters:
         try:
             items = await run_in_threadpool(adapter.list_items)
-            hydrated = await run_in_threadpool(hydrate, store, items)
+            hydrated = await run_in_threadpool(hydrate, db, items)
             # Reconcile: drop stale non-terminal stages the upstream no longer
             # reports, so finished/removed tasks stop showing as "running".
             # Factory#3702/#517: list the extra org keys too; None = one failed, skip.
@@ -97,7 +100,7 @@ async def refresh(
             cleared = 0
             if live_ids is not None:
                 cleared = await run_in_threadpool(
-                    store.reconcile_snapshot, adapter.service, live_ids
+                    db.reconcile_snapshot, adapter.service, live_ids
                 )
             result[adapter.service.value] = (
                 {"hydrated": hydrated, "cleared": cleared} if cleared else hydrated

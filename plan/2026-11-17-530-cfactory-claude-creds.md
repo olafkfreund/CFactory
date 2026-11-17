@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 530
 spec: spec/2026-11-17-530-cfactory-claude-creds.md
 coders:

@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 __all__ = [
     "CompletionEvent",
@@ -55,11 +55,17 @@ class CorrelationBlock(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     session_id: str | None = None
-    issue_number: int | None = None
+    issue_number: str | None = None
     aifactory_task_id: str | None = None
     branch: str | None = None
     pr_number: int | None = None
     tfactory_spec_id: str | None = None
+
+    @field_validator("issue_number", mode="before")
+    @classmethod
+    def _issue_number_as_string(cls, value: object) -> object:
+        """Work-item identifier is a string (Factory#3774); a legacy integer is its decimal form."""
+        return str(value) if isinstance(value, int) and not isinstance(value, bool) else value
 
 
 class CompletionEvent(BaseModel):

@@ -352,7 +352,7 @@ def _sync_comments(
     if not cards:
         return {"ok": True, "cards": 0, "comments": 0, "backfilled": 0, "refreshed": 0}
 
-    by_number: dict[int, Card] = {}
+    by_number: dict[str, Card] = {}
     for card in cards:
         ref = IssueRef.parse(card.issue_ref)
         if ref is not None:
@@ -362,7 +362,7 @@ def _sync_comments(
     cold = [n for n, card in by_number.items() if card.comments_synced_at is None]
     # Oldest cards first, so a backlog backfills in the order it was imported
     # rather than in whatever order the dict happens to hold.
-    cold = sorted(cold)[: max(0, settings.import_comment_backfill_max)]
+    cold = sorted(cold, key=int)[: max(0, settings.import_comment_backfill_max)]
 
     since = None
     if warm:
@@ -384,7 +384,7 @@ def _sync_comments(
         if not numbers:
             continue
         try:
-            threads = run_sync(provider.fetch_comments_bulk(sorted(numbers), window))
+            threads = run_sync(provider.fetch_comments_bulk(sorted(numbers, key=int), window))
         except Exception as exc:  # noqa: BLE001 — one group's provider failure must
             # not abandon the other, and must not take the import down. Reported,
             # never swallowed: nothing is stored and no marker moves, so the cards

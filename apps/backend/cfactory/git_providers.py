@@ -118,7 +118,7 @@ class IssueProvider(Protocol):
         assignees: list[str] | None = None,
     ) -> IssueData: ...
 
-    async def fetch_issue(self, number: int) -> IssueData: ...
+    async def fetch_issue(self, number: IssueRef) -> IssueData: ...
 
     async def fetch_issues(self, filters: IssueFilters | None = None) -> list[IssueData]: ...
 
@@ -224,9 +224,9 @@ class HttpGitHubProvider:
             resp.raise_for_status()
             return self._parse_issue(resp.json())
 
-    async def fetch_issue(self, number: int) -> IssueData:
+    async def fetch_issue(self, number: IssueRef) -> IssueData:
         async with self._client() as client:
-            resp = await client.get(f"/repos/{self._repo}/issues/{number}")
+            resp = await client.get(f"/repos/{self._repo}/issues/{as_issue_int(number, 'GitHub')}")
             resp.raise_for_status()
             return self._parse_issue(resp.json())
 

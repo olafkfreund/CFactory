@@ -186,7 +186,7 @@ def test_test_stage_dispatches_to_tfactory_once_a_build_exists(client, upstream)
 
 
 @pytest.mark.parametrize(
-    ("correlation_key", "event_key"), [(None, "af-003-x"), ("o/r#42", "o/r#42")]
+    ("correlation_key", "event_key"), [(None, "af-proj-1:003-x"), ("o/r#42", "o/r#42")]
 )
 def test_code_stage_settles_on_aifactory_shaped_completion(
     client, upstream, cards, correlation_key, event_key

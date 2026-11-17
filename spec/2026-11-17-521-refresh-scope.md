@@ -22,6 +22,8 @@ intent: intent/2026-11-17-521-refresh-scope.md
 
 Rows already misfiled under a caller's tenant by the old behaviour stay there (updates find them, new ones go to `default`); `scripts/retenant_work_items.py` moves them. Polling itself is still not tenant-isolated: a documented limit of this change.
 
+Reconcile boundary (codex finding, decided): reconcile is deployment-wide, as `_poll_loop` already does. `live_ids_all_orgs` lists the primary key plus every extra org key and skips reconcile when any extra key fails to list, so another tenant's stage is cleared only when its task is absent from every configured key, i.e. gone upstream. Scoping reconcile to the caller instead would clear nothing for tenants other than the caller and leave their ghost stages until the next poll, and would be inconsistent with hydrate. Refresh does not call the prune methods and this change does not add them (unscoped duplicate pruning could delete other tenants' rows).
+
 ## Verification
 
-New test in `tests/test_refresh.py`: multi-tenant on, caller store scoped to tenant `b`, refresh hydrates a key; the row's tenant is `default`, the scoped `b` view does not list it, an unscoped view does, and a second refresh with the key pre-filed under `b` returns 200 and updates it in place. Existing suite and ruff pass.
+New test in `tests/test_refresh.py`: multi-tenant on, caller store scoped to tenant `b`, refresh hydrates a key; the row's tenant is `default`, the scoped `b` view does not list it, an unscoped view does; a row of a third tenant whose task is still listed upstream keeps its stage, and one whose task is absent from every key is cleared exactly as polling would; a second refresh with the key pre-filed under `b` returns 200 and updates it in place (the upstream status differs from the stored one, so the update is real). The test switches multi-tenant by monkeypatching `cfactory.routes_events.get_settings`. Existing suite and ruff pass.

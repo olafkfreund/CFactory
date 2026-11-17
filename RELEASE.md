@@ -78,3 +78,11 @@ There is no rollback command in this repo. Revert or bump `factory-gitops`
 (`apps/cfactory/manifests`) to a previous known-good image SHA and let
 ArgoCD reconcile; that repo, not this one, is the source of truth for what
 is currently deployed.
+
+## Post-deploy: copilot (Claude) check
+
+The copilot's default provider is `claude` (Claude Agent SDK), so the cfactory
+pod carries a `cred-sync` sidecar fed by the shared `factory-cli-creds` Secret
+(CFactory#530). To verify a release, ask a copilot question and check
+`kubectl logs deploy/cfactory -c cred-sync` shows no refusal. A "Not logged in"
+answer means the sidecar or the Secret is missing, not a code regression.

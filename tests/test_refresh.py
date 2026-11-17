@@ -5,8 +5,10 @@ from __future__ import annotations
 import httpx
 from fastapi.testclient import TestClient
 
+from cfactory import routes_events
 from cfactory.adapters import AIFactoryAdapter, PFactoryAdapter, TFactoryAdapter
 from cfactory.app import adapters_dep, create_app, store_dep
+from cfactory.models import Service, ServiceState
 
 
 def _t(payload, status=200):
@@ -34,3 +36,34 @@ def test_refresh_hydrates_and_reports_failures(store):
     wi = client.get("/api/workitems/7").json()
     assert wi["pfactory"]["status"] == "done"
     assert wi["aifactory"]["status"] == "coding"
+
+
+def test_refresh_in_multi_tenant_writes_like_polling(store, monkeypatch):
+    """#521: a tenant-b caller must not receive the deployment-wide results."""
+    class _Cfg:
+        multi_tenant = True
+
+        def extra_tokens_for(self, _service):
+            return []
+
+    monkeypatch.setattr(routes_events, "get_settings", _Cfg)
+    for tenant, key, tid in (("b", "K2", "t2"), ("c", "K3", "t3"), ("c", "K4", "t4")):
+        store.scoped(tenant).upsert_snapshot(
+            key, Service.AIFACTORY, ServiceState(task_id=tid, status="coding")
+        )
+    ai = AIFactoryAdapter("http://x", transport=_t({"tasks": [
+        {"id": "t1", "status": "coding", "correlation_key": "K1"},
+        {"id": "t2", "status": "done", "correlation_key": "K2"},
+        {"id": "t3", "status": "coding", "correlation_key": "K3"},
+    ]}))
+    app = create_app()
+    app.dependency_overrides[store_dep] = lambda: store.scoped("b")
+    app.dependency_overrides[adapters_dep] = lambda: [ai]
+    resp = TestClient(app).post("/api/refresh")
+
+    assert resp.status_code == 200 and "aifactory" in resp.json()["refreshed"]
+    assert "K1" not in {w.correlation_key for w in store.scoped("b").list()}
+    assert store.scoped("default").get("K1") is not None
+    assert store.scoped("b").get("K2").aifactory.status == "done"  # updated in place
+    assert store.scoped("c").get("K3").aifactory.status == "coding"  # still live upstream
+    assert not store.scoped("c").get("K4").aifactory.status  # gone upstream: cleared like polling

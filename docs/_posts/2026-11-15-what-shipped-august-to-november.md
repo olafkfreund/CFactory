@@ -7,9 +7,10 @@ author: Factory Team
 ---
 
 CFactory has no releases or version numbers, so this post uses dates and pull
-requests. "Shipped" means merged to `main`. As of 2026-11-15, `main` ended at the
-[#516](https://github.com/olafkfreund/CFactory/pull/516) sync (check the list below for the
-current head), and everything merged on 2026-11-14 is on `dev` only, which is listed at the end.
+requests. "Shipped" means merged to `main`. As of 2026-11-17, `main` includes the dev-to-main
+promotion that carried everything merged to `dev` through 2026-11-16, including
+[#510](https://github.com/olafkfreund/CFactory/pull/510) and
+[#513](https://github.com/olafkfreund/CFactory/pull/513); later merges are on `dev` first.
 The full list is the
 [merged pull request list](https://github.com/olafkfreund/CFactory/pulls?q=is%3Apr+is%3Amerged+base%3Amain).
 
@@ -157,7 +158,7 @@ recreates the row with a fresh clock
 
 ## In progress
 
-Merged to `dev` on 2026-11-14 and not on `main`, so not deployed:
+Merged on 2026-11-14 and on `main` since the 2026-11-17 promotion. The gateway route is off until configured, and the per-factory tokens fall back to the shared one:
 
 - A model-gateway route for the copilot, used only when
   `CFACTORY_MODEL_GATEWAY_URL` is set, with no fallback to the provider on a

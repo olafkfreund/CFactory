@@ -12,7 +12,7 @@ With multi-tenant on, `POST /api/refresh` receives a store already scoped to the
 
 ## Proposed outcome
 
-In multi-tenant mode a refresh writes primary-key results only to the tenant the poll loop writes them to (`default`), whoever calls it. Single-tenant behaviour is unchanged. Docs state dated facts that match `main`.
+In multi-tenant mode a refresh writes primary-key results exactly as the background poll loop does (unscoped store: existing rows are updated where they sit, new rows get `default`), whoever calls it, so a caller's tenant never receives the deployment-wide results. Single-tenant behaviour is unchanged. Docs state dated facts that match `main`.
 
 ## Affected users and systems
 
@@ -24,4 +24,4 @@ No wire-shape change (`{"refreshed": {...}}` and snapshots as today). Multi-tena
 
 ## Open questions
 
-None. Decision (owner delegation 2026-11-17): the refresh target is the `default` tenant, the same one `_poll_loop` uses with the unscoped store; this is the least change and cannot leak across tenants. Binding extra org keys to tenants during refresh stays with the live websocket path (#517) and is not added here.
+None. Decision (owner delegation 2026-11-17): refresh uses the unscoped view, the same as `_poll_loop`. Codex review rejected the first idea (write to `scoped(default)`): correlation keys are globally unique, so a row the bug already filed under another tenant would make the next refresh fail with `IntegrityError`. The unscoped view updates such rows in place and cannot collide. Limit, not fixed here: this restricts the refresh path to what polling already does; it does not make background polling tenant-aware, and rows already misfiled under a caller's tenant stay there until moved with `scripts/retenant_work_items.py`. Binding extra org keys to tenants stays with the websocket path (#517).

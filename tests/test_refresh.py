@@ -5,8 +5,10 @@ from __future__ import annotations
 import httpx
 from fastapi.testclient import TestClient
 
+from cfactory import routes_events
 from cfactory.adapters import AIFactoryAdapter, PFactoryAdapter, TFactoryAdapter
 from cfactory.app import adapters_dep, create_app, store_dep
+from cfactory.models import Service, ServiceState
 
 
 def _t(payload, status=200):
@@ -38,13 +40,10 @@ def test_refresh_hydrates_and_reports_failures(store):
 
 def test_refresh_in_multi_tenant_writes_like_polling(store, monkeypatch):
     """#521: a tenant-b caller must not receive the deployment-wide results."""
-    from cfactory import routes_events
-    from cfactory.models import Service, ServiceState
-
     class _Cfg:
         multi_tenant = True
 
-        def extra_tokens_for(self, service):
+        def extra_tokens_for(self, _service):
             return []
 
     monkeypatch.setattr(routes_events, "get_settings", _Cfg)

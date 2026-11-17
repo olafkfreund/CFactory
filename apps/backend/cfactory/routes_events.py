@@ -99,9 +99,7 @@ async def refresh(
             )
             cleared = 0
             if live_ids is not None:
-                cleared = await run_in_threadpool(
-                    db.reconcile_snapshot, adapter.service, live_ids
-                )
+                cleared = await run_in_threadpool(db.reconcile_snapshot, adapter.service, live_ids)
             result[adapter.service.value] = (
                 {"hydrated": hydrated, "cleared": cleared} if cleared else hydrated
             )

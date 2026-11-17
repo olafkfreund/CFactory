@@ -45,7 +45,7 @@ def _status(store, key):
 
 
 def test_poll_reconciles_extra_org_and_keeps_live_ones(store, monkeypatch):
-    monkeypatch.setattr(progress, "get_settings", lambda: _Cfg())
+    monkeypatch.setattr(progress, "get_settings", _Cfg)
     _seed(store)
     poll_progress_once(LiveProgressHub(), [_adapter()], store)
     assert _status(store, "B") == "coding"  # org B still live: not blanked
@@ -53,14 +53,14 @@ def test_poll_reconciles_extra_org_and_keeps_live_ones(store, monkeypatch):
 
 
 def test_poll_skips_reconcile_when_an_extra_org_is_down(store, monkeypatch):
-    monkeypatch.setattr(progress, "get_settings", lambda: _Cfg())
+    monkeypatch.setattr(progress, "get_settings", _Cfg)
     _seed(store)
     poll_progress_once(LiveProgressHub(), [_adapter(b_down=True)], store)
     assert _status(store, "GONE") == "coding"
 
 
 def test_refresh_reconciles_with_extra_orgs(store, monkeypatch):
-    monkeypatch.setattr(routes_events, "get_settings", lambda: _Cfg())
+    monkeypatch.setattr(routes_events, "get_settings", _Cfg)
     _seed(store)
     app = create_app()
     app.dependency_overrides[store_dep] = lambda: store
@@ -71,7 +71,7 @@ def test_refresh_reconciles_with_extra_orgs(store, monkeypatch):
 
 
 def test_poll_logs_warning_when_reconcile_skipped(store, monkeypatch, caplog):
-    monkeypatch.setattr(progress, "get_settings", lambda: _Cfg())
+    monkeypatch.setattr(progress, "get_settings", _Cfg)
     _seed(store)
     with caplog.at_level("WARNING", logger="cfactory.adapters"):
         poll_progress_once(LiveProgressHub(), [_adapter(b_down=True)], store)

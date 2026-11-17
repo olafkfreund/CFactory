@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
 
 from .api_deps import reject_unauthorized_ws, store_dep
+from .config import get_settings, resolve_tenant
 from .store import WorkItemStore
 from .ws import get_manager
 
@@ -24,7 +25,13 @@ async def cockpit_feed(
     if await reject_unauthorized_ws(websocket):
         return
     manager = get_manager()
-    await manager.connect(websocket)
+    settings = get_settings()
+    tenant = (
+        resolve_tenant(websocket.headers.get("x-tenant-id"), settings)
+        if settings.multi_tenant
+        else None
+    )
+    await manager.connect(websocket, tenant)
     try:
         # Push the current state immediately so a fresh or *reconnecting*
         # client is up to date at once, rather than waiting for the next

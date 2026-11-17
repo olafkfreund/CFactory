@@ -104,6 +104,13 @@ def _default_runner(model: str) -> AgentRunner:
 _OPENAI_PROVIDERS = frozenset({"ollama", "openai", "openai_compatible"})
 
 
+def _gateway(settings: Settings) -> tuple[str, str]:
+    return (
+        settings.model_gateway_url.strip().rstrip("/"),
+        (settings.model_gateway_token or "").strip(),
+    )
+
+
 def _openai_compatible_runner(base_url: str, api_key: str | None, model: str) -> AgentRunner:
     """Runner for any OpenAI-compatible chat endpoint — e.g. Ollama Cloud (#59).
 
@@ -140,6 +147,15 @@ def make_runner(settings: Settings) -> AgentRunner:
     OpenAI-compatible endpoint, else the default Claude Agent SDK runner."""
     provider = (settings.copilot_provider or "claude").lower()
     if provider in _OPENAI_PROVIDERS:
+        url, token = _gateway(settings)
+        if url:
+            if not token:
+
+                def missing_token(_question: str, _context: str, _system_prompt: str) -> str:
+                    raise RuntimeError("model gateway token is not configured")
+
+                return missing_token
+            return _openai_compatible_runner(f"{url}/v1", token, settings.copilot_model)
         return _openai_compatible_runner(
             settings.ollama_cloud_base_url, settings.ollama_api_key, settings.copilot_model
         )
@@ -147,12 +163,24 @@ def make_runner(settings: Settings) -> AgentRunner:
 
 
 def provider_status(settings: Settings | None = None) -> dict[str, object]:
-    """Describe the active copilot provider and, for OpenAI-compatible endpoints,
-    probe ``{base}/models`` so the UI can confirm connectivity + list cloud models.
-    Best-effort: a failure is reported, never raised."""
+    """Describe the provider. Gateway reachability only means its process answers;
+    otherwise probe ``{base}/models`` for OpenAI-compatible endpoints. Best-effort:
+    a failure is reported, never raised."""
     settings = settings or get_settings()
     provider = (settings.copilot_provider or "claude").lower()
     out: dict[str, object] = {"provider": provider, "model": settings.copilot_model}
+    gateway_url, gateway_token = _gateway(settings)
+    if gateway_url:
+        out.update(gateway=True, has_key=bool(gateway_token))
+        try:
+            resp = httpx.get(f"{gateway_url}/healthz", timeout=10.0)
+            resp.raise_for_status()
+            out["reachable"] = True
+        except Exception:
+            logger.exception("[cfactory] model gateway probe failed provider=%s", provider)
+            out["reachable"] = False
+            out["error"] = "gateway probe failed"
+        return out
     # Probe the OpenAI-compatible endpoint when it's the active provider OR a key
     # is configured — so the cockpit can verify Ollama Cloud is reachable before
     # switching the copilot over to it (ask #4 in #59).

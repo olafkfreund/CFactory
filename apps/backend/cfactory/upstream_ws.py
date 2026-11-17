@@ -111,12 +111,23 @@ def parse_upstream_message(service: Service, raw: str | bytes) -> CompletionEven
 
 
 async def handle_message(
-    service: Service, raw: str | bytes, store: WorkItemStore, manager: ConnectionManager
+    service: Service,
+    raw: str | bytes,
+    store: WorkItemStore,
+    manager: ConnectionManager,
+    tenant: str | None = None,
 ) -> CompletionEvent | None:
-    """Parse one upstream message, persist it, and rebroadcast to cockpits."""
+    """Parse one upstream message, persist it, and rebroadcast to cockpits.
+
+    ``tenant`` is the org binding of the socket (#517): with multi-tenant on, the
+    event is stored and pushed for that tenant only."""
     event = parse_upstream_message(service, raw)
     if event is None:
         return None
+    tenant = tenant if get_settings().multi_tenant else None
+    cards = get_cards_store()
+    if tenant:
+        store, cards = store.scoped(tenant), cards.scoped(tenant)
     work_item, applied = await run_in_threadpool(store.upsert_from_event, event)
     # Idempotent: a duplicate upstream message is not re-broadcast.
     if applied:
@@ -133,20 +144,23 @@ async def handle_message(
         await run_in_threadpool(
             partial(
                 apply_status,
-                get_cards_store(),
+                cards,
                 work_item,
                 on_dispatch=card_ops.dispatch_recorder(ctx),
             )
         )
-        await manager.broadcast({"type": "workitem", "item": work_item.model_dump(mode="json")})
+        await manager.broadcast(
+            {"type": "workitem", "item": work_item.model_dump(mode="json")}, tenant=tenant
+        )
     return event
 
 
-def _auth_headers(settings: Settings) -> dict[str, str]:
+def _auth_headers(settings: Settings, service: str) -> dict[str, str]:
     """Bearer header for the upstream WS feeds, matching the factories' REST auth.
     Empty when no token is configured (local dev with auth disabled)."""
-    if settings.upstream_token:
-        return {"Authorization": f"Bearer {settings.upstream_token}"}
+    token = settings.token_for(service)
+    if token:
+        return {"Authorization": f"Bearer {token}"}
     return {}
 
 
@@ -158,6 +172,7 @@ async def subscribe(  # noqa: PLR0913 — flat params for the one subscriber ent
     *,
     retry_delay: float = 3.0,
     headers: dict[str, str] | None = None,
+    tenant: str | None = None,
 ) -> None:
     """Long-lived subscription with reconnect/backoff."""
     while True:
@@ -173,7 +188,7 @@ async def subscribe(  # noqa: PLR0913 — flat params for the one subscriber ent
                 warned = False
                 async for raw in ws:
                     received += 1
-                    if await handle_message(service, raw, store, manager) is None:
+                    if await handle_message(service, raw, store, manager, tenant) is None:
                         discarded += 1
                     if not warned and discarded == received >= _DISCARD_ALERT_AFTER:
                         warned = True
@@ -199,10 +214,25 @@ def start_subscribers(
 ) -> list[asyncio.Task[None]]:
     """Spawn one subscriber task per service. Caller cancels them on shutdown."""
     settings = settings or get_settings()
-    headers = _auth_headers(settings)
     tasks: list[asyncio.Task[None]] = []
     for name, url in settings.upstream_ws_urls().items():
         tasks.append(
-            asyncio.create_task(subscribe(Service(name), url, store, manager, headers=headers))
+            asyncio.create_task(
+                subscribe(Service(name), url, store, manager, headers=_auth_headers(settings, name))
+            )
         )
+        # Factory#3702: one more socket per extra org-bound key, same URL.
+        for tenant, token in settings.extra_org_bindings_for(name):
+            tasks.append(
+                asyncio.create_task(
+                    subscribe(
+                        Service(name),
+                        url,
+                        store,
+                        manager,
+                        headers={"Authorization": f"Bearer {token}"},
+                        tenant=tenant,
+                    )
+                )
+            )
     return tasks

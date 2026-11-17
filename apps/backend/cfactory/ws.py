@@ -6,34 +6,56 @@ from functools import cache
 from typing import Any
 
 from fastapi import WebSocket
+from starlette.concurrency import run_in_threadpool
 
 
 class ConnectionManager:
     """Tracks connected cockpit clients and fans out JSON messages to them."""
 
     def __init__(self) -> None:
-        self._active: set[WebSocket] = set()
+        self._active: dict[WebSocket, str | None] = {}
 
-    async def connect(self, websocket: WebSocket) -> None:
+    async def connect(self, websocket: WebSocket, tenant: str | None = None) -> None:
         await websocket.accept()
-        self._active.add(websocket)
+        self._active[websocket] = tenant
 
     def disconnect(self, websocket: WebSocket) -> None:
-        self._active.discard(websocket)
+        self._active.pop(websocket, None)
 
     @property
     def count(self) -> int:
         return len(self._active)
 
-    async def broadcast(self, message: dict[str, Any]) -> None:
+    async def broadcast(self, message: dict[str, Any], tenant: str | None = None) -> None:
+        """Fan out to every client, or only to clients of ``tenant`` when it is set."""
         dead: list[WebSocket] = []
-        for ws in list(self._active):
+        for ws, ws_tenant in list(self._active.items()):
+            if tenant is not None and ws_tenant != tenant:
+                continue
             try:
                 await ws.send_json(message)
             except Exception:  # noqa: BLE001 — a broken client must not break the fan-out
                 dead.append(ws)
         for ws in dead:
             self.disconnect(ws)
+
+    async def broadcast_snapshot(self, store: Any, multi_tenant: bool) -> None:
+        """Push the board: one unscoped list, or one list per connected tenant (#521).
+
+        ``store.scoped`` re-scopes any store, so an already-scoped request store works.
+        """
+        if not multi_tenant:
+            items = await run_in_threadpool(store.list)
+            await self.broadcast(
+                {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in items]}
+            )
+            return
+        for tenant in set(self._active.values()):
+            items = await run_in_threadpool(store.scoped(tenant).list)
+            await self.broadcast(
+                {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in items]},
+                tenant=tenant,
+            )
 
 
 @cache

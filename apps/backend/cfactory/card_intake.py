@@ -39,7 +39,6 @@ never left sitting in ``ready`` as though it had been dispatched, never a 500.
 
 from __future__ import annotations
 
-import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,7 +46,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from factory_common.logsafe import sanitize_log
 
 from .actions import PreparedAction, execute_action
 from .cards import Card, CardStore
@@ -55,9 +53,6 @@ from .config import Settings, get_settings
 from .git_config import clone_url, qualify_repo
 from .models import Service, Stage, WorkItem
 from .status_taxonomy import is_done, is_failure_or_stuck
-
-logger = logging.getLogger(__name__)
-_MAX_KEY_LEN = 128  # work_items.correlation_key column width
 
 # The three intake doors. plan/code are verified against the fleet's own driver
 # docs (Factory docs/benchmarks/pipeline-driver-design.md, "Intake: three
@@ -510,24 +505,14 @@ def _upstream_key(body: Any, service: str | None = None) -> str | None:
 
     AIFactory is the exception (#478): from-issue answers ``<project>:<spec>``.
     When it also sends ``correlation_key`` the loop below takes it; without one
-    the completion event is keyed ``af-<task_id>`` (AIFactory
-    ``services/completion.py`` ``correlation_key()``; ``task_id`` is
-    ``<project_id>:<spec_id>``, project-scoped since spec ids repeat across
-    projects, #1972). The card is joined on that, or the event never finds it
-    and CODE never settles. With no ``task_id`` there is no key (never
-    ``af-<spec_id>``).
+    the completion event is keyed ``af-<spec_id>`` (AIFactory
+    ``services/completion.py`` ``correlation_key()``). The card is joined on
+    that, or the event never finds it and CODE never settles.
     """
     if not isinstance(body, dict):
         return None
     if service == "aifactory" and not body.get("correlation_key") and body.get("spec_id"):
-        key = f"af-{body['task_id']}" if body.get("task_id") else None
-        if key and len(key) > _MAX_KEY_LEN:  # never truncate (AIFactory#1972)
-            logger.warning(
-                "aifactory task id %s is too long for a key; none set",
-                sanitize_log(body["task_id"]),
-            )
-            key = None
-        return key
+        return f"af-{body['spec_id']}"
     for key in ("correlation_key", "task_id", "session_id", "id", "spec_id"):
         value = body.get(key)
         if value:

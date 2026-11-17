@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
+from cfactory import progress, upstream_ws
 from cfactory.config import Settings
 from cfactory.models import Service
 from cfactory.upstream_ws import handle_message, parse_upstream_message
@@ -199,3 +201,114 @@ def test_garbage_is_still_rejected():
     assert parse_upstream_message(Service.PFACTORY, json.dumps({"type": "ping"})) is None
     assert parse_upstream_message(Service.PFACTORY, json.dumps({"payload": {}})) is None
     assert parse_upstream_message(Service.PFACTORY, "not json") is None
+
+
+@pytest.mark.asyncio
+async def test_start_subscribers_passes_each_service_its_own_header(monkeypatch, store):
+    seen: dict[str, dict[str, str]] = {}
+
+    async def fake_subscribe(service, *_a, headers=None, **_k):
+        seen[service.value] = headers
+
+    monkeypatch.setattr(upstream_ws, "subscribe", fake_subscribe)
+    settings = Settings(upstream_token="shared", pfactory_token="p", aifactory_token="a")  # noqa: S106
+    tasks = upstream_ws.start_subscribers(store, ConnectionManager(), settings)
+    await asyncio.gather(*tasks)
+    assert seen == {
+        "pfactory": {"Authorization": "Bearer p"},
+        "aifactory": {"Authorization": "Bearer a"},
+        "tfactory": {"Authorization": "Bearer shared"},
+    }
+
+
+def test_extra_tokens_parse_dedupe_and_drop_primary():
+    s = Settings(aifactory_token="p", aifactory_org_tokens=" a, b ,a,,p ")  # noqa: S106
+    assert s.extra_tokens_for("aifactory") == ["a", "b"]
+    assert s.extra_tokens_for("tfactory") == []
+
+
+@pytest.mark.asyncio
+async def test_extra_org_tokens_open_extra_sockets(monkeypatch, store):
+    calls: list[tuple[str, str, dict[str, str]]] = []
+
+    async def fake_subscribe(service, url, *_a, headers=None, **_k):
+        calls.append((service.value, url, headers))
+
+    monkeypatch.setattr(upstream_ws, "subscribe", fake_subscribe)
+    base = Settings(aifactory_token="p")  # noqa: S106
+    tasks = upstream_ws.start_subscribers(store, ConnectionManager(), base)
+    await asyncio.gather(*tasks)
+    assert len(calls) == 3  # default: one per service
+
+    calls.clear()
+    s = Settings(aifactory_token="p", aifactory_org_tokens="x,y")  # noqa: S106
+    await asyncio.gather(*upstream_ws.start_subscribers(store, ConnectionManager(), s))
+    ai = [(u, h) for svc, u, h in calls if svc == "aifactory"]
+    assert len(ai) == 3 and len({u for u, _ in ai}) == 1
+    assert sorted(h["Authorization"] for _, h in ai) == ["Bearer p", "Bearer x", "Bearer y"]
+    assert len(calls) == 5
+
+
+def test_poll_reconciles_with_extra_org_tokens_unless_one_is_down(monkeypatch, store):
+    """#517: extra orgs are listed too; a failed extra listing skips reconcile."""
+    calls = []
+    monkeypatch.setattr(store, "reconcile_snapshot", lambda *a: calls.append(a) or 0)
+
+    class A:
+        service = Service.AIFACTORY
+        down = False
+
+        def list_items(self):
+            if self.down:
+                raise progress.AdapterError("org down")
+            return []
+
+        def with_token(self, token):
+            sibling = A()
+            sibling.down = self.down_extra
+            return sibling
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(progress, "get_settings", lambda: Settings(aifactory_org_tokens="x"))
+    for down_extra, expected in ((False, 1), (True, 0)):
+        calls.clear()
+        a = A()
+        a.down_extra = down_extra
+        progress.poll_progress_once(progress.LiveProgressHub(), [a], store)
+        assert len(calls) == expected
+
+
+def test_org_tokens_accept_a_tenant_binding():
+    s = Settings(aifactory_token="p", aifactory_org_tokens="acme=x, y,=z,w=p")  # noqa: S106
+    assert s.extra_org_bindings_for("aifactory") == [("acme", "x"), (None, "y"), (None, "z")]
+    assert s.extra_tokens_for("aifactory") == ["x", "y", "z"]
+
+
+class _FakeWS:
+    def __init__(self):
+        self.sent: list[dict] = []
+
+    async def send_json(self, msg):
+        self.sent.append(msg)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("multi", "a_gets"), [(True, 0), (False, 1)])
+async def test_bound_org_event_is_scoped_and_only_pushed_to_its_tenant(
+    monkeypatch, store, multi, a_gets
+):
+    """#517: a tenant-bound socket's event is stored and broadcast for that tenant only."""
+    monkeypatch.setattr(upstream_ws, "get_settings", lambda: Settings(multi_tenant=multi))
+    mgr = ConnectionManager()
+    a, b = _FakeWS(), _FakeWS()
+    mgr._active[a], mgr._active[b] = "a", "b"
+    raw = json.dumps({"correlation_key": "9", "task_id": "t", "status": "coding"})
+
+    await handle_message(Service.AIFACTORY, raw, store, mgr, tenant="b")
+
+    assert len(a.sent) == a_gets
+    assert len(b.sent) == 1
+    assert (store.scoped("b").get("9") is not None) is multi
+    assert store.scoped("a").get("9") is None

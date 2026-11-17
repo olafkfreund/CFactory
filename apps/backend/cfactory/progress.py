@@ -23,7 +23,14 @@ from factory_common.logsafe import sanitize_log
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from .adapters import AdapterError, AdapterItem, BaseHTTPAdapter, build_adapters, hydrate
+from .adapters import (
+    AdapterError,
+    AdapterItem,
+    BaseHTTPAdapter,
+    build_adapters,
+    hydrate,
+    live_ids_all_orgs,
+)
 from .config import Settings, get_settings
 from .models import Service
 from .status_taxonomy import is_dead_stage as _is_dead_stage
@@ -169,7 +176,13 @@ def poll_progress_once(
                     if _current_task(store, o) in {i.task_id for i in groups[o.correlation_key]}
                 )
                 hydrate(store, live, newest_ids=newest_ids)
-                store.reconcile_snapshot(adapter.service, {i.task_id for i in live})
+                # Factory#3702/#517: extra org keys are listed too, so reconcile sees
+                # every org; if one cannot be listed, skip it this cycle.
+                all_ids = live_ids_all_orgs(
+                    adapter, live, get_settings().extra_tokens_for(adapter.service.value)
+                )
+                if all_ids is not None:
+                    store.reconcile_snapshot(adapter.service, all_ids)
                 # Drop orphaned duplicate cards left when an upstream re-keys a
                 # task (fallback id -> real GitHub-issue key); reconcile preserves
                 # their terminal stage, so prune by task_id->canonical-key here.
@@ -206,10 +219,7 @@ async def _poll_loop(
                 await manager.broadcast({"type": "progress", "item": lp.model_dump(mode="json")})
             # Push the reconciled board so cleared/updated stages reach the cockpit
             # live (stale "running" ghosts disappear without a manual refresh).
-            snapshot = await run_in_threadpool(store.list)
-            await manager.broadcast(
-                {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
-            )
+            await manager.broadcast_snapshot(store, settings.multi_tenant)
         except Exception as exc:  # noqa: BLE001 — best-effort, never crash the cockpit
             logger.debug("live-progress broadcast failed: %s", type(exc).__name__)
         await asyncio.sleep(interval)

@@ -15,11 +15,12 @@ from fastapi import APIRouter, Depends
 from starlette.concurrency import run_in_threadpool
 
 from . import card_ops
-from .adapters import AdapterError, BaseHTTPAdapter, hydrate
+from .adapters import AdapterError, BaseHTTPAdapter, hydrate, live_ids_all_orgs
 from .api_deps import action_transport_dep, adapters_dep, audit_dep, cards_store_dep, store_dep
 from .audit import AuditStore
 from .card_intake import apply_status
 from .cards import CardStore
+from .config import get_settings
 from .error_ref import error_reference
 from .models import CompletionEvent
 from .store import WorkItemStore
@@ -86,8 +87,18 @@ async def refresh(
             hydrated = await run_in_threadpool(hydrate, store, items)
             # Reconcile: drop stale non-terminal stages the upstream no longer
             # reports, so finished/removed tasks stop showing as "running".
-            live_ids = {i.task_id for i in items}
-            cleared = await run_in_threadpool(store.reconcile_snapshot, adapter.service, live_ids)
+            # Factory#3702/#517: list the extra org keys too; None = one failed, skip.
+            live_ids = await run_in_threadpool(
+                live_ids_all_orgs,
+                adapter,
+                items,
+                get_settings().extra_tokens_for(adapter.service.value),
+            )
+            cleared = 0
+            if live_ids is not None:
+                cleared = await run_in_threadpool(
+                    store.reconcile_snapshot, adapter.service, live_ids
+                )
             result[adapter.service.value] = (
                 {"hydrated": hydrated, "cleared": cleared} if cleared else hydrated
             )
@@ -102,9 +113,5 @@ async def refresh(
             result[adapter.service.value] = {"error": f"the provider call failed (reference {ref})"}
         finally:
             adapter.close()
-    snapshot = await run_in_threadpool(store.list)
-    manager = get_manager()
-    await manager.broadcast(
-        {"type": "snapshot", "items": [wi.model_dump(mode="json") for wi in snapshot]}
-    )
+    await get_manager().broadcast_snapshot(store, get_settings().multi_tenant)
     return {"refreshed": result}

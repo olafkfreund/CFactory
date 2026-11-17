@@ -14,6 +14,8 @@ _ORG_B = "org-b-key"
 
 
 class _Cfg:
+    multi_tenant = False
+
     def extra_tokens_for(self, service):
         return [_ORG_B]
 
@@ -23,8 +25,12 @@ def _adapter(*, b_down=False):
         if request.headers.get("authorization") == f"Bearer {_ORG_B}":
             if b_down:
                 return httpx.Response(500)
-            return httpx.Response(200, json={"tasks": [{"id": "tb", "status": "coding", "correlation_key": "B"}]})
-        return httpx.Response(200, json={"tasks": [{"id": "ta", "status": "coding", "correlation_key": "A"}]})
+            return httpx.Response(
+                200, json={"tasks": [{"id": "tb", "status": "coding", "correlation_key": "B"}]}
+            )
+        return httpx.Response(
+            200, json={"tasks": [{"id": "ta", "status": "coding", "correlation_key": "A"}]}
+        )
 
     return AIFactoryAdapter("http://x", token="primary", transport=httpx.MockTransport(handler))
 

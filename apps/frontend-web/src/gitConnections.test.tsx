@@ -128,6 +128,23 @@ describe("git connections wire contract", () => {
     expect(data.default_repository_id).toBe(11);
   });
 
+  it("keeps mixed-provider fields when the backend sends them", () => {
+    const data = GitConnectionsSchema.parse({
+      ...PAYLOAD,
+      mixed_providers_enabled: true,
+      connections: [
+        {
+          ...at(PAYLOAD.connections, 0),
+          work_item_connection_id: 2,
+          repositories: [repo(11, "acme/widgets", { work_item_project: "acme/issues" })],
+        },
+      ],
+    });
+    expect(data.mixed_providers_enabled).toBe(true);
+    expect(data.connections[0]?.work_item_connection_id).toBe(2);
+    expect(data.connections[0]?.repositories[0]?.work_item_project).toBe("acme/issues");
+  });
+
   it("parses a tenant that has configured nothing, which is a state and not an error", () => {
     const data = GitConnectionsSchema.parse({ connections: [], default_repository_id: null });
     expect(data.connections).toEqual([]);
@@ -149,6 +166,8 @@ describe("git connections wire contract", () => {
     });
     expect(data.connections[0]?.credential.configured).toBe(false);
     expect(data.connections[0]?.repositories).toEqual([]);
+    expect(data.connections[0]?.work_item_connection_id).toBeUndefined();
+    expect(data.mixed_providers_enabled).toBe(false);
   });
 
   it("parses a failed verify without a repository", () => {
@@ -390,6 +409,22 @@ describe("the install block", () => {
 // The confusion this whole epic started from: an AIFactory project id is a UUID,
 // not a repository path. The form says so on the field itself.
 describe("RepositoryForm", () => {
+  it("shows the work-item project only for a referenced connection", () => {
+    const form = (mixed: boolean) => renderToStaticMarkup(
+      <RepositoryForm
+        provider="github"
+        mixed={mixed}
+        busy={false}
+        idPrefix="t"
+        submitLabel="Add repository"
+        onSubmit={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(form(false)).not.toContain("Work-item project");
+    expect(form(true)).toContain("Work-item project");
+  });
+
   it("keeps each field's meaning, its unset behaviour and what it is not", () => {
     const html = renderToStaticMarkup(
       <RepositoryForm
@@ -411,6 +446,28 @@ describe("RepositoryForm", () => {
 });
 
 describe("the empty state", () => {
+  it("shows the work-item selector only when the backend enables it", () => {
+    const old = GitConnectionsSchema.parse(PAYLOAD);
+    const hidden = renderToStaticMarkup(
+      <AddConnectionCard busy={false} empty={false} connections={old.connections} onCreate={() => {}} />,
+    );
+    expect(hidden).not.toContain("Work items from");
+
+    const enabled = GitConnectionsSchema.parse({ ...PAYLOAD, mixed_providers_enabled: true });
+    const shown = renderToStaticMarkup(
+      <AddConnectionCard
+        busy={false}
+        empty={false}
+        mixedProvidersEnabled={enabled.mixed_providers_enabled}
+        connections={enabled.connections}
+        onCreate={() => {}}
+      />,
+    );
+    expect(shown).toContain("Work items from");
+    expect(shown).toContain("Same as this connection");
+    expect(shown).toContain("Work GitHub (GitHub)");
+  });
+
   it("offers all three hosts and says what is missing", () => {
     const html = renderToStaticMarkup(
       <AddConnectionCard busy={false} empty onCreate={() => {}} />,

@@ -672,6 +672,7 @@ export const GitRepositorySchema = z.object({
   tenant_id: z.string(),
   project: z.string(),
   intake_project: z.string().nullable().optional(),
+  work_item_project: z.string().nullable().optional(),
   // An AIFactory PROJECT ID (a UUID), not a repository path — the two are
   // separate fields precisely because confusing them is easy.
   aifactory_project_id: z.string().nullable().optional(),
@@ -689,6 +690,7 @@ export const GitConnectionSchema = z.object({
   // Always the RESOLVED host (the tenant's own, or the provider default).
   base_url: z.string(),
   label: z.string(),
+  work_item_connection_id: z.number().nullable().optional(),
   // unconfigured | credential_missing | configured | verified — derived, never stored.
   status: z.string(),
   // Defaulted rather than required so a cockpit that reaches an older backend
@@ -713,6 +715,7 @@ export const GitConnectionsSchema = z.object({
   // the install, not of the tenant. Defaulted to nothing so a cockpit reaching an
   // older backend simply shows the paste box, which is what that backend has.
   install_available: z.record(z.string(), z.boolean()).default({}),
+  mixed_providers_enabled: z.boolean().default(false),
 });
 export type GitConnections = z.infer<typeof GitConnectionsSchema>;
 
@@ -737,6 +740,7 @@ export const GitDeleteSchema = z
 export type GitRepositoryBody = {
   project: string;
   intake_project?: string | null;
+  work_item_project?: string | null;
   aifactory_project_id?: string | null;
   default_labels?: string[];
 };
@@ -774,7 +778,12 @@ export async function fetchGitCapabilities(tenant: string): Promise<GitCapabilit
 
 export async function createGitConnection(
   tenant: string,
-  body: { provider: string; base_url?: string | null; label?: string | null },
+  body: {
+    provider: string;
+    base_url?: string | null;
+    label?: string | null;
+    work_item_connection_id?: number | null;
+  },
 ): Promise<GitConnection> {
   return sendJson("POST", tenantPath(tenant, "git-connections"), body, GitConnectionSchema);
 }
@@ -784,7 +793,12 @@ export async function createGitConnection(
 export async function updateGitConnection(
   tenant: string,
   id: number,
-  body: { provider?: string; base_url?: string | null; label?: string | null },
+  body: {
+    provider?: string;
+    base_url?: string | null;
+    label?: string | null;
+    work_item_connection_id?: number | null;
+  },
 ): Promise<GitConnection> {
   return sendJson(
     "PATCH",

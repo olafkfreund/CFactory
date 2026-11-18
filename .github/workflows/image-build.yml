@@ -194,9 +194,14 @@ jobs:
           docker run --rm "${BACKEND_TAG}" \
             python -c 'import cfactory.app; print("cfactory backend image ok")'
 
+      # The SDK bundles a ~356 MiB claude binary; version + sha256 are pinned in
+      # apps/backend/claude-bundle.lock (CFactory#548). Fails on any drift.
+      - name: Verify claude bundle pin
+        run: ./.github/scripts/verify-claude-bundle.sh "${BACKEND_TAG}"
+
       - name: Trivy scan backend image (fixable HIGH/CRITICAL)
         run: |
-          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          trivy image --timeout 5m --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             "${BACKEND_TAG}"
 
       - name: Build cockpit frontend Dockerfile (no push)
@@ -230,5 +235,5 @@ jobs:
 
       - name: Trivy scan frontend image (fixable HIGH/CRITICAL)
         run: |
-          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          trivy image --timeout 5m --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             "${FRONTEND_TAG}"

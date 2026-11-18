@@ -75,11 +75,15 @@ def test_probe_online_on_200():
 
 
 @pytest.mark.parametrize("code", [401, 403])
-def test_probe_unauthorized_on_401_403(code):
+@pytest.mark.parametrize(
+    ("adapter_cls", "service"),
+    [(AIFactoryAdapter, "AIFACTORY"), (PFactoryAdapter, "PFACTORY"), (TFactoryAdapter, "TFACTORY")],
+)
+def test_probe_unauthorized_on_401_403(code, adapter_cls, service):
     # A reachable upstream that rejects us must NOT read as online.
-    p = AIFactoryAdapter("http://x", transport=_transport({}, status=code)).probe()
+    p = adapter_cls("http://x", transport=_transport({}, status=code)).probe()
     assert p.online is False and p.status == "unauthorized"
-    assert "UPSTREAM_TOKEN" in (p.detail or "")
+    assert f"CFACTORY_{service}_TOKEN or CFACTORY_UPSTREAM_TOKEN" in (p.detail or "")
 
 
 def test_probe_error_on_500():

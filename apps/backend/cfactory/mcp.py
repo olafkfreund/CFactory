@@ -671,6 +671,10 @@ BOARD_TOOLS: list[dict[str, Any]] = [
                         "provider name."
                     ),
                 },
+                "work_item_connection_id": {
+                    "type": ["integer", "null"],
+                    "description": "Issues/imports connection; null uses this connection.",
+                },
             },
         },
     },
@@ -690,6 +694,10 @@ BOARD_TOOLS: list[dict[str, Any]] = [
                 "provider": {"type": "string", "enum": list(SUPPORTED_PROVIDERS)},
                 "base_url": {"type": "string"},
                 "label": {"type": "string"},
+                "work_item_connection_id": {
+                    "type": ["integer", "null"],
+                    "description": "Issues/imports connection; null clears the reference.",
+                },
             },
         },
     },
@@ -844,6 +852,10 @@ BOARD_TOOLS: list[dict[str, Any]] = [
                         "Optional: import issues from THIS project instead of 'project'."
                     ),
                 },
+                "work_item_project": {
+                    "type": "string",
+                    "description": "Project path on the selected work-item connection.",
+                },
                 "aifactory_project_id": {
                     "type": "string",
                     "description": (
@@ -877,6 +889,10 @@ BOARD_TOOLS: list[dict[str, Any]] = [
                 "repository_id": _REPOSITORY_ID_PROP,
                 "project": {"type": "string"},
                 "intake_project": {"type": ["string", "null"]},
+                "work_item_project": {
+                    "type": ["string", "null"],
+                    "description": "Project path on the work-item connection; null clears it.",
+                },
                 "aifactory_project_id": {"type": ["string", "null"]},
                 "default_labels": {"type": "array", "items": {"type": "string"}},
             },

@@ -290,6 +290,8 @@ def list_git_connections(
     imported from, and the AIFactory project its builds land in.
 
     `default_repository_id` is the repository a card that names none resolves to.
+    `mixed_providers_enabled` controls the cockpit selector for a separate
+    work-item connection; it does not restrict the API.
     `status` on each connection is derived, never stored: `unconfigured` (no
     repositories), `credential_missing` (no usable credential, or one the host
     refused), `configured` (reachable in principle, never proved), `verified`
@@ -317,6 +319,8 @@ def create_git_connection(
     when this tenant already has a connection to the same provider and host —
     configuring one host twice would leave "which credential reaches it?"
     ambiguous, so it is refused rather than duplicated.
+    Optional `work_item_connection_id` uses another connection of this tenant
+    for issues and imports; null uses this connection for both sides.
 
     **No credential is accepted here.** Store it with
     `PUT /api/tenants/{tenant}/git-connections/{connection_id}/credential`, which
@@ -341,12 +345,14 @@ def update_git_connection(
     _scope: Annotated[str | None, Depends(require_scope("write"))],
     actor: Annotated[str, Depends(identity_dep)],
 ) -> dict[str, object]:
-    """Change a connection's provider, host or label.
+    """Change a connection's provider, host, label or work-item connection.
 
     A patch: only the fields sent are applied. Changing the provider or the host
     CLEARS the verification (it proved a connection this one no longer is);
     changing only the label does not. The credential is untouched and stays valid —
     it is bound to the connection, not to its host.
+    `work_item_connection_id` selects another connection for issues and imports;
+    null clears that reference.
 
     404 when this tenant has no such connection, 400 on a value the provider
     cannot use or a host this tenant already has a connection to.
@@ -593,6 +599,7 @@ def create_git_repository(
     The FIRST repository a tenant has becomes its default whatever `make_default`
     says — a tenant with repositories and no default would refuse every card that
     named none.
+    Optional `work_item_project` names the project on the work-item connection.
 
     400 when the project is not a path this connection's provider can address
     (`owner/repo`, or `organization/project/repo` on Azure DevOps), when it is
@@ -625,11 +632,11 @@ def update_git_repository(
     _scope: Annotated[str | None, Depends(require_scope("write"))],
     actor: Annotated[str, Depends(identity_dep)],
 ) -> dict[str, object]:
-    """Change a repository's project, intake project, AIFactory project or labels.
+    """Change a repository's projects, AIFactory project or labels.
 
     A patch: only the fields sent are applied, and sending `null` for
-    `intake_project` or `aifactory_project_id` CLEARS it. 404 when this tenant has
-    no such repository, 400 on a value the provider cannot use.
+    `intake_project`, `work_item_project` or `aifactory_project_id` clears it.
+    404 when this tenant has no such repository; 400 on an invalid value.
     """
     try:
         return git_config_ops.update_git_repository(store, _ctx(audit, actor), repository_id, body)

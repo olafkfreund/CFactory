@@ -16,6 +16,7 @@ from cfactory.adapters import AIFactoryAdapter
 from cfactory.app import adapters_dep, create_app, live_agent_connect_dep
 from cfactory.config import Settings
 from cfactory.live_agent_proxy import (
+    _auth_headers,
     is_control_frame,
     resolve_spec_id,
     upstream_ws_url,
@@ -64,8 +65,10 @@ class _FakeUpstream:
         return frame
 
 
-def _fake_connect(frames):
+def _fake_connect(frames, seen=None):
     def _connect(url, **kwargs):
+        if seen is not None:
+            seen.update(kwargs)
         return _FakeUpstream(frames)
 
     return _connect
@@ -98,23 +101,36 @@ def test_is_control_frame_only_matches_connected_json():
     assert is_control_frame('{"type":"output"}') is False
 
 
+def test_auth_headers_use_aifactory_token_then_shared_fallback():
+    own = Settings(aifactory_token="own", upstream_token="shared")
+    assert _auth_headers(own) == {"Authorization": "Bearer own"}
+    assert _auth_headers(Settings(upstream_token="shared")) == {"Authorization": "Bearer shared"}
+    assert _auth_headers(Settings(upstream_token=None, aifactory_token=None)) == {}
+
+
 # --- end-to-end bridge ----------------------------------------------------
 
-def _client(adapter, frames):
+def _client(adapter, frames, seen=None):
     app = create_app()
     app.dependency_overrides[adapters_dep] = lambda: [adapter]
-    app.dependency_overrides[live_agent_connect_dep] = lambda: _fake_connect(frames)
+    app.dependency_overrides[live_agent_connect_dep] = lambda: _fake_connect(frames, seen)
     return TestClient(app)
 
 
-def test_proxy_streams_pane_bytes_and_drops_control_frame():
+def test_proxy_streams_pane_bytes_and_drops_control_frame(monkeypatch):
     adapter = _ai(tasks=[
         {"id": "spec-001", "status": "coding", "correlation_key": "7"},
     ])
-    client = _client(adapter, [CONNECTED, PANE])
+    monkeypatch.setattr(
+        "cfactory.routes_live_agents.get_settings", lambda: Settings(aifactory_token="own")
+    )
+    seen = {}
+    client = _client(adapter, [CONNECTED, PANE], seen)
     with client.websocket_connect("/api/live-agents/7/ws") as ws:
         # The control frame is swallowed; first thing the cockpit sees is pane bytes.
         assert ws.receive_bytes() == PANE
+    # The scoped AIFactory key reaches the upstream connect (#312).
+    assert seen["additional_headers"] == {"Authorization": "Bearer own"}
 
 
 def test_proxy_closes_cleanly_on_unknown_key():

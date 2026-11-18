@@ -637,6 +637,8 @@ _LATE_COLUMNS = {
 # phase 3 gave one more column. A live board created by phase 2 already HAS the
 # table, so ``create_all`` will not add it and every config read would fail.
 _LATE_CONFIG_COLUMNS = {"credential_rejected": ""}
+_LATE_CONNECTION_COLUMNS = {"work_item_connection_id": ""}
+_LATE_REPOSITORY_COLUMNS = {"work_item_project": ""}
 
 # And for ``card_import_state``, which #374 gives the poll lease. A board created
 # by §3.6 already HAS the table, so ``create_all`` will not add the column and
@@ -684,6 +686,8 @@ def _ensure_late_columns(engine: Engine) -> None:
     inspector = inspect(engine)
     for model, columns in (
         (GitConfigRow, _LATE_CONFIG_COLUMNS),
+        (GitConnectionRow, _LATE_CONNECTION_COLUMNS),
+        (GitRepositoryRow, _LATE_REPOSITORY_COLUMNS),
         (GitCredentialRow, _LATE_CREDENTIAL_COLUMNS),
         (ImportStateRow, _LATE_IMPORT_STATE_COLUMNS),
     ):

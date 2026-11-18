@@ -34,12 +34,14 @@ thing their names claim.
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 
 import yaml
 
-_WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+_ROOT = Path(__file__).resolve().parents[1]
+_WORKFLOWS = _ROOT / ".github" / "workflows"
 
 # Copied from deploy.yml. Every flag here is load-bearing:
 #   --severity HIGH,CRITICAL  the fleet's P0.8 policy
@@ -130,3 +132,60 @@ def test_the_deploy_gate_still_scans_the_pushed_digest() -> None:
             f"deploy.yml scans {ref!r}, which is not a digest reference. A tag can be "
             "repointed between the scan and the pull; a digest cannot."
         )
+
+
+def test_trivy_scans_do_not_skip_content() -> None:
+    forbidden = {"--skip-files", "--skip-dirs", "--ignorefile", "--ignore-policy"}
+    for workflow in ("deploy.yml", "image-build.yml"):
+        commands = _trivy_commands(workflow)
+        assert commands, f"{workflow} has no Trivy scans"
+        for command in commands:
+            assert not forbidden.intersection(token.split("=", 1)[0] for token in command), (
+                f"{workflow}: {' '.join(command)} skips scan content"
+            )
+
+
+def test_image_scans_use_bounded_timeouts_and_local_deploy_images() -> None:
+    for workflow in ("deploy.yml", "image-build.yml"):
+        scans = _image_scans(workflow)
+        assert len(scans) == 2, f"{workflow} must scan both images"
+        for command in scans:
+            assert "--timeout" in command, f"{workflow}: {' '.join(command)} has no timeout"
+            timeout = command[command.index("--timeout") + 1]
+            match = re.fullmatch(r"(\d+)([smh])", timeout)
+            assert match, f"{workflow}: invalid timeout {timeout}"
+            seconds = int(match[1]) * {"s": 1, "m": 60, "h": 3600}[match[2]]
+            assert 0 < seconds <= 600, f"{workflow}: timeout {timeout} exceeds 10m"
+            if workflow == "deploy.yml":
+                assert command[command.index("--image-src") + 1] == "docker"
+
+
+def test_claude_sdk_requirement_matches_bundle_lock() -> None:
+    requirements = (_ROOT / "apps/backend/requirements.txt").read_text()
+    pins = re.findall(r"^claude-agent-sdk==([^\s#]+)$", requirements, re.MULTILINE)
+    assert len(pins) == 1, "claude-agent-sdk must have one exact == pin"
+    lock = (_ROOT / "apps/backend/claude-bundle.lock").read_text()
+    versions = re.findall(r"^version=(.+)$", lock, re.MULTILINE)
+    assert versions == pins, "claude-agent-sdk pin and claude-bundle.lock version differ"
+
+
+def test_claude_bundle_verification_is_a_hard_gate_before_signing() -> None:
+    deploy = yaml.safe_load((_WORKFLOWS / "deploy.yml").read_text())
+    steps = deploy["jobs"]["build-push-bump"]["steps"]
+    runs = [step.get("run") or "" for step in steps]
+    pulls = [i for i, run in enumerate(runs) if "docker pull" in run]
+    verifies = [i for i, run in enumerate(runs) if "verify-claude-bundle.sh" in run]
+    scans = [i for i, run in enumerate(runs) if "trivy image " in run]
+    signs = [i for i, run in enumerate(runs) if "cosign sign" in run]
+    assert len(pulls) == len(verifies) == len(signs) == 1
+    assert len(scans) == 2
+    assert pulls[0] < verifies[0] < min(scans) <= max(scans) < signs[0]
+    assert "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}" in runs[verifies[0]]
+    assert "continue-on-error" not in steps[verifies[0]]
+
+    image_build = yaml.safe_load((_WORKFLOWS / "image-build.yml").read_text())
+    steps = image_build["jobs"]["build"]["steps"]
+    verifies = [step for step in steps if "verify-claude-bundle.sh" in (step.get("run") or "")]
+    assert len(verifies) == 1
+    assert "${BACKEND_TAG}" in verifies[0]["run"]
+    assert "continue-on-error" not in verifies[0]

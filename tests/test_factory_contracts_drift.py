@@ -26,12 +26,12 @@ import pytest
 
 # The pinned hub source the vendored copy mirrors:
 #   Factory/shared/factory-contracts/python/factory_contracts/__init__.py
-#   @ 48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9  (Factory#160 / PR #168)
-_PINNED_HUB_SHA = "48f59a2c0a875f1637f4a442c1da4a9cd5fd1db9"
+#   @ 92d2508e057524c054c6842b0170168ff7213c25  (Factory#160 / PR #168)
+_PINNED_HUB_SHA = "92d2508e057524c054c6842b0170168ff7213c25"
 
 # sha256 of the vendored module's bytes at vendor time. Re-vendoring from the hub
 # updates both this and the SHA above (and the header in _contracts/__init__.py).
-_VENDORED_SHA256 = "a00d82375679acf7a49c07cdf70e8183f05213ae7ca92cbb1148b9d0d8debfed"
+_VENDORED_SHA256 = "a27d50c3dd196fa85c061fe83384e697131bbfbcf90bce795bf820afa7fa4321"
 
 _BACKEND = Path(__file__).resolve().parents[1] / "apps" / "backend"
 _VENDORED = _BACKEND / "cfactory" / "_contracts" / "factory_contracts" / "__init__.py"

@@ -96,12 +96,14 @@ class IssueRef:
 
     Provider-neutral: ``project`` is whatever path the configured host addresses
     a repository by, and ``number`` is whatever integer that host names an issue
-    by — a GitHub issue number, a GitLab IID. The board stores and compares it;
+    by — a GitHub issue number, a GitLab IID, held as a decimal string
+    (Factory#3774). A non-numeric key is rejected by ``_ISSUE_REF_RE`` until a
+    column migration lands. The board stores and compares it;
     only the provider interprets it.
     """
 
     project: str
-    number: int
+    number: str
 
     def __str__(self) -> str:
         return f"{self.project}#{self.number}"
@@ -112,7 +114,7 @@ class IssueRef:
         match = _ISSUE_REF_RE.match((text or "").strip())
         if match is None:
             return None
-        return cls(match.group(1), int(match.group(2)))
+        return cls(match.group(1), str(int(match.group(2))))
 
 
 def sync_enabled(target: GitTarget) -> bool:
@@ -181,7 +183,7 @@ def _open_issue(
     issue = run_sync(
         _provider(project, target, transport).create_issue(card.title, _issue_body(card), labels)
     )
-    if not isinstance(issue.number, int):
+    if not issue.number:
         raise ValueError(f"provider returned no issue number for {card.card_key!r}")
     return IssueRef(project, issue.number), issue
 

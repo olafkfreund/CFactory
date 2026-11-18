@@ -192,12 +192,12 @@ jobs:
       # hard gate.
       - name: Trivy scan backend image (fixable HIGH/CRITICAL)
         run: |
-          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          trivy image --timeout 20m --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}"
 
       - name: Trivy scan frontend image (fixable HIGH/CRITICAL)
         run: |
-          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          trivy image --timeout 20m --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"
 
       # P0.8b blind spot: the cockpit's node_modules never reaches the runtime

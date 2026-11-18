@@ -82,7 +82,7 @@ from sqlalchemy import Boolean, DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
-from .config import DEFAULT_TENANT, Settings
+from .config import DEFAULT_TENANT, Settings, get_settings
 from .credentials import Credential, CredentialInfo, env_credential
 from .db import Base
 
@@ -94,6 +94,11 @@ logger = logging.getLogger(__name__)
 # Kept here rather than in git_providers so the config layer does not have to
 # import the provider layer to validate a field.
 GITHUB, GITLAB, AZURE_DEVOPS = "github", "gitlab", "azure_devops"
+# Jira (RFC-0022 Phase 3) is NOT in SUPPORTED_PROVIDERS: it is accepted only while
+# CFACTORY_JIRA_ENABLED is on (see validate_provider), so the advertised provider
+# list, which the cockpit and MCP schemas render, never offers it by default.
+JIRA = "jira"
+JIRA_PROJECT_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 SUPPORTED_PROVIDERS: tuple[str, ...] = (GITHUB, GITLAB, AZURE_DEVOPS)
 # RFC-0022 Phase 4: which kinds may serve each SIDE of a connection. All three
 # kinds implement both protocols today; Jira joins the first tuple and Bitbucket
@@ -248,11 +253,23 @@ class GitConfigUpdate(BaseModel):
 
 def validate_provider(provider: str) -> str:
     kind = (provider or "").strip().lower()
+    if kind == JIRA:
+        if not get_settings().jira_enabled:
+            raise GitConfigError(
+                "jira connections are disabled on this deployment: set CFACTORY_JIRA_ENABLED=true "
+                "once a Jira Cloud site and credential exist (RFC-0022 Phase 3)"
+            )
+        return kind
     if kind not in SUPPORTED_PROVIDERS:
         raise GitConfigError(
             f"unknown provider: {provider!r} (expected one of {', '.join(SUPPORTED_PROVIDERS)})"
         )
     return kind
+
+
+def project_is_addressable(project: str, provider: str) -> bool:
+    """Whether *project* is a path *provider* can address (import-time twin of validate_project)."""
+    return (JIRA_PROJECT_RE if provider == JIRA else PROJECT_RE).match(project) is not None
 
 
 def validate_project(project: str | None, provider: str, *, field: str = "project") -> str | None:
@@ -265,6 +282,10 @@ def validate_project(project: str | None, provider: str, *, field: str = "projec
     value = (project or "").strip()
     if not value:
         return None
+    if provider == JIRA:
+        if JIRA_PROJECT_RE.match(value) is None:
+            raise GitConfigError(f"{field} on jira must be a Jira project key such as 'PROJ'")
+        return value
     if PROJECT_RE.match(value) is None:
         raise GitConfigError(
             f"{field} must be a provider project path such as 'owner/repo' (got {project!r})"

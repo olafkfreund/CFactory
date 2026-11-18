@@ -44,6 +44,7 @@ from .credentials import (
     CredentialInfo,
     GitCredentialRow,
     Sealed,
+    encode_jira_credential,
     env_credential,
     load_keyring,
     require_keyring,
@@ -55,6 +56,7 @@ from .credentials import (
 from .db import Base, add_column_ddl, make_engine
 from .git_config import (
     CODE_PROVIDERS,
+    JIRA,
     WORK_ITEM_PROVIDERS,
     GitConfig,
     GitConfigError,
@@ -1119,6 +1121,14 @@ class CardStore:
             body.label if "label" in sent else current.label,
         )
         moved = (fields["provider"], fields["base_url"]) != (current.provider, current.base_url)
+        if fields["provider"] != current.provider and JIRA in (
+            fields["provider"],
+            current.provider,
+        ):
+            # A jira credential is an email + token JSON record; left in place it
+            # would be sent verbatim as another provider's bearer token (or the
+            # reverse). It cannot be valid across that change, so it goes.
+            self.clear_connection_credential(connection_id)
         new_ref = (
             body.work_item_connection_id
             if "work_item_connection_id" in sent
@@ -2085,7 +2095,12 @@ class CardStore:
         return row.sealed() if row is not None else None
 
     def set_connection_credential(
-        self, connection_id: int, secret: str, settings: Settings | None = None
+        self,
+        connection_id: int,
+        secret: str,
+        settings: Settings | None = None,
+        *,
+        email: str | None = None,
     ) -> CredentialInfo:
         """Store (or replace) one connection's credential, encrypted.
 
@@ -2101,6 +2116,15 @@ class CardStore:
         value = (secret or "").strip()
         if not value:
             raise CredentialError("credential must not be empty")
+        if connection.provider == JIRA:
+            # Two parts: sealed together as one structured record (RFC-0022 §7).
+            try:
+                value = encode_jira_credential(email or "", value)
+            except CredentialError as exc:
+                # The caller's input is wrong, not the deployment: a 400, not a 503.
+                raise GitConfigError(exc.args[0]) from None
+        elif email:
+            raise GitConfigError("email is only accepted for a jira connection's credential")
         sealed = seal(
             value, tenant=self.tenant, connection=connection.id, keyring=require_keyring(settings)
         )
@@ -2115,7 +2139,9 @@ class CardStore:
             key_version=sealed.key_version,
         )
 
-    def set_git_credential(self, secret: str, settings: Settings | None = None) -> CredentialInfo:
+    def set_git_credential(
+        self, secret: str, settings: Settings | None = None, *, email: str | None = None
+    ) -> CredentialInfo:
         """The single-configuration shim: store the DEFAULT connection's credential.
 
         Materialises a connection for a tenant that has none (see
@@ -2126,7 +2152,7 @@ class CardStore:
         """
         settings = settings or get_settings()
         return self.set_connection_credential(
-            self._default_connection(settings).id, secret, settings
+            self._default_connection(settings).id, secret, settings, email=email
         )
 
     def clear_connection_credential(self, connection_id: int) -> bool:

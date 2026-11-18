@@ -51,6 +51,7 @@ from .db import Base
 from .git_config import (
     GITHUB,
     PROVIDER_DEFAULT_BASE_URL,
+    UNRESOLVED_PROVIDER,
     GitConfigError,
     GitTarget,
     derive_status,
@@ -111,6 +112,11 @@ class GitConnectionRow(Base):
     # :func:`cfactory.git_config.derive_status` for why a refused credential reads
     # as ``credential_missing`` rather than as a green ``configured``.
     credential_rejected: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # RFC-0022 Phase 4: another connection of this tenant that serves this one's
+    # WORK ITEMS (issues, comments, import). NULL, which is every pre-Phase-4 row,
+    # means this connection serves both sides, exactly as before. No foreign key,
+    # like ``git_repository.connection_id``; the store keeps it from dangling.
+    work_item_connection_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -147,6 +153,9 @@ class GitRepositoryRow(Base):
     # separate fields.
     aifactory_project_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     default_labels: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # The project path on the connection's WORK-ITEM provider (RFC-0022 Phase 4).
+    # Only meaningful when the connection references a work-item connection.
+    work_item_project: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # THE SINGLE-DEFAULT CONSTRAINT. Holds this row's ``tenant_id`` when it is the
     # tenant's default repository and NULL otherwise, with a UNIQUE index on it:
     # NULLs are distinct in both SQLite and PostgreSQL, so any number of
@@ -189,6 +198,7 @@ class GitRepository(BaseModel):
     intake_project: str | None = None
     aifactory_project_id: str | None = None
     default_labels: list[str] = Field(default_factory=list)
+    work_item_project: str | None = None
     # Whether a card that names no repository resolves to this one.
     is_default: bool = False
     created_at: datetime | None = None
@@ -213,6 +223,8 @@ class GitConnection(BaseModel):
     base_url: str
     label: str
     status: str
+    # The connection that serves this one's work items, when it is not this one.
+    work_item_connection_id: int | None = None
     credential: CredentialInfo
     # The install this connection was authenticated by, when it was (RFC-0020 §3.4
     # phase 4). Present alongside ``credential`` rather than inside it because
@@ -235,6 +247,7 @@ class GitConnectionCreate(BaseModel):
     provider: str = GITHUB
     base_url: str | None = Field(default=None, max_length=512)
     label: str | None = Field(default=None, max_length=LABEL_MAX)
+    work_item_connection_id: int | None = None
 
 
 class GitConnectionUpdate(BaseModel):
@@ -249,6 +262,8 @@ class GitConnectionUpdate(BaseModel):
     provider: str | None = None
     base_url: str | None = Field(default=None, max_length=512)
     label: str | None = Field(default=None, max_length=LABEL_MAX)
+    # ``null`` clears it (back to "serves both sides").
+    work_item_connection_id: int | None = None
 
 
 class GitRepositoryCreate(BaseModel):
@@ -258,6 +273,7 @@ class GitRepositoryCreate(BaseModel):
     intake_project: str | None = Field(default=None, max_length=256)
     aifactory_project_id: str | None = Field(default=None, max_length=128)
     default_labels: list[str] = Field(default_factory=list)
+    work_item_project: str | None = Field(default=None, max_length=256)
     # Make this the tenant's default. The FIRST repository a tenant creates
     # becomes the default whatever this says — a tenant with repositories and no
     # default would silently refuse every card that named none.
@@ -276,6 +292,7 @@ class GitRepositoryUpdate(BaseModel):
     intake_project: str | None = Field(default=None, max_length=256)
     aifactory_project_id: str | None = Field(default=None, max_length=128)
     default_labels: list[str] | None = None
+    work_item_project: str | None = Field(default=None, max_length=256)
 
 
 # ── validation ───────────────────────────────────────────────────────────────
@@ -299,25 +316,44 @@ def connection_fields(provider: str, base_url: str | None, label: str | None) ->
     }
 
 
-def repository_fields(body: GitRepositoryCreate, provider: str) -> dict[str, object]:
+def repository_fields(
+    body: GitRepositoryCreate, provider: str, work_item_provider: str | None = None
+) -> dict[str, object]:
     """Validated stored column values for a repository write.
 
     Validated against the CONNECTION's provider, because that is what has to be
     able to address the path: ``organization/project/repo`` on Azure DevOps,
-    ``owner/repo`` elsewhere.
+    ``owner/repo`` elsewhere. On a mixed connection (RFC-0022 Phase 4) the issue
+    side paths (``intake_project``, ``work_item_project``) follow the WORK-ITEM
+    provider's rules instead.
     """
     project = validate_project(body.project, provider)
     if project is None:
         raise GitConfigError("project is required: a repository is a project path")
+    side = work_item_provider or provider
     return {
         "project": project,
-        "intake_project": validate_project(body.intake_project, provider, field="intake_project"),
+        "intake_project": validate_project(body.intake_project, side, field="intake_project"),
+        "work_item_project": _work_item_project(body.work_item_project, work_item_provider),
         "aifactory_project_id": (body.aifactory_project_id or "").strip() or None,
         "default_labels": validate_labels(body.default_labels),
     }
 
 
-def repository_patch(body: GitRepositoryUpdate, provider: str) -> dict[str, object]:
+def _work_item_project(value: str | None, work_item_provider: str | None) -> str | None:
+    if work_item_provider is None:
+        if (value or "").strip():
+            raise GitConfigError(
+                "work_item_project needs a work-item connection: set work_item_connection_id "
+                "on the repository's connection first"
+            )
+        return None
+    return validate_project(value, work_item_provider, field="work_item_project")
+
+
+def repository_patch(
+    body: GitRepositoryUpdate, provider: str, work_item_provider: str | None = None
+) -> dict[str, object]:
     """The validated subset of a repository patch that was actually sent."""
     sent = body.model_dump(exclude_unset=True)
     fields: dict[str, object] = {}
@@ -328,8 +364,10 @@ def repository_patch(body: GitRepositoryUpdate, provider: str) -> dict[str, obje
         fields["project"] = project
     if "intake_project" in sent:
         fields["intake_project"] = validate_project(
-            body.intake_project, provider, field="intake_project"
+            body.intake_project, work_item_provider or provider, field="intake_project"
         )
+    if "work_item_project" in sent:
+        fields["work_item_project"] = _work_item_project(body.work_item_project, work_item_provider)
     if "aifactory_project_id" in sent:
         fields["aifactory_project_id"] = (body.aifactory_project_id or "").strip() or None
     if "default_labels" in sent:
@@ -358,8 +396,51 @@ class ResolvedRepository:
     repository: GitRepositoryRow
 
 
+def work_item_target(
+    resolved: ResolvedRepository,
+    work_item_connection: GitConnectionRow | None,
+    credential: Credential,
+) -> GitTarget:
+    """The work-item side of a mixed connection (RFC-0022 Phase 4).
+
+    Built from the REFERENCED connection and this repository's
+    ``work_item_project``; nothing of the code side's host or credential is
+    carried over. ``work_item_connection=None`` is a dangling reference: the side
+    gets :data:`UNRESOLVED_PROVIDER`, which no provider build accepts.
+    """
+    connection, repository = resolved.connection, resolved.repository
+    labels = tuple(label for label in (repository.default_labels or []) if isinstance(label, str))
+    if work_item_connection is None:
+        provider, base_url, source_id = UNRESOLVED_PROVIDER, "", connection.work_item_connection_id
+    else:
+        provider = (work_item_connection.provider or GITHUB).strip().lower()
+        base_url = resolved_base_url(provider, work_item_connection.base_url or "")
+        source_id = work_item_connection.id
+    return GitTarget(
+        tenant=connection.tenant_id,
+        provider=provider,
+        base_url=base_url,
+        project=repository.work_item_project,
+        import_project=repository.intake_project or repository.work_item_project,
+        aifactory_project_id=None,
+        default_labels=labels,
+        credential=credential,
+        stored=True,
+        verified_at=work_item_connection.verified_at if work_item_connection else None,
+        verify_error=work_item_connection.verify_error if work_item_connection else None,
+        credential_rejected=(
+            work_item_connection.credential_rejected if work_item_connection else None
+        ),
+        connection_id=source_id,
+        repository_id=repository.id,
+    )
+
+
 def target_from_repository(
-    resolved: ResolvedRepository, settings: Settings, credential: Credential | None = None
+    resolved: ResolvedRepository,
+    settings: Settings,
+    credential: Credential | None = None,
+    work_item: GitTarget | None = None,
 ) -> GitTarget:
     """The :class:`~cfactory.git_config.GitTarget` a repository describes.
 
@@ -388,6 +469,7 @@ def target_from_repository(
         credential_rejected=connection.credential_rejected,
         connection_id=connection.id,
         repository_id=repository.id,
+        work_item=work_item,
     )
 
 
@@ -400,6 +482,7 @@ def repository_view(row: GitRepositoryRow) -> GitRepository:
         intake_project=row.intake_project,
         aifactory_project_id=row.aifactory_project_id,
         default_labels=[label for label in (row.default_labels or []) if isinstance(label, str)],
+        work_item_project=row.work_item_project,
         is_default=row.is_default,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -436,6 +519,7 @@ def connection_view(
             verified_at=row.verified_at,
             credential_rejected=row.credential_rejected,
         ),
+        work_item_connection_id=row.work_item_connection_id,
         credential=credential,
         install=install_view(install) if install is not None else None,
         verified_at=row.verified_at,

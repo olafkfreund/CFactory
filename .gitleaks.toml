@@ -26,5 +26,6 @@ paths = [
   '''tests/test_git_install\.py''',
   '''tests/test_git_credentials\.py''',
   '''tests/test_git_multi_connection\.py''',
+  '''tests/test_git_mixed_resolution\.py''',
   '''docs/guides/token-gated-api\.md''',
 ]

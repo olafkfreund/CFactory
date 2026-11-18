@@ -1,0 +1,8 @@
+# Lock for the claude CLI binary bundled in the claude-agent-sdk wheel
+# (claude_agent_sdk/_bundled/claude). Checked by .github/scripts/verify-claude-bundle.sh
+# in image-build.yml and deploy.yml. Bump `claude-agent-sdk==` in requirements.txt
+# and this file together; the sha256 is for the linux/amd64 wheel (the only
+# platform the image builds).
+version=0.2.184
+sha256=343c744baa14bfd38286a7cb90871051f04379956da6c5b803a9e66019a76ac9
+platform=linux/amd64

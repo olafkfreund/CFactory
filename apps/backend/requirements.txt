@@ -22,7 +22,9 @@ cryptography>=44.0
 pyjwt[crypto]>=2.10
 sqlalchemy>=2.0
 alembic>=1.14
-claude-agent-sdk>=0.1.16
+# Exact pin: the image ships the CLI binary bundled in this wheel; its version and
+# sha256 are locked in claude-bundle.lock and verified in CI (CFactory#548).
+claude-agent-sdk==0.2.184
 
 # Factory#516 — OpenTelemetry OTLP tracing to the fleet collector
 # (apps/observe). Until now this service had no OTEL_* configuration and no

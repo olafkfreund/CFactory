@@ -397,3 +397,53 @@ def test_a_second_writer_waits_for_the_lock_on_the_referenced_row(tmp_path):
     thread.join(timeout=20)
     # the reference landed first, so the delete is refused, not applied
     assert outcome == ["GitConfigError"], outcome
+
+
+def test_a_chain_forming_writer_waits_and_is_refused(tmp_path):
+    url = f"sqlite:///{tmp_path / 'chain.db'}"
+    one, two = CardStore(url), CardStore(url)
+    a = one.create_connection(GitConnectionCreate(provider="github"))
+    b = one.create_connection(GitConnectionCreate(provider="gitlab", base_url=_GL_HOST))
+    c = one.create_connection(GitConnectionCreate(provider="gitlab", base_url="https://gl2.test"))
+    outcome: list[str] = []
+
+    with one._session.begin() as session:
+        one._lock_connections(session, [a.id, b.id])
+
+        def second() -> None:
+            try:
+                two.update_connection(b.id, GitConnectionUpdate(work_item_connection_id=c.id))
+                outcome.append("attached")
+            except GitConfigError as exc:
+                outcome.append(str(exc))
+
+        thread = threading.Thread(target=second)
+        thread.start()
+        thread.join(timeout=0.5)
+        session.execute(
+            text("UPDATE git_connection SET work_item_connection_id = :b WHERE id = :a"),
+            {"a": a.id, "b": b.id},
+        )
+    thread.join(timeout=20)
+    assert outcome and "no chains" in outcome[0], outcome
+
+
+def test_attaching_a_side_checks_existing_intake_paths_against_the_new_provider(cards):
+    github = cards.create_connection(GitConnectionCreate(provider="github"))
+    cards.create_repository(
+        github.id,
+        GitRepositoryCreate(project=_CODE, intake_project="acme/other", make_default=True),
+    )
+    ado = cards.create_connection(
+        GitConnectionCreate(provider="azure_devops", base_url="https://dev.azure.com")
+    )
+    with pytest.raises(GitConfigError, match="intake_project"):
+        cards.update_connection(github.id, GitConnectionUpdate(work_item_connection_id=ado.id))
+    assert cards.connection(github.id).work_item_connection_id is None
+
+
+def test_a_repository_guard_covers_every_tracked_project_path(cards):
+    _, _, repo = _mixed(cards)
+    cards.create(CardCreate(title="Tracked on the code path", issue_ref=f"{_CODE}#4"))
+    with pytest.raises(GitConfigError, match="1 card"):
+        cards.update_repository(repo.id, GitRepositoryUpdate(work_item_project="acme/group/other"))

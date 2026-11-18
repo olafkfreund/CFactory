@@ -64,6 +64,7 @@ from .git_config import (
     config_view,
     provider_token,
     target_from_settings,
+    validate_project,
     validated_fields,
 )
 from .git_connections import (
@@ -1124,21 +1125,27 @@ class CardStore:
             else current.work_item_connection_id
         )
         ref_changed = new_ref != current.work_item_connection_id
-        if moved and self._referrers(connection_id):
-            raise GitConfigError(
-                "this connection serves another connection's work items: detach that "
-                "connection first before changing its provider or host"
-            )
-        if ref_changed:
-            self._assert_no_tracked_issues(self._issue_projects(connection_id), "re-point")
         if moved:
             # A verification proved the host that answered and the credential it
             # accepted. Point the connection somewhere else and it proves nothing.
             fields |= {"verified_at": None, "verify_error": None, "credential_rejected": None}
         try:
             with self._session.begin() as session:
+                # Every invariant below is read UNDER the lock on both rows, so a
+                # reference attached or a card imported while this runs either
+                # lands first (and is seen) or waits for this commit.
+                self._lock_connections(session, [connection_id, *([new_ref] if new_ref else [])])
+                if moved and self._referrers(connection_id, session):
+                    raise GitConfigError(
+                        "this connection serves another connection's work items: detach that "
+                        "connection first before changing its provider or host"
+                    )
                 if ref_changed:
                     self._check_reference(session, connection_id, str(fields["provider"]), new_ref)
+                    self._assert_no_tracked_issues(
+                        self._issue_projects(connection_id, session), "re-point", session
+                    )
+                    self._assert_paths_fit(session, connection_id, new_ref, str(fields["provider"]))
                 row = session.get(GitConnectionRow, connection_id)
                 if row is None or row.tenant_id != self.tenant:  # pragma: no cover — just read
                     raise GitResourceNotFoundError(
@@ -1269,16 +1276,44 @@ class CardStore:
         if own_id is not None and self._referrers(own_id, session):
             raise GitConfigError("this connection serves another one's work items: no chains")
 
-    def _issue_projects(self, connection_id: int) -> set[str]:
+    def _issue_projects(self, connection_id: int, session: Session | None = None) -> set[str]:
         """Every project path a card's ``issue_ref`` could name on this connection."""
         paths: set[str] = set()
-        for repo in self.repositories(connection_id):
+        if session is None:
+            repos = self.repositories(connection_id)
+        else:
+            repos = list(
+                session.scalars(
+                    select(GitRepositoryRow).where(
+                        GitRepositoryRow.connection_id == connection_id,
+                        GitRepositoryRow.tenant_id == self.tenant,
+                    )
+                )
+            )
+        for repo in repos:
             paths.update(
                 p for p in (repo.project, repo.intake_project, repo.work_item_project) if p
             )
         return paths
 
-    def _assert_no_tracked_issues(self, projects: set[str], action: str) -> None:
+    def _assert_paths_fit(
+        self, session: Session, connection_id: int, work_item_id: int | None, provider: str
+    ) -> None:
+        """Every repository's ``intake_project`` must be a path the NEW issue-side
+        provider can address (``organization/project/repo`` on Azure DevOps), or the
+        next import would fail on a value that was valid when it was saved."""
+        side = provider
+        if work_item_id is not None:
+            target = session.get(GitConnectionRow, work_item_id)
+            side = target.provider if target is not None else provider
+        for repo in session.scalars(
+            select(GitRepositoryRow).where(GitRepositoryRow.connection_id == connection_id)
+        ):
+            validate_project(repo.intake_project, side, field="intake_project")
+
+    def _assert_no_tracked_issues(
+        self, projects: set[str], action: str, session: Session | None = None
+    ) -> None:
         """Refuse to ``action`` while a live card tracks an issue in ``projects``.
 
         A card's ``issue_ref`` project is read through whichever side resolves it,
@@ -1292,8 +1327,11 @@ class CardStore:
             CardRow.deleted_at.is_(None),
             CardRow.issue_ref.is_not(None),
         )
-        with self._session() as session:
+        if session is not None:
             refs = [r for r in session.scalars(stmt) if r]
+        else:
+            with self._session() as own:
+                refs = [r for r in own.scalars(stmt) if r]
         tracked = sum(1 for ref in refs if _issue_project(ref) in projects)
         if tracked:
             raise GitConfigError(
@@ -1370,7 +1408,14 @@ class CardStore:
             "work_item_project" in fields
             and fields["work_item_project"] != current.work_item_project
         ):
-            self._assert_no_tracked_issues({p for p in (current.work_item_project,) if p}, "change")
+            self._assert_no_tracked_issues(
+                {
+                    p
+                    for p in (current.project, current.intake_project, current.work_item_project)
+                    if p
+                },
+                "change",
+            )
         try:
             with self._session.begin() as session:
                 row = session.get(GitRepositoryRow, repository_id)

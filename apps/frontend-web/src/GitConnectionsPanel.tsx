@@ -106,6 +106,7 @@ function textToLabels(text: string): string[] {
 
 export function RepositoryForm({
   provider,
+  mixed = false,
   initial,
   busy,
   idPrefix,
@@ -114,6 +115,7 @@ export function RepositoryForm({
   onCancel,
 }: {
   provider: string;
+  mixed?: boolean;
   initial?: GitRepository;
   busy: boolean;
   idPrefix: string;
@@ -123,6 +125,7 @@ export function RepositoryForm({
 }) {
   const [project, setProject] = useState(initial?.project ?? "");
   const [intake, setIntake] = useState(initial?.intake_project ?? "");
+  const [workItemProject, setWorkItemProject] = useState(initial?.work_item_project ?? "");
   const [aifactory, setAifactory] = useState(initial?.aifactory_project_id ?? "");
   const [labels, setLabels] = useState(labelsToText(initial?.default_labels ?? []));
 
@@ -140,9 +143,27 @@ export function RepositoryForm({
           onChange={(e) => { setProject(e.target.value); }}
         />
         <span className="set-hint">
-          Where a ready card opens its issue. Required — a repository is a project path.
+          {mixed
+            ? "Code repository used for builds. Required — a repository is a project path."
+            : "Where a ready card opens its issue. Required — a repository is a project path."}
         </span>
       </div>
+
+      {mixed && (
+        <div className="set-field">
+          <label className="set-label" htmlFor={`${idPrefix}-work-item-project`}>
+            Work-item project
+          </label>
+          <input
+            id={`${idPrefix}-work-item-project`}
+            className="svc-edit-input mono"
+            value={workItemProject}
+            placeholder="project path on the work-item connection"
+            onChange={(e) => { setWorkItemProject(e.target.value); }}
+          />
+          <span className="set-hint">Where this repository opens and reads issues.</span>
+        </div>
+      )}
 
       <div className="set-field">
         <label className="set-label" htmlFor={`${idPrefix}-intake`}>
@@ -152,12 +173,14 @@ export function RepositoryForm({
           id={`${idPrefix}-intake`}
           className="svc-edit-input mono"
           value={intake}
-          placeholder={`defaults to ${project.trim() || "the repository above"}`}
+          placeholder={`defaults to ${mixed ? workItemProject.trim() || "the work-item project above" : project.trim() || "the repository above"}`}
           onChange={(e) => { setIntake(e.target.value); }}
         />
         <span className="set-hint">
           Import existing issues from a different repository than the one above. Empty means
-          issues are imported from the repository itself, which is what most boards want.
+          {mixed
+            ? " issues are imported from the work-item project."
+            : " issues are imported from the repository itself, which is what most boards want."}
         </span>
       </div>
 
@@ -207,6 +230,7 @@ export function RepositoryForm({
             onSubmit({
               project: project.trim(),
               intake_project: intake.trim() || null,
+              ...(mixed ? { work_item_project: workItemProject.trim() || null } : {}),
               aifactory_project_id: aifactory.trim() || null,
               default_labels: textToLabels(labels),
             });
@@ -227,11 +251,13 @@ export function RepositoryForm({
 function RepositoryRow({
   repo,
   provider,
+  mixed,
   busy,
   actions,
 }: {
   repo: GitRepository;
   provider: string;
+  mixed: boolean;
   busy: boolean;
   actions: Actions;
 }) {
@@ -257,7 +283,7 @@ function RepositoryRow({
         )}
       </div>
       <div className="set-repo-meta">
-        <span>imports from {repo.intake_project ?? repo.project}</span>
+        <span>imports from {repo.intake_project ?? repo.work_item_project ?? repo.project}</span>
         <span>
           {repo.aifactory_project_id
             ? `builds in AIFactory project ${repo.aifactory_project_id}`
@@ -316,6 +342,7 @@ function RepositoryRow({
       {editing && (
         <RepositoryForm
           provider={provider}
+          mixed={mixed}
           initial={repo}
           busy={busy}
           idPrefix={`repo-${String(repo.id)}`}
@@ -631,7 +658,7 @@ export function CapabilityMatrix({
 // ── one connection card ─────────────────────────────────────────────────────
 
 export type Actions = {
-  updateConnection: (id: number, body: { provider: string; base_url: string | null; label: string }) => void;
+  updateConnection: (id: number, body: { provider: string; base_url: string | null; label: string; work_item_connection_id?: number | null }) => void;
   removeConnection: (id: number) => void;
   verify: (id: number) => void;
   storeCredential: (id: number, credential: string) => void;
@@ -655,6 +682,8 @@ export function ConnectionCard({
   busy,
   note,
   installAvailable = false,
+  mixedProvidersEnabled = false,
+  connections = [],
   actions,
   capabilities,
 }: {
@@ -668,6 +697,8 @@ export function ConnectionCard({
   // Defaulted false so a cockpit talking to a backend that predates phase 4 shows
   // the paste box, which is all that backend has.
   installAvailable?: boolean | undefined;
+  mixedProvidersEnabled?: boolean;
+  connections?: GitConnection[];
   actions: Actions;
   capabilities?: GitCapabilities | null | undefined;
 }) {
@@ -677,6 +708,9 @@ export function ConnectionCard({
   const [provider, setProvider] = useState(connection.provider);
   const [baseUrl, setBaseUrl] = useState("");
   const [label, setLabel] = useState(connection.label);
+  const [workItemConnectionId, setWorkItemConnectionId] = useState(
+    String(connection.work_item_connection_id ?? ""),
+  );
 
   const status = STATUS[connection.status] ?? { tone: "warn", text: connection.status };
 
@@ -715,6 +749,7 @@ export function ConnectionCard({
               key={repo.id}
               repo={repo}
               provider={connection.provider}
+              mixed={connection.work_item_connection_id != null}
               busy={busy}
               actions={actions}
             />
@@ -723,6 +758,7 @@ export function ConnectionCard({
         {adding ? (
           <RepositoryForm
             provider={connection.provider}
+            mixed={connection.work_item_connection_id != null}
             busy={busy}
             idPrefix={`add-${String(connection.id)}`}
             submitLabel="Add repository"
@@ -808,6 +844,27 @@ export function ConnectionCard({
               to the provider&apos;s name.
             </span>
           </div>
+          {mixedProvidersEnabled && (
+            <div className="set-field">
+              <label className="set-label" htmlFor={`conn-work-items-${String(connection.id)}`}>
+                Work items from
+              </label>
+              <select
+                id={`conn-work-items-${String(connection.id)}`}
+                className="svc-edit-input"
+                value={workItemConnectionId}
+                onChange={(e) => { setWorkItemConnectionId(e.target.value); }}
+              >
+                <option value="">Same as this connection</option>
+                {connections.filter((other) => other.id !== connection.id).map((other) => (
+                  <option key={other.id} value={other.id}>
+                    {other.label} ({PROVIDER_LABEL[other.provider] ?? other.provider})
+                  </option>
+                ))}
+              </select>
+              <span className="set-hint">Use that connection for issues and imports.</span>
+            </div>
+          )}
           <div className="set-actions">
             <button
               className="btn btn--sm"
@@ -819,6 +876,9 @@ export function ConnectionCard({
                   provider,
                   base_url: baseUrl.trim() || null,
                   label: label.trim(),
+                  ...(mixedProvidersEnabled
+                    ? { work_item_connection_id: workItemConnectionId ? Number(workItemConnectionId) : null }
+                    : {}),
                 });
               }}
             >
@@ -903,15 +963,20 @@ export function AddConnectionCard({
   empty,
   onCreate,
   capabilities,
+  mixedProvidersEnabled = false,
+  connections = [],
 }: {
   busy: boolean;
   empty: boolean;
-  onCreate: (body: { provider: string; base_url: string | null; label: string | null }) => void;
+  onCreate: (body: { provider: string; base_url: string | null; label: string | null; work_item_connection_id?: number | null }) => void;
   capabilities?: GitCapabilities | null;
+  mixedProvidersEnabled?: boolean;
+  connections?: GitConnection[];
 }) {
   const [provider, setProvider] = useState<string>("github");
   const [baseUrl, setBaseUrl] = useState("");
   const [label, setLabel] = useState("");
+  const [workItemConnectionId, setWorkItemConnectionId] = useState("");
 
   return (
     <div className="svc-card set-card">
@@ -982,6 +1047,28 @@ export function AddConnectionCard({
         </span>
       </div>
 
+      {mixedProvidersEnabled && (
+        <div className="set-field">
+          <label className="set-label" htmlFor="add-conn-work-items">
+            Work items from
+          </label>
+          <select
+            id="add-conn-work-items"
+            className="svc-edit-input"
+            value={workItemConnectionId}
+            onChange={(e) => { setWorkItemConnectionId(e.target.value); }}
+          >
+            <option value="">Same as this connection</option>
+            {connections.map((other) => (
+              <option key={other.id} value={other.id}>
+                {other.label} ({PROVIDER_LABEL[other.provider] ?? other.provider})
+              </option>
+            ))}
+          </select>
+          <span className="set-hint">Use that connection for issues and imports.</span>
+        </div>
+      )}
+
       <div className="set-actions">
         <button
           className="btn btn--sm"
@@ -990,7 +1077,15 @@ export function AddConnectionCard({
           onClick={() => {
             setBaseUrl("");
             setLabel("");
-            onCreate({ provider, base_url: baseUrl.trim() || null, label: label.trim() || null });
+            setWorkItemConnectionId("");
+            onCreate({
+              provider,
+              base_url: baseUrl.trim() || null,
+              label: label.trim() || null,
+              ...(mixedProvidersEnabled
+                ? { work_item_connection_id: workItemConnectionId ? Number(workItemConnectionId) : null }
+                : {}),
+            });
           }}
         >
           Add connection
@@ -1186,6 +1281,8 @@ export default function GitConnectionsPanel({
             busy={busy}
             note={notes[connection.id]}
             installAvailable={data?.install_available[connection.provider] ?? false}
+            mixedProvidersEnabled={data?.mixed_providers_enabled ?? false}
+            connections={connections}
             actions={actions}
             capabilities={capabilities}
           />
@@ -1194,6 +1291,8 @@ export default function GitConnectionsPanel({
           busy={busy}
           empty={connections.length === 0}
           capabilities={capabilities}
+          mixedProvidersEnabled={data?.mixed_providers_enabled ?? false}
+          connections={connections}
           onCreate={(body) => {
             run(() => createGitConnection(tenant, body));
           }}

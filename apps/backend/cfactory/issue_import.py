@@ -517,6 +517,23 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
             rate_limited=_looks_rate_limited(exc),
         )
 
+    # The configuration may have been re-pointed while the provider call was in
+    # flight (RFC-0022 Phase 4): issues read from the OLD side must not become cards
+    # the NEW side then misreads.
+    now = store.git_target_for(
+        settings, repository_id=repository_id, project=project, actor=actor, audit=audit
+    ).work_item_side
+    if (now.connection_id, now.provider, now.base_url) != (
+        side.connection_id,
+        side.provider,
+        side.base_url,
+    ):
+        return _result(
+            target,
+            ok=False,
+            reason="the git configuration changed during the import; run it again",
+        )
+
     # The provider was asked for issues only; asserting it again is one line and
     # covers a host that answers with merge requests anyway.
     issues = [issue for issue in issues if not _is_pull_request(issue)]

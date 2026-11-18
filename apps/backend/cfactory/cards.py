@@ -1296,6 +1296,17 @@ class CardStore:
             )
         return paths
 
+    def _assert_side_unchanged(self, session: Session, validated_against: GitConnectionRow) -> None:
+        """Lock the connection and refuse if its work-item side moved since the
+        caller validated a repository against it (the write would otherwise leave
+        a path for a side the connection no longer has)."""
+        self._lock_connections(session, [validated_against.id])
+        fresh = session.get(GitConnectionRow, validated_against.id)
+        if fresh is None or (
+            fresh.work_item_connection_id != validated_against.work_item_connection_id
+        ):
+            raise GitConfigError("the connection changed while this was being saved: retry")
+
     def _assert_paths_fit(
         self, session: Session, connection_id: int, work_item_id: int | None, provider: str
     ) -> None:
@@ -1310,6 +1321,8 @@ class CardStore:
             select(GitRepositoryRow).where(GitRepositoryRow.connection_id == connection_id)
         ):
             validate_project(repo.intake_project, side, field="intake_project")
+            if work_item_id is not None:
+                validate_project(repo.work_item_project, side, field="work_item_project")
 
     def _assert_no_tracked_issues(
         self, projects: set[str], action: str, session: Session | None = None
@@ -1383,6 +1396,7 @@ class CardStore:
         make_default = body.make_default or self.default_repository() is None
         try:
             with self._session.begin() as session:
+                self._assert_side_unchanged(session, connection)
                 row = GitRepositoryRow(tenant_id=self.tenant, connection_id=connection_id, **fields)
                 session.add(row)
                 session.flush()
@@ -1418,6 +1432,7 @@ class CardStore:
             )
         try:
             with self._session.begin() as session:
+                self._assert_side_unchanged(session, connection)
                 row = session.get(GitRepositoryRow, repository_id)
                 if row is None or row.tenant_id != self.tenant:  # pragma: no cover — just read
                     raise GitResourceNotFoundError(

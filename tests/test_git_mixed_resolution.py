@@ -447,3 +447,28 @@ def test_a_repository_guard_covers_every_tracked_project_path(cards):
     cards.create(CardCreate(title="Tracked on the code path", issue_ref=f"{_CODE}#4"))
     with pytest.raises(GitConfigError, match="1 card"):
         cards.update_repository(repo.id, GitRepositoryUpdate(work_item_project="acme/group/other"))
+
+
+def test_replacing_the_side_checks_retained_work_item_paths(cards):
+    github, _, repo = _mixed(cards)
+    cards.update_repository(repo.id, GitRepositoryUpdate(work_item_project="acme/issues"))
+    ado = cards.create_connection(
+        GitConnectionCreate(provider="azure_devops", base_url="https://dev.azure.com")
+    )
+    with pytest.raises(GitConfigError, match="work_item_project"):
+        cards.update_connection(github.id, GitConnectionUpdate(work_item_connection_id=ado.id))
+
+
+def test_an_import_does_not_persist_issues_after_the_side_moved(cards, router, monkeypatch):
+    _mixed(cards)
+    real = FakeGitLab.fetch_issues
+
+    async def moved_during_fetch(self, filters=None):
+        cards.update_connection(
+            cards.connections()[1].id, GitConnectionUpdate(work_item_connection_id=None)
+        )
+        return await real(self, filters)
+
+    monkeypatch.setattr(FakeGitLab, "fetch_issues", moved_during_fetch)
+    result = issue_import.import_issues(cards, transport=router.transport())
+    assert result["ok"] is False and "changed during the import" in result["reason"]

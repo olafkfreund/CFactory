@@ -44,6 +44,7 @@ from .credentials import (
     CredentialInfo,
     GitCredentialRow,
     Sealed,
+    encode_jira_credential,
     env_credential,
     load_keyring,
     require_keyring,
@@ -54,6 +55,7 @@ from .credentials import (
 )
 from .db import Base, add_column_ddl, make_engine
 from .git_config import (
+    JIRA,
     GitConfig,
     GitConfigError,
     GitConfigRow,
@@ -1841,7 +1843,12 @@ class CardStore:
         return row.sealed() if row is not None else None
 
     def set_connection_credential(
-        self, connection_id: int, secret: str, settings: Settings | None = None
+        self,
+        connection_id: int,
+        secret: str,
+        settings: Settings | None = None,
+        *,
+        email: str | None = None,
     ) -> CredentialInfo:
         """Store (or replace) one connection's credential, encrypted.
 
@@ -1857,6 +1864,11 @@ class CardStore:
         value = (secret or "").strip()
         if not value:
             raise CredentialError("credential must not be empty")
+        if connection.provider == JIRA:
+            # Two parts: sealed together as one structured record (RFC-0022 §7).
+            value = encode_jira_credential(email or "", value)
+        elif email:
+            raise GitConfigError("email is only accepted for a jira connection's credential")
         sealed = seal(
             value, tenant=self.tenant, connection=connection.id, keyring=require_keyring(settings)
         )

@@ -435,7 +435,11 @@ def verify_git_connection(
 
 
 def set_connection_credential(
-    store: CardStore, ctx: AuditContext, connection_id: int, secret: str
+    store: CardStore,
+    ctx: AuditContext,
+    connection_id: int,
+    secret: str,
+    email: str | None = None,
 ) -> dict[str, Any]:
     """Store (or replace) ONE CONNECTION's credential, encrypted, and audit it.
 
@@ -443,7 +447,7 @@ def set_connection_credential(
     indicator, and no surface anywhere returns the credential. Sealed against
     (tenant, connection), so the stored record is useless on any other connection.
     """
-    info = store.set_connection_credential(connection_id, secret)
+    info = store.set_connection_credential(connection_id, secret, email=email)
     _record(ctx, store, kind="set_git_credential", ok=True, resource="git-credential")
     return {
         "ok": True,

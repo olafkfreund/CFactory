@@ -50,6 +50,7 @@ from .credentials import Credential, CredentialInfo, env_credential
 from .db import Base
 from .git_config import (
     GITHUB,
+    JIRA,
     PROVIDER_DEFAULT_BASE_URL,
     GitConfigError,
     GitTarget,
@@ -292,9 +293,12 @@ def validate_label(label: str | None, provider: str) -> str:
 def connection_fields(provider: str, base_url: str | None, label: str | None) -> dict[str, object]:
     """Validated stored column values for a connection write."""
     kind = validate_provider(provider)
+    url = validate_base_url(base_url)
+    if kind == JIRA and not url:
+        raise GitConfigError("a jira connection needs base_url: the Jira Cloud site root")
     return {
         "provider": kind,
-        "base_url": validate_base_url(base_url) or DEFAULT_BASE_URL,
+        "base_url": url or DEFAULT_BASE_URL,
         "label": validate_label(label, kind),
     }
 

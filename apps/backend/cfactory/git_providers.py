@@ -59,9 +59,12 @@ from runners.github.providers.protocol import (
     to_iso_utc,
 )
 
+from .config import get_settings
+from .credentials import decode_jira_credential
 from .git_base_url import safe_git_base_url
 from .git_config import (
     ADO_PATH_PARTS as _ADO_PATH_PARTS,
+    JIRA,
     PROVIDER_DEFAULT_BASE_URL,
     SUPPORTED_PROVIDERS,
     GitTarget,
@@ -546,4 +549,40 @@ def build_provider(
             ado["_base_url"] = base_url
         return get_provider(ProviderType.AZURE_DEVOPS, repo, **ado)
 
+    if kind == JIRA:
+        return _build_jira(project, base_url, token, transport)
+
     raise ValueError(f"unknown git provider: {kind!r} (expected one of {SUPPORTED_PROVIDERS})")
+
+
+def _build_jira(
+    project: str,
+    base_url: str | None,
+    token: str | None,
+    transport: httpx.BaseTransport | httpx.AsyncBaseTransport | None,
+) -> IssueProvider:
+    """A Jira work-item provider (RFC-0022 Phase 3), behind the feature flag.
+
+    The flag is checked here as well as at connection create: a connection stored
+    while it was on must stop working when it is switched off.
+    """
+    if not get_settings().jira_enabled:
+        raise ValueError("jira is disabled on this deployment (CFACTORY_JIRA_ENABLED)")
+    if not base_url:
+        raise ValueError("a jira connection needs base_url: the Jira Cloud site root")
+    credential = decode_jira_credential(token)
+    try:
+        from runners.github.providers.jira_provider import JiraProvider  # noqa: PLC0415
+    except ImportError:
+        # shortcut: until runners/github is re-vendored from the hub (plan step 5),
+        # the provider is not in this image; say so rather than failing obscurely.
+        raise ValueError(
+            "the Jira provider is not vendored into this build yet (Factory#3775 plan step 5)"
+        ) from None
+    return JiraProvider(  # type: ignore[return-value]
+        _repo=project,
+        _email=credential.email,
+        _api_token=credential.api_token,
+        _base_url=base_url,
+        _transport=_async_transport(transport),
+    )

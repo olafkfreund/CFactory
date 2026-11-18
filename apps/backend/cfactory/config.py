@@ -211,6 +211,11 @@ class Settings(BaseSettings):
     # every pass. Zero disables the backfill without disabling the refresh.
     import_comment_backfill_max: int = 25
 
+    # Jira connections (RFC-0022 Phase 3, Factory#3775). OFF by default: a `jira`
+    # connection is rejected with a message naming this flag until the owner has a
+    # Jira Cloud site and credential and has run the live smoke test.
+    jira_enabled: bool = False
+
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None
 

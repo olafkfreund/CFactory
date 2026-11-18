@@ -258,6 +258,11 @@ def validate_provider(provider: str) -> str:
     return kind
 
 
+def project_is_addressable(project: str, provider: str) -> bool:
+    """Whether *project* is a path *provider* can address (import-time twin of validate_project)."""
+    return (JIRA_PROJECT_RE if provider == JIRA else PROJECT_RE).match(project) is not None
+
+
 def validate_project(project: str | None, provider: str, *, field: str = "project") -> str | None:
     """A project path the configured provider can actually address.
 

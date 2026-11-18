@@ -1106,6 +1106,14 @@ class CardStore:
             body.label if "label" in sent else current.label,
         )
         moved = (fields["provider"], fields["base_url"]) != (current.provider, current.base_url)
+        if fields["provider"] != current.provider and JIRA in (
+            fields["provider"],
+            current.provider,
+        ):
+            # A jira credential is an email + token JSON record; left in place it
+            # would be sent verbatim as another provider's bearer token (or the
+            # reverse). It cannot be valid across that change, so it goes.
+            self.clear_connection_credential(connection_id)
         if moved:
             # A verification proved the host that answered and the credential it
             # accepted. Point the connection somewhere else and it proves nothing.
@@ -1887,7 +1895,9 @@ class CardStore:
             key_version=sealed.key_version,
         )
 
-    def set_git_credential(self, secret: str, settings: Settings | None = None) -> CredentialInfo:
+    def set_git_credential(
+        self, secret: str, settings: Settings | None = None, *, email: str | None = None
+    ) -> CredentialInfo:
         """The single-configuration shim: store the DEFAULT connection's credential.
 
         Materialises a connection for a tenant that has none (see
@@ -1898,7 +1908,7 @@ class CardStore:
         """
         settings = settings or get_settings()
         return self.set_connection_credential(
-            self._default_connection(settings).id, secret, settings
+            self._default_connection(settings).id, secret, settings, email=email
         )
 
     def clear_connection_credential(self, connection_id: int) -> bool:

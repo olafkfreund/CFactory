@@ -403,7 +403,7 @@ class JiraCredential:
     connection's ``base_url`` (it is SSRF-checked there), not part of the secret.
     """
 
-    email: str
+    email: str = field(repr=False)
     api_token: str = field(repr=False)
 
 

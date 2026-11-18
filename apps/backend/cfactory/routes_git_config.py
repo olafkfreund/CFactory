@@ -203,7 +203,7 @@ class GitCredentialUpdate(BaseModel):
     # Only for a jira connection (RFC-0022 §7): the account email that pairs with
     # the API token in `credential`. Not secret on its own, but it is stored sealed
     # with the token and, like the token, never returned.
-    email: str | None = Field(default=None, max_length=320)
+    email: SecretStr | None = Field(default=None, max_length=320)
 
 
 @router.put("/api/tenants/{tenant}/git-credential")
@@ -232,7 +232,13 @@ def put_git_credential(
             store,
             AuditContext(audit, actor, endpoint=REST_ENDPOINT),
             body.credential.get_secret_value(),
+            body.email.get_secret_value() if body.email else None,
         )
+    except GitConfigError as exc:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=client_error(logger, "invalid request", InputRejectedError(exc.args[0])),
+        ) from None
     except CredentialError as exc:
         raise HTTPException(
             status_code=HTTPStatus.SERVICE_UNAVAILABLE,
@@ -462,7 +468,7 @@ def put_connection_credential(
             _ctx(audit, actor),
             connection_id,
             body.credential.get_secret_value(),
-            body.email,
+            body.email.get_secret_value() if body.email else None,
         )
     except GitConfigError as exc:
         raise HTTPException(

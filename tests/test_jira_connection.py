@@ -19,6 +19,7 @@ from cfactory import (
     github_sync,
     issue_import,
     mcp,
+    routes_git_config,
 )
 from cfactory.api_deps import action_transport_dep
 from cfactory.app import audit_dep, cards_store_dep, create_app
@@ -232,3 +233,41 @@ def test_build_provider_checks_flag_and_vendoring(client, cards, monkeypatch):
         assert isinstance(
             build_provider(target, "PROJ", transport=transport), jira_provider.JiraProvider
         )
+
+
+@pytest.mark.usefixtures("jira_enabled")
+def test_changing_provider_away_from_jira_drops_the_credential(client, cards):
+    connection_id = _jira_connection(client)
+    stored = client.put(
+        f"{_URL}/{connection_id}/credential", json={"credential": _TOKEN, "email": _EMAIL}
+    )
+    assert stored.status_code == 200, stored.text
+    assert cards.connection_credential(connection_id).info.configured
+
+    patched = client.patch(f"{_URL}/{connection_id}", json={"provider": "github"})
+    assert patched.status_code == 200, patched.text
+    # The email + token JSON must not survive to be sent as a GitHub bearer token.
+    assert not cards.connection_credential(connection_id).info.configured
+
+
+@pytest.mark.usefixtures("jira_enabled")
+def test_legacy_credential_endpoint_never_500s_on_email(client):
+    # Default connection is GitHub: email is refused (400), not silently accepted.
+    refused = client.put(
+        "/api/tenants/default/git-credential", json={"credential": _TOKEN, "email": _EMAIL}
+    )
+    assert refused.status_code == 400
+    assert _TOKEN not in refused.text and _EMAIL not in refused.text
+
+
+def test_email_is_not_rendered_by_reprs():
+    assert _EMAIL not in repr(JiraCredential(_EMAIL, _TOKEN))
+    assert _EMAIL not in repr(
+        routes_git_config.GitCredentialUpdate(credential=_TOKEN, email=_EMAIL)
+    )
+
+
+def test_import_accepts_a_jira_project_key():
+    assert git_config.project_is_addressable("PROJ", "jira")
+    assert not git_config.project_is_addressable("PROJ", "github")
+    assert git_config.project_is_addressable("owner/repo", "github")

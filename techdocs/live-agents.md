@@ -46,12 +46,13 @@ Live agents light up only when AIFactory's rmux console is on.
 |---|---|---|
 | `AIFACTORY_RMUX_ENABLED` / `APP_RMUX_ENABLED` | **AIFactory** | Mounts the agent-console routes and `{"rmux": true}` capability. Required. |
 | `CFACTORY_AIFACTORY_API_URL` | CFactory | AIFactory base URL (default `http://localhost:3101`). |
-| `CFACTORY_AIFACTORY_TOKEN` | CFactory | Optional. Sent as `Authorization: Bearer <token>` on the upstream rmux WS. Leave unset for local dev where AIFactory runs with `DISABLE_AUTH`. The token stays server-side — it is **never** sent to the browser. |
+| `CFACTORY_AIFACTORY_TOKEN` | CFactory | Primary scoped key for every AIFactory call (adapter, actions, `/ws/events`, live-agent console). Sent as `Authorization: Bearer <token>` on the upstream rmux WS; falls back to `CFACTORY_UPSTREAM_TOKEN`. Extra org-bound keys use `CFACTORY_AIFACTORY_ORG_TOKENS`. Leave unset for local dev where AIFactory runs with `DISABLE_AUTH`. The token stays server-side — it is **never** sent to the browser. |
 
 Steps:
 
 1. Start AIFactory with `APP_RMUX_ENABLED=true` (port `3101`).
-2. (Hosted only) set `CFACTORY_AIFACTORY_TOKEN` to a valid AIFactory service token.
+2. (Hosted only) set `CFACTORY_AIFACTORY_TOKEN` to a valid AIFactory service token
+   or use the shared `CFACTORY_UPSTREAM_TOKEN` fallback.
 3. Start the CFactory backend (`3111`) and frontend (`3110`). The Vite dev server
    proxies `/api` with `ws: true`, so the proxy WebSocket works in development.
 

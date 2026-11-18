@@ -55,7 +55,9 @@ from .credentials import (
 )
 from .db import Base, add_column_ddl, make_engine
 from .git_config import (
+    CODE_PROVIDERS,
     JIRA,
+    WORK_ITEM_PROVIDERS,
     GitConfig,
     GitConfigError,
     GitConfigRow,
@@ -64,6 +66,7 @@ from .git_config import (
     config_view,
     provider_token,
     target_from_settings,
+    validate_project,
     validated_fields,
 )
 from .git_connections import (
@@ -80,6 +83,7 @@ from .git_connections import (
     repository_patch,
     resolved_base_url,
     target_from_repository,
+    work_item_target,
 )
 from .git_install import (
     CREDENTIAL_MISSING as INSTALL_DEGRADED,
@@ -636,6 +640,8 @@ _LATE_COLUMNS = {
 # phase 3 gave one more column. A live board created by phase 2 already HAS the
 # table, so ``create_all`` will not add it and every config read would fail.
 _LATE_CONFIG_COLUMNS = {"credential_rejected": ""}
+_LATE_CONNECTION_COLUMNS = {"work_item_connection_id": ""}
+_LATE_REPOSITORY_COLUMNS = {"work_item_project": ""}
 
 # And for ``card_import_state``, which #374 gives the poll lease. A board created
 # by §3.6 already HAS the table, so ``create_all`` will not add the column and
@@ -683,6 +689,8 @@ def _ensure_late_columns(engine: Engine) -> None:
     inspector = inspect(engine)
     for model, columns in (
         (GitConfigRow, _LATE_CONFIG_COLUMNS),
+        (GitConnectionRow, _LATE_CONNECTION_COLUMNS),
+        (GitRepositoryRow, _LATE_REPOSITORY_COLUMNS),
         (GitCredentialRow, _LATE_CREDENTIAL_COLUMNS),
         (ImportStateRow, _LATE_IMPORT_STATE_COLUMNS),
     ):
@@ -1085,7 +1093,14 @@ class CardStore:
         fields = connection_fields(body.provider, body.base_url, body.label)
         try:
             with self._session.begin() as session:
-                row = GitConnectionRow(tenant_id=self.tenant, **fields)
+                self._check_reference(
+                    session, None, str(fields["provider"]), body.work_item_connection_id
+                )
+                row = GitConnectionRow(
+                    tenant_id=self.tenant,
+                    work_item_connection_id=body.work_item_connection_id,
+                    **fields,
+                )
                 session.add(row)
                 session.flush()
                 return row
@@ -1114,12 +1129,33 @@ class CardStore:
             # would be sent verbatim as another provider's bearer token (or the
             # reverse). It cannot be valid across that change, so it goes.
             self.clear_connection_credential(connection_id)
+        new_ref = (
+            body.work_item_connection_id
+            if "work_item_connection_id" in sent
+            else current.work_item_connection_id
+        )
+        ref_changed = new_ref != current.work_item_connection_id
         if moved:
             # A verification proved the host that answered and the credential it
             # accepted. Point the connection somewhere else and it proves nothing.
             fields |= {"verified_at": None, "verify_error": None, "credential_rejected": None}
         try:
             with self._session.begin() as session:
+                # Every invariant below is read UNDER the lock on both rows, so a
+                # reference attached or a card imported while this runs either
+                # lands first (and is seen) or waits for this commit.
+                self._lock_connections(session, [connection_id, *([new_ref] if new_ref else [])])
+                if moved and self._referrers(connection_id, session):
+                    raise GitConfigError(
+                        "this connection serves another connection's work items: detach that "
+                        "connection first before changing its provider or host"
+                    )
+                if ref_changed:
+                    self._check_reference(session, connection_id, str(fields["provider"]), new_ref)
+                    self._assert_no_tracked_issues(
+                        self._issue_projects(connection_id, session), "re-point", session
+                    )
+                    self._assert_paths_fit(session, connection_id, new_ref, str(fields["provider"]))
                 row = session.get(GitConnectionRow, connection_id)
                 if row is None or row.tenant_id != self.tenant:  # pragma: no cover — just read
                     raise GitResourceNotFoundError(
@@ -1127,6 +1163,16 @@ class CardStore:
                     )
                 for name, value in fields.items():
                     setattr(row, name, value)
+                if ref_changed:
+                    row.work_item_connection_id = new_ref
+                    if new_ref is None:
+                        # A path on a provider this connection no longer uses.
+                        for repo in session.scalars(
+                            select(GitRepositoryRow).where(
+                                GitRepositoryRow.connection_id == connection_id
+                            )
+                        ):
+                            repo.work_item_project = None
                 row.updated_at = _now()
                 session.flush()
                 return row
@@ -1150,8 +1196,13 @@ class CardStore:
         a default to fall back to.
         """
         self.connection(connection_id)
+        self._assert_not_referenced(connection_id)
         forget_token(self.tenant, connection_id)
         with self._session.begin() as session:
+            # Under the lock, so a reference being created right now either lands
+            # first (and refuses this delete) or fails because the row is gone.
+            self._lock_connections(session, [connection_id])
+            self._assert_not_referenced(connection_id, session)
             for repo in session.scalars(
                 select(GitRepositoryRow).where(GitRepositoryRow.connection_id == connection_id)
             ):
@@ -1176,6 +1227,149 @@ class CardStore:
                 session.delete(row)
         self._ensure_default_repository()
         return True
+
+    # ── Work-item side (RFC-0022 Phase 4) ────────────────────────────────────
+
+    def _lock_connections(self, session: Session, ids: Sequence[int]) -> None:
+        """Take the write lock on these connection rows, in id order, BEFORE reading
+        any invariant. A no-op UPDATE: a row lock on PostgreSQL and the database
+        write lock on SQLite, so a check and the write it guards cannot interleave
+        with another reference/delete."""
+        session.execute(
+            update(GitConnectionRow)
+            .where(
+                GitConnectionRow.id.in_(sorted(set(ids))), GitConnectionRow.tenant_id == self.tenant
+            )
+            .values(updated_at=GitConnectionRow.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+
+    def _referrers(self, connection_id: int, session: Session | None = None) -> Sequence[int]:
+        stmt = select(GitConnectionRow.id).where(
+            GitConnectionRow.work_item_connection_id == connection_id,
+            GitConnectionRow.tenant_id == self.tenant,
+        )
+        if session is not None:
+            return list(session.scalars(stmt))
+        with self._session() as own:
+            return list(own.scalars(stmt))
+
+    def _assert_not_referenced(self, connection_id: int, session: Session | None = None) -> None:
+        referrers = self._referrers(connection_id, session)
+        if referrers:
+            raise GitConfigError(
+                f"connection {referrers[0]} uses this one for its work items: detach it first"
+            )
+
+    def _check_reference(
+        self, session: Session, own_id: int | None, provider: str, target_id: int | None
+    ) -> None:
+        """Validate (and lock for) a work-item reference. Raises ``GitConfigError``.
+
+        Same tenant, not itself, no chains in either direction, and each side's
+        kind must be allowed on that side. Runs inside the writing transaction.
+        """
+        if target_id is None:
+            return
+        if target_id == own_id:
+            raise GitConfigError("a connection cannot be its own work-item connection")
+        self._lock_connections(session, [target_id, *([own_id] if own_id is not None else [])])
+        target = session.get(GitConnectionRow, target_id)
+        if target is None or target.tenant_id != self.tenant:
+            raise GitConfigError(f"no git connection {target_id} for this tenant")
+        if target.provider not in WORK_ITEM_PROVIDERS:
+            raise GitConfigError(f"{target.provider} cannot serve work items")
+        if provider not in CODE_PROVIDERS:
+            raise GitConfigError(f"{provider} cannot be the code side of a connection")
+        if target.work_item_connection_id is not None:
+            raise GitConfigError("the work-item connection already uses another one: no chains")
+        if own_id is not None and self._referrers(own_id, session):
+            raise GitConfigError("this connection serves another one's work items: no chains")
+
+    def _issue_projects(self, connection_id: int, session: Session | None = None) -> set[str]:
+        """Every project path a card's ``issue_ref`` could name on this connection."""
+        paths: set[str] = set()
+        if session is None:
+            repos = self.repositories(connection_id)
+        else:
+            repos = list(
+                session.scalars(
+                    select(GitRepositoryRow).where(
+                        GitRepositoryRow.connection_id == connection_id,
+                        GitRepositoryRow.tenant_id == self.tenant,
+                    )
+                )
+            )
+        for repo in repos:
+            paths.update(
+                p for p in (repo.project, repo.intake_project, repo.work_item_project) if p
+            )
+        return paths
+
+    def _assert_side_unchanged(self, session: Session, validated_against: GitConnectionRow) -> None:
+        """Lock the connection and refuse if its work-item side moved since the
+        caller validated a repository against it (the write would otherwise leave
+        a path for a side the connection no longer has)."""
+        self._lock_connections(session, [validated_against.id])
+        fresh = session.get(GitConnectionRow, validated_against.id)
+        if fresh is None or (
+            fresh.work_item_connection_id != validated_against.work_item_connection_id
+        ):
+            raise GitConfigError("the connection changed while this was being saved: retry")
+
+    def _assert_paths_fit(
+        self, session: Session, connection_id: int, work_item_id: int | None, provider: str
+    ) -> None:
+        """Every repository's ``intake_project`` must be a path the NEW issue-side
+        provider can address (``organization/project/repo`` on Azure DevOps), or the
+        next import would fail on a value that was valid when it was saved."""
+        side = provider
+        if work_item_id is not None:
+            target = session.get(GitConnectionRow, work_item_id)
+            side = target.provider if target is not None else provider
+        for repo in session.scalars(
+            select(GitRepositoryRow).where(GitRepositoryRow.connection_id == connection_id)
+        ):
+            validate_project(repo.intake_project, side, field="intake_project")
+            if work_item_id is not None:
+                validate_project(repo.work_item_project, side, field="work_item_project")
+
+    def _assert_no_tracked_issues(
+        self, projects: set[str], action: str, session: Session | None = None
+    ) -> None:
+        """Refuse to ``action`` while a live card tracks an issue in ``projects``.
+
+        A card's ``issue_ref`` project is read through whichever side resolves it,
+        so moving the work-item side would point tracked issues at an unrelated
+        project. Detach or finish those cards first.
+        """
+        if not projects:
+            return
+        stmt = select(CardRow.issue_ref).where(
+            CardRow.tenant_id == self.tenant,
+            CardRow.deleted_at.is_(None),
+            CardRow.issue_ref.is_not(None),
+        )
+        if session is not None:
+            refs = [r for r in session.scalars(stmt) if r]
+        else:
+            with self._session() as own:
+                refs = [r for r in own.scalars(stmt) if r]
+        tracked = sum(1 for ref in refs if _issue_project(ref) in projects)
+        if tracked:
+            raise GitConfigError(
+                f"cannot {action} the work-item side: {tracked} card(s) track issues in these "
+                "repositories. Clear or finish those cards first."
+            )
+
+    def _work_item_provider_kind(self, connection: GitConnectionRow) -> str | None:
+        """The provider kind of this connection's work-item side, None when it has none."""
+        if connection.work_item_connection_id is None:
+            return None
+        side = self._connection_or_none(connection.work_item_connection_id)
+        if side is None:
+            raise GitConfigError("this connection's work-item connection no longer exists")
+        return side.provider
 
     def repositories(self, connection_id: int | None = None) -> Sequence[GitRepositoryRow]:
         """This tenant's repositories, optionally only one connection's."""
@@ -1206,10 +1400,13 @@ class CardStore:
         able to leave behind.
         """
         connection = self.connection(connection_id)
-        fields = repository_fields(body, connection.provider)
+        fields = repository_fields(
+            body, connection.provider, self._work_item_provider_kind(connection)
+        )
         make_default = body.make_default or self.default_repository() is None
         try:
             with self._session.begin() as session:
+                self._assert_side_unchanged(session, connection)
                 row = GitRepositoryRow(tenant_id=self.tenant, connection_id=connection_id, **fields)
                 session.add(row)
                 session.flush()
@@ -1226,11 +1423,26 @@ class CardStore:
         """Patch a repository. Only the fields actually sent are applied."""
         current = self.repository(repository_id)
         connection = self.connection(current.connection_id)
-        fields = repository_patch(body, connection.provider)
+        fields = repository_patch(
+            body, connection.provider, self._work_item_provider_kind(connection)
+        )
         if not fields:
             return current
+        if (
+            "work_item_project" in fields
+            and fields["work_item_project"] != current.work_item_project
+        ):
+            self._assert_no_tracked_issues(
+                {
+                    p
+                    for p in (current.project, current.intake_project, current.work_item_project)
+                    if p
+                },
+                "change",
+            )
         try:
             with self._session.begin() as session:
+                self._assert_side_unchanged(session, connection)
                 row = session.get(GitRepositoryRow, repository_id)
                 if row is None or row.tenant_id != self.tenant:  # pragma: no cover — just read
                     raise GitResourceNotFoundError(
@@ -1328,7 +1540,12 @@ class CardStore:
                 return ResolvedRepository(connection, repo)
         wanted = (project or "").strip()
         if wanted:
-            matches = [repo for repo in self.repositories() if repo.project == wanted]
+            # A mixed connection's cards name the WORK-ITEM project in their issue_ref.
+            matches = [
+                repo
+                for repo in self.repositories()
+                if wanted in (repo.project, repo.work_item_project)
+            ]
             chosen = next(
                 (repo for repo in matches if repo.is_default), matches[0] if matches else None
             )
@@ -1390,7 +1607,34 @@ class CardStore:
         credential = self.connection_credential(
             resolved.connection.id, settings, actor=actor, audit=audit
         )
-        return target_from_repository(resolved, settings, credential)
+        work_item = None
+        if resolved.connection.work_item_connection_id is not None:
+            work_item = self._work_item_side(resolved, settings, actor=actor, audit=audit)
+        return target_from_repository(resolved, settings, credential, work_item)
+
+    def _work_item_side(
+        self,
+        resolved: ResolvedRepository,
+        settings: Settings,
+        *,
+        actor: str,
+        audit: AuditStore | None,
+    ) -> GitTarget:
+        """The work-item target of a mixed connection. Never raises.
+
+        The referenced connection's OWN credential only: where it has none, the
+        deployment's environment token (which belongs to whichever provider the
+        deployment was set up for) is dropped rather than sent to another host.
+        A reference whose row is gone yields the unresolved side, which fails
+        visibly in the provider build and never falls back to the code side.
+        """
+        side = self._connection_or_none(resolved.connection.work_item_connection_id or 0)
+        if side is None:
+            return work_item_target(resolved, None, Credential())
+        credential = self.connection_credential(side.id, settings, actor=actor, audit=audit)
+        if credential.info.source == "env":
+            credential = Credential()
+        return work_item_target(resolved, side, credential)
 
     def git_target_for_card(
         self,

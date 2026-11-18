@@ -248,7 +248,10 @@ class BaseHTTPAdapter:
             return ServiceProbe(
                 online=False,
                 status="unauthorized",
-                detail=f"{code} {resp.reason_phrase} — check CFACTORY_UPSTREAM_TOKEN",
+                detail=(
+                    f"{code} {resp.reason_phrase} — check "
+                    f"CFACTORY_{self.service.value.upper()}_TOKEN or CFACTORY_UPSTREAM_TOKEN"
+                ),
             )
         if code >= HTTPStatus.BAD_REQUEST:
             return ServiceProbe(online=False, status="error", detail=f"{code} {resp.reason_phrase}")

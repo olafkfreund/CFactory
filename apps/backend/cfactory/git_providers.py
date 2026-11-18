@@ -579,7 +579,7 @@ def _build_jira(
         raise ValueError(
             "the Jira provider is not vendored into this build yet (Factory#3775 plan step 5)"
         ) from None
-    return JiraProvider(  # type: ignore[return-value]
+    return JiraProvider(
         _repo=project,
         _email=credential.email,
         _api_token=credential.api_token,

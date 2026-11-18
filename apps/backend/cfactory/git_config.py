@@ -100,6 +100,15 @@ GITHUB, GITLAB, AZURE_DEVOPS = "github", "gitlab", "azure_devops"
 JIRA = "jira"
 JIRA_PROJECT_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 SUPPORTED_PROVIDERS: tuple[str, ...] = (GITHUB, GITLAB, AZURE_DEVOPS)
+# RFC-0022 Phase 4: which kinds may serve each SIDE of a connection. All three
+# kinds implement both protocols today; Jira joins the first tuple and Bitbucket
+# the second when those providers land.
+WORK_ITEM_PROVIDERS: tuple[str, ...] = SUPPORTED_PROVIDERS
+CODE_PROVIDERS: tuple[str, ...] = SUPPORTED_PROVIDERS
+# The provider of a work-item side whose referenced connection no longer exists.
+# Not a kind and not "" (which build_provider reads as GitHub), so building a
+# provider for it raises before any credential fetch or network call.
+UNRESOLVED_PROVIDER = "unresolved"
 
 # Where each provider talks when the tenant has not named a self-hosted instance.
 # Present so a self-hosted GitLab / GitHub Enterprise / Azure DevOps Server works
@@ -466,6 +475,15 @@ class GitTarget:
     # is not a stored resource and has nothing to record a verification against.
     connection_id: int | None = None
     repository_id: int | None = None
+    # RFC-0022 Phase 4: the work-item side of a MIXED connection (its own
+    # provider, host, credential and project). None means this target serves both
+    # sides, which is every pre-Phase-4 connection.
+    work_item: GitTarget | None = None
+
+    @property
+    def work_item_side(self) -> GitTarget:
+        """The target issue paths use: the work-item side, else this one."""
+        return self.work_item or self
 
     @property
     def status(self) -> str:

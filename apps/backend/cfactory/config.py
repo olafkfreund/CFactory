@@ -315,6 +315,8 @@ class Settings(BaseSettings):
     # (factory-gitops#13), never trusted from the browser directly. Work-item
     # reads/writes are scoped to the resolved tenant via store_dep (#172).
     multi_tenant: bool = False
+    # Hide the mixed-provider selector until CFACTORY_MIXED_TENANT_UI is enabled.
+    mixed_tenant_ui: bool = False
 
     # ── Who the audit trail names (#251 part b) ──────────────────────────────
     #

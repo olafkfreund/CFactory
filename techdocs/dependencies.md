@@ -86,8 +86,8 @@ the table gives the effect of each state.
 | `CFACTORY_PFACTORY_API_URL` | `http://localhost:3105` | no | PFactory (Plan) upstream REST base. | `config.py` `pfactory_api_url` | env / Helm `config.pfactoryApiUrl` |
 | `CFACTORY_TFACTORY_API_URL` | `http://localhost:3103` | no | TFactory (Verify) upstream REST base. | `config.py` `tfactory_api_url` | env / Helm `config.tfactoryApiUrl` |
 | `CFACTORY_OBSERVE_API_URL` | `http://localhost:5080` | no | OpenObserve health-probe base for the Services reachability view (not a PARR factory; never polled/hydrated). In-cluster: `http://observe.factory.svc.cluster.local:5080`. | `config.py` `observe_api_url` | env only — **no Helm knob** (add via `config.extraEnv`) |
-| `CFACTORY_UPSTREAM_TOKEN` | `None` | in hosted | Shared bearer token sent as `Authorization: Bearer <token>` on every adapter call, poll and upstream WS. Leave unset only for local dev where the factories run `APP_DISABLE_AUTH=true`. Server-side only. | `config.py` `upstream_token` | env / Helm `upstreamToken` (Secret) |
-| `CFACTORY_AIFACTORY_TOKEN` | `None` (falls back to `CFACTORY_UPSTREAM_TOKEN`) | no | Service token for AIFactory's live-agent console WebSocket (#34). Server-side only. | `config.py` `aifactory_token` | env only — **no Helm knob** (add via `config.extraEnv`) |
+| `CFACTORY_UPSTREAM_TOKEN` | `None` | in hosted | Shared fallback bearer token for factory adapter calls, actions, polls and upstream WS. Leave unset only for local dev where the factories run `APP_DISABLE_AUTH=true`. Server-side only. | `config.py` `upstream_token` | env / Helm `upstreamToken` (Secret) |
+| `CFACTORY_AIFACTORY_TOKEN` | `None` (falls back to `CFACTORY_UPSTREAM_TOKEN`) | no | Primary scoped key for every AIFactory call: adapter, actions, `/ws/events` and live-agent console. Additional org-bound keys use `CFACTORY_AIFACTORY_ORG_TOKENS`. Server-side only. | `config.py` `aifactory_token` | env only — **no Helm knob** (add via `config.extraEnv`) |
 | `CFACTORY_DATABASE_URL` | `None` | no | Postgres connection string for the WorkItem correlation store. Unset = local SQLite under the workspace root. | `config.py` `database_url` | env / Helm `database` (Secret) |
 | `CFACTORY_SUBSCRIBE_UPSTREAMS` | `false` | no | On: connect to each upstream `/api/ws` feed at startup. Off: no upstream WS (avoids reconnect loops against down services). | `config.py` `subscribe_upstreams` | env / Helm `config.subscribeUpstreams` |
 | `CFACTORY_LIVE_PROGRESS` | `false` | no | On: poll PFactory/TFactory + subscribe AIFactory progress and broadcast `{type:"progress"}`. Off: no live-progress. | `config.py` `live_progress` | env |
@@ -145,8 +145,8 @@ today; set them through `config.extraEnv` (backend) until a knob is added:
 
 - `CFACTORY_OBSERVE_API_URL` — the Services reachability view falls back to the
   local dev default in-cluster unless set.
-- `CFACTORY_AIFACTORY_TOKEN` — live-agent console WS token; without it the console
-  falls back to `CFACTORY_UPSTREAM_TOKEN`.
+- `CFACTORY_AIFACTORY_TOKEN` — primary key for all AIFactory calls, including
+  the live-agent console WS; falls back to `CFACTORY_UPSTREAM_TOKEN`.
 - `CFACTORY_MCP_SECRET` / `CFACTORY_API_KEYS` — the MCP transport DENIES every request until one of them is set (#302).
 - `CFACTORY_STALL_DEADLINE_SECONDS`, `CFACTORY_POLL_INTERVAL_SECONDS`,
   `CFACTORY_LIVE_PROGRESS`, `CFACTORY_FRONTEND_PORT`, `ANTHROPIC_API_KEY` — no
@@ -158,7 +158,7 @@ Set these to real values in any hosted/shared deployment (never commit them):
 
 - `CFACTORY_AUDIT_HMAC_SECRET` — overrides the clearly-labelled dev default;
   startup hard-warns if the default is left in a non-local posture.
-- `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_AIFACTORY_TOKEN` — upstream factory auth.
+- `CFACTORY_UPSTREAM_TOKEN` / `CFACTORY_AIFACTORY_TOKEN` — shared fallback / primary AIFactory auth.
 - `CFACTORY_API_KEYS` — scoped keys that gate the cockpit API.
 - `CFACTORY_MCP_SECRET` — legacy full-scope credential for the MCP transport
   (`CFACTORY_API_KEYS` also gates `/mcp`, per declared tool scope).

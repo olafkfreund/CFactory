@@ -344,6 +344,7 @@ def list_git_connections(store: CardStore, settings: Settings | None = None) -> 
         "connections": [_connection_payload(store, row, settings) for row in store.connections()],
         "default_repository_id": _default_repository_id(store),
         "install_available": install_available(settings),
+        "mixed_providers_enabled": settings.mixed_tenant_ui,
     }
 
 

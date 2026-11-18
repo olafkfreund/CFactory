@@ -154,6 +154,8 @@ def test_a_database_the_late_column_guards_built_agrees_too(tmp_path):
     late = {
         "cards": cards_mod._LATE_COLUMNS,
         "tenant_git_config": cards_mod._LATE_CONFIG_COLUMNS,
+        "git_connection": cards_mod._LATE_CONNECTION_COLUMNS,
+        "git_repository": cards_mod._LATE_REPOSITORY_COLUMNS,
         "tenant_git_credential": cards_mod._LATE_CREDENTIAL_COLUMNS,
         "card_import_state": cards_mod._LATE_IMPORT_STATE_COLUMNS,
         "work_items": {"tenant_id": ""},

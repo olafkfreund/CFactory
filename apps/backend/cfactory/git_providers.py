@@ -105,10 +105,12 @@ class IssueProvider(Protocol):
     """
 
     @property
-    def provider_type(self) -> ProviderType: ...
+    def provider_type(self) -> ProviderType:
+        raise NotImplementedError  # Protocol member
 
     @property
-    def repo(self) -> str: ...
+    def repo(self) -> str:
+        raise NotImplementedError  # Protocol member
 
     async def create_issue(
         self,
@@ -116,11 +118,14 @@ class IssueProvider(Protocol):
         body: str,
         labels: list[str] | None = None,
         assignees: list[str] | None = None,
-    ) -> IssueData: ...
+    ) -> IssueData:
+        raise NotImplementedError  # Protocol member
 
-    async def fetch_issue(self, number: IssueRef) -> IssueData: ...
+    async def fetch_issue(self, number: IssueRef) -> IssueData:
+        raise NotImplementedError  # Protocol member
 
-    async def fetch_issues(self, filters: IssueFilters | None = None) -> list[IssueData]: ...
+    async def fetch_issues(self, filters: IssueFilters | None = None) -> list[IssueData]:
+        raise NotImplementedError  # Protocol member
 
     # The comment READ half of the protocol (Factory#375). Both are in the slice
     # because the board uses both and for different reasons: the bulk one is what
@@ -130,13 +135,16 @@ class IssueProvider(Protocol):
     # ``ProviderCommentError``.
     async def fetch_comments(
         self, issue_number: IssueRef, since: datetime | None = None
-    ) -> list[IssueComment]: ...
+    ) -> list[IssueComment]:
+        raise NotImplementedError  # Protocol member
 
     async def fetch_comments_bulk(
         self, issue_numbers: list[IssueRef], since: datetime | None = None
-    ) -> dict[IssueRef, list[IssueComment]]: ...
+    ) -> dict[IssueRef, list[IssueComment]]:
+        raise NotImplementedError  # Protocol member
 
-    async def get_repository_info(self) -> dict[str, Any]: ...
+    async def get_repository_info(self) -> dict[str, Any]:
+        raise NotImplementedError  # Protocol member
 
 
 def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:

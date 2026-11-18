@@ -1227,7 +1227,7 @@ class CardStore:
             .execution_options(synchronize_session=False)
         )
 
-    def _referrers(self, connection_id: int, session: Session | None = None) -> list[int]:
+    def _referrers(self, connection_id: int, session: Session | None = None) -> Sequence[int]:
         stmt = select(GitConnectionRow.id).where(
             GitConnectionRow.work_item_connection_id == connection_id,
             GitConnectionRow.tenant_id == self.tenant,

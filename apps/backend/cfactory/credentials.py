@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import logging
 import os
 from collections.abc import Callable
@@ -386,6 +387,47 @@ def reseal(sealed: Sealed, *, tenant: str, connection: int, keyring: KeyRing) ->
         return None
     secret = unseal(sealed, tenant=tenant, connection=connection, keyring=keyring)
     return seal(secret, tenant=tenant, connection=connection, keyring=keyring)
+
+
+# ── the structured (two-part) credential ─────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class JiraCredential:
+    """Jira Cloud's credential: an account email AND an API token (RFC-0022 §7).
+
+    Stored through the same sealed column as every other kind: the plaintext is a
+    small JSON object, so it is encrypted, bound to tenant and connection and
+    rotated exactly like a single-string credential, and a connection of any other
+    provider keeps the opaque form unchanged. The site base URL is the
+    connection's ``base_url`` (it is SSRF-checked there), not part of the secret.
+    """
+
+    email: str = field(repr=False)
+    api_token: str = field(repr=False)
+
+
+def encode_jira_credential(email: str, api_token: str) -> str:
+    """The plaintext to seal for a jira connection. Raises on an unusable pair."""
+    email, api_token = (email or "").strip(), (api_token or "").strip()
+    if "@" not in email or any(ch.isspace() for ch in email):
+        raise CredentialError("a jira credential needs the account email address")
+    if not api_token:
+        raise CredentialError("a jira credential needs an API token")
+    return json.dumps({"kind": "jira", "email": email, "api_token": api_token})
+
+
+def decode_jira_credential(plaintext: str | None) -> JiraCredential:
+    """The pair back from an unsealed record. The message never carries the value."""
+    try:
+        data = json.loads(plaintext or "")
+        if data["kind"] != "jira":
+            raise KeyError("kind")
+        return JiraCredential(email=str(data["email"]), api_token=str(data["api_token"]))
+    except (ValueError, KeyError, TypeError):
+        raise CredentialError(
+            "the stored credential is not a jira email + API token: store it again"
+        ) from None
 
 
 # ── storage ──────────────────────────────────────────────────────────────────

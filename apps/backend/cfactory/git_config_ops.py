@@ -257,7 +257,9 @@ def _is_credential_rejection(exc: Exception) -> bool:
 # ── the credential (RFC-0020 §3.4) ───────────────────────────────────────────
 
 
-def set_git_credential(store: CardStore, ctx: AuditContext, secret: str) -> dict[str, Any]:
+def set_git_credential(
+    store: CardStore, ctx: AuditContext, secret: str, email: str | None = None
+) -> dict[str, Any]:
     """Store (or replace) this tenant's git credential, encrypted, and audit it.
 
     WRITE-ONLY: what comes back is the masked indicator — that there is one, when
@@ -270,7 +272,7 @@ def set_git_credential(store: CardStore, ctx: AuditContext, secret: str) -> dict
     Storing one also clears any recorded rejection, since that rejection was
     about the credential this one replaces.
     """
-    info = store.set_git_credential(secret)
+    info = store.set_git_credential(secret, email=email)
     _record(ctx, store, kind="set_git_credential", ok=True, resource="git-credential")
     return {"ok": True, "credential": info.model_dump(mode="json")}
 
@@ -436,7 +438,11 @@ def verify_git_connection(
 
 
 def set_connection_credential(
-    store: CardStore, ctx: AuditContext, connection_id: int, secret: str
+    store: CardStore,
+    ctx: AuditContext,
+    connection_id: int,
+    secret: str,
+    email: str | None = None,
 ) -> dict[str, Any]:
     """Store (or replace) ONE CONNECTION's credential, encrypted, and audit it.
 
@@ -444,7 +450,7 @@ def set_connection_credential(
     indicator, and no surface anywhere returns the credential. Sealed against
     (tenant, connection), so the stored record is useless on any other connection.
     """
-    info = store.set_connection_credential(connection_id, secret)
+    info = store.set_connection_credential(connection_id, secret, email=email)
     _record(ctx, store, kind="set_git_credential", ok=True, resource="git-credential")
     return {
         "ok": True,

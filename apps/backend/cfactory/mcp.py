@@ -756,6 +756,13 @@ BOARD_TOOLS: list[dict[str, Any]] = [
                         "never read back."
                     ),
                 },
+                "email": {
+                    "type": "string",
+                    "description": (
+                        "Jira connections only: the account email that pairs with the API "
+                        "token in `credential`. Refused for every other provider."
+                    ),
+                },
             },
         },
     },
@@ -1286,7 +1293,11 @@ def _tool_verify_git_connection(args: dict[str, Any], ctx: ToolContext) -> Any:
 
 def _tool_set_git_connection_credential(args: dict[str, Any], ctx: ToolContext) -> Any:
     return git_config_ops.set_connection_credential(
-        ctx.cards, ctx.audit, _connection_id(args), str(args.get("credential") or "")
+        ctx.cards,
+        ctx.audit,
+        _connection_id(args),
+        str(args.get("credential") or ""),
+        str(args.get("email") or "") or None,
     )
 
 

@@ -186,18 +186,47 @@ jobs:
       - name: Trivy binary is runnable
         run: trivy --version
 
+      # CFactory#548: scan a LOCAL copy, not a registry stream. `trivy image
+      # <ref>@<digest>` reads layers from ghcr.io over one HTTP/2 stream per layer;
+      # run 44220569439 died on a PROTOCOL_ERROR reading the 356 MiB claude binary in
+      # the backend image, and the 20m timeout of #540 only made it wait longer.
+      # `docker pull` retries per layer, and `--image-src docker` below turns a
+      # missing local image into a failure instead of a silent registry fallback.
+      # The scan itself takes ~10 s, so the timeout is back at Trivy's default.
+      - name: Pull both image digests locally (retried)
+        run: |
+          set -euo pipefail
+          for REF in \
+            "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}" \
+            "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"; do
+            for attempt in 1 2 3; do
+              docker pull --quiet "$REF" > /dev/null && continue 2
+              echo "docker pull attempt ${attempt} failed for ${REF}" >&2
+              sleep $((attempt * 10))
+            done
+            echo "::error::could not pull ${REF}" >&2
+            exit 1
+          done
+
+      # The SDK bundles a ~356 MiB claude binary; its version and sha256 are
+      # pinned in apps/backend/claude-bundle.lock. Fails on any drift.
+      - name: Verify claude bundle pin (backend digest)
+        run: |
+          ./.github/scripts/verify-claude-bundle.sh \
+            "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}"
+
       # Same policy as the fleet's P0.8 test: fail on FIXABLE HIGH/CRITICAL
       # only (`--ignore-unfixed`). Trivy auto-reads .trivyignore from the repo
       # root for audited exceptions. `--exit-code 1` turns a finding into a
       # hard gate.
       - name: Trivy scan backend image (fixable HIGH/CRITICAL)
         run: |
-          trivy image --timeout 20m --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          trivy image --timeout 5m --image-src docker --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             "${BACKEND_IMAGE}@${{ steps.build_backend.outputs.digest }}"
 
       - name: Trivy scan frontend image (fixable HIGH/CRITICAL)
         run: |
-          trivy image --timeout 20m --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          trivy image --timeout 5m --image-src docker --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             "${FRONTEND_IMAGE}@${{ steps.build_frontend.outputs.digest }}"
 
       # P0.8b blind spot: the cockpit's node_modules never reaches the runtime
@@ -273,6 +302,11 @@ jobs:
           # Backend
           syft scan "$BACKEND" -o spdx-json=sbom-backend.spdx.json
           syft scan "$BACKEND" -o cyclonedx-json=sbom-backend.cyclonedx.json
+          # CFactory#548: the attested SBOM must list the SDK at the locked version.
+          LOCKED="$(sed -n 's/^version=//p' apps/backend/claude-bundle.lock)"
+          jq -e --arg v "$LOCKED" '[.components[] | select((.name | ascii_downcase | gsub("_"; "-")) == "claude-agent-sdk" and .version == $v)] | length > 0' \
+            sbom-backend.cyclonedx.json > /dev/null \
+            || { echo "::error::SBOM has no claude-agent-sdk ${LOCKED}"; exit 1; }
           cosign attest --yes --type spdxjson  --predicate sbom-backend.spdx.json      "$BACKEND"
           cosign attest --yes --type cyclonedx --predicate sbom-backend.cyclonedx.json "$BACKEND"
           # Frontend (cockpit)

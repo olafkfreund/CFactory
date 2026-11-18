@@ -64,7 +64,7 @@ from .cards import (
 )
 from .config import Settings, get_settings
 from .error_ref import error_reference
-from .git_config import PROJECT_RE
+from .git_config import project_is_addressable
 from .git_providers import IssueProvider, build_provider, run_sync
 from .github_sync import IssueRef, sync_enabled
 
@@ -481,7 +481,7 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
     # endpoint takes a project so a one-off pull from a repo the tenant has not
     # configured at all is possible, on the resolved connection.
     target = (project or side.import_project or "").strip()
-    if PROJECT_RE.match(target) is None:
+    if not project_is_addressable(target, side.provider):
         return _result(
             target,
             ok=False,

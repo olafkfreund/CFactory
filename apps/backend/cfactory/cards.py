@@ -1866,7 +1866,11 @@ class CardStore:
             raise CredentialError("credential must not be empty")
         if connection.provider == JIRA:
             # Two parts: sealed together as one structured record (RFC-0022 §7).
-            value = encode_jira_credential(email or "", value)
+            try:
+                value = encode_jira_credential(email or "", value)
+            except CredentialError as exc:
+                # The caller's input is wrong, not the deployment: a 400, not a 503.
+                raise GitConfigError(exc.args[0]) from None
         elif email:
             raise GitConfigError("email is only accepted for a jira connection's credential")
         sealed = seal(

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import threading
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -254,7 +255,7 @@ def test_verify_and_dispatch_use_only_the_code_side(cards, router, tmp_path):
     settings = config.get_settings()
     assert _CODE in (repo_ref(cards, settings, card) or "")
     assert _WORK not in (repo_ref(cards, settings, card) or "")
-    assert "github.com" in (card_clone_url(cards, settings, card) or "")
+    assert urlparse(card_clone_url(cards, settings, card) or "").hostname == "github.com"
 
 
 def _audit(tmp_path):

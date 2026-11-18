@@ -14,6 +14,9 @@ down_revision: str | Sequence[str] | None = "b8d47e1f2a63"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# Alembic reads these by name; listing them keeps CodeQL from flagging them unused.
+__all__ = ["branch_labels", "depends_on", "down_revision", "downgrade", "revision", "upgrade"]
+
 
 def upgrade() -> None:
     with op.batch_alter_table("git_connection") as batch:

@@ -12,9 +12,10 @@ only, so this path is exempt by construction rather than by an added exception
 (see ``tests/test_well_known.py``, which asserts that under an enforced keystore).
 
 The skills list is derived from :data:`cfactory.mcp.MCP_TOOLS` rather than
-restated here: CFactory ships no ``.claude/skills`` of its own, and the MCP tool
-catalog *is* the set of capabilities it actually exposes to agents. Deriving it
-means the manifest cannot drift from the server.
+restated here: CFactory's only ``.claude/skills`` entry is an operator
+runbook, not an agent capability, and the MCP tool catalog *is* the set of
+capabilities it actually exposes to agents. Deriving it means the manifest
+cannot drift from the server.
 
 URLs are relative — a client already knows the origin it fetched this from, and
 emitting an absolute base would mean publishing a hostname we would then have to

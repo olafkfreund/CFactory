@@ -45,9 +45,9 @@ PRs go. `main` is a release branch that only receives promotion merges from
 git log --oneline origin/dev..HEAD
 ```
 
-Only `main` deploys — `deploy.yml` fires on push to `main` and never on `dev`.
-A change merged to `dev` is not live until it is promoted. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+Only `main` deploys — `deploy.yml` fires on push to `main` and never on `dev`
+(a push that only touches `docs/**` or root `*.md` is ignored). A change merged to `dev` is not live until it is promoted. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, and the `cfactory-deploy-runbook` skill for deploy, verify and rollback.
 
 ## Commands
 

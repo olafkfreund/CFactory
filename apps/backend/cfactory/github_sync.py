@@ -75,7 +75,7 @@ from .audit import AuditStore
 from .cards import SYSTEM_ACTOR, Card, CardStore, DuplicateIssueRefError
 from .config import Settings, get_settings
 from .error_ref import error_reference
-from .git_config import PROJECT_PATTERN, GitTarget
+from .git_config import PROJECT_PATTERN, UNRESOLVED_PROVIDER, GitTarget
 from .git_providers import IssueProvider, build_provider, run_sync
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,12 @@ def sync_enabled(target: GitTarget) -> bool:
     catches, so the reason lands on the card, in the log and in the caller's
     ``ok=False``. Loud, which is the requirement.
     """
-    return target.credential.configured or target.credential.installed
+    side = target.work_item_side
+    return (
+        side.credential.configured
+        or side.credential.installed
+        or side.provider == UNRESOLVED_PROVIDER
+    )
 
 
 def _issue_body(card: Card) -> str:
@@ -156,7 +161,7 @@ def _provider(
     project: str, target: GitTarget, transport: httpx.BaseTransport | None
 ) -> IssueProvider:
     """The tenant's configured provider, pointed at *project*."""
-    return build_provider(target, project, transport=transport)
+    return build_provider(target.work_item_side, project, transport=transport)
 
 
 def _open_issue(
@@ -172,14 +177,19 @@ def _open_issue(
     such a label on the way in (``git_config.validate_labels``), so it cannot
     reach here whatever the tenant typed. That rule is provider-independent.
     """
-    project = target.project
+    side = target.work_item_side
+    project = side.project
     if project is None:
+        if target.work_item is not None:
+            raise ValueError(
+                "cannot open an issue: no work-item project is configured for this repository"
+            )
         raise ValueError(
             "cannot open an issue: no project is configured for this tenant — set one "
             "in Settings > Git integration (or set the card's issue_ref to adopt an "
             "existing issue)"
         )
-    labels = list(target.default_labels) or None
+    labels = list(side.default_labels) or None
     issue = run_sync(
         _provider(project, target, transport).create_issue(card.title, _issue_body(card), labels)
     )
@@ -375,6 +385,6 @@ def maybe_sync(  # noqa: PLR0913 — keyword-only seams: which settings, which t
     target = store.git_target_for_card(card, settings, actor=actor, audit=audit)
     if not sync_enabled(target):
         return None
-    if not card.issue_ref and not (card.status == "ready" and target.project):
+    if not card.issue_ref and not (card.status == "ready" and target.work_item_side.project):
         return None
     return sync_card(store, card, settings=settings, transport=transport, actor=actor, audit=audit)

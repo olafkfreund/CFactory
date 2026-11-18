@@ -472,14 +472,15 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
     git = store.git_target_for(
         settings, repository_id=repository_id, project=project, actor=actor, audit=audit
     )
-    if not sync_enabled(git):
+    side = git.work_item_side
+    if not sync_enabled(side):
         return _result(project or "", ok=True, reason="git provider sync not configured")
 
     # The repository's intake project is where a backfill READS from, falling back
     # to its own path (RFC-0020 §3.3). An explicit argument still wins — the import
     # endpoint takes a project so a one-off pull from a repo the tenant has not
     # configured at all is possible, on the resolved connection.
-    target = (project or git.import_project or "").strip()
+    target = (project or side.import_project or "").strip()
     if PROJECT_RE.match(target) is None:
         return _result(
             target,
@@ -499,7 +500,7 @@ def import_issues(  # noqa: PLR0913 — every parameter after `store` is keyword
         # loud by design and must land in this function's documented
         # ``ok=False, reason`` result rather than escaping a never-raises contract
         # the background poll depends on.
-        provider = build_provider(git, target, transport=transport)
+        provider = build_provider(side, target, transport=transport)
         issues = run_sync(provider.fetch_issues(filters))
     except Exception as exc:  # noqa: BLE001 — the never-raises contract, same as
         # github_sync.sync_card: behind the protocol sits third-party provider
@@ -686,7 +687,8 @@ async def poll_once(
     # has no repositories: one pass that resolves against the deployment's
     # environment variables, exactly as before RFC-0020 phase 8.
     targets: list[tuple[int | None, str]] = [
-        (repo.id, _lease_key(repo.intake_project or repo.project)) for repo in repositories
+        (repo.id, _lease_key(repo.intake_project or repo.work_item_project or repo.project))
+        for repo in repositories
     ] or [(None, _lease_key(settings.github_repo))]
 
     results: list[dict[str, Any]] = []

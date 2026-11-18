@@ -55,7 +55,7 @@
 #             that one IS here.
 #   prettier --write
 #             NEVER. `apps/frontend-web/src/index.css` is hand-authored and
-#             outside prettier's scope (CLAUDE.md, CONTRIBUTING.md). The
+#             outside prettier's scope (AGENTS.md, CONTRIBUTING.md). The
 #             `format:check` hook below runs `npm run format:check`, which
 #             checks prettier's four declared files and writes nothing at all.
 #             Do not "improve" this into a formatting hook.

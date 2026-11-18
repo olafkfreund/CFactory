@@ -6,7 +6,7 @@ A quick map of where to go for what.
 |--------------------------------------------|-----------------------------------------------------------------|
 | Ask a question or share an idea            | [Open an issue](https://github.com/olafkfreund/CFactory/issues/new) — this repo does not have GitHub Discussions enabled |
 | Report a bug                               | [Open an issue](https://github.com/olafkfreund/CFactory/issues/new) — there is no bug-report template yet, so describe repro steps directly |
-| Read the docs                              | [`README.md`](README.md), [`guides/`](guides/), [`techdocs/`](techdocs/), [`CLAUDE.md`](CLAUDE.md) |
+| Read the docs                              | [`README.md`](README.md), [`guides/`](guides/), [`techdocs/`](techdocs/), [`AGENTS.md`](AGENTS.md) |
 | Set up the project                         | [CONTRIBUTING.md → Development setup](CONTRIBUTING.md#development-setup) |
 | Understand how a change ships              | [RELEASE.md](RELEASE.md)                                        |
 | Contribute code                            | [CONTRIBUTING.md](CONTRIBUTING.md)                               |

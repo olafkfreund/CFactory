@@ -8,11 +8,21 @@ const PROVIDER_LABEL: Record<string, string> = {
   ollama: "Ollama Cloud",
 };
 
+// Claude ids offered as suggestions; the input stays free text so saved and
+// legacy ids keep working. Newest first, legacy last.
+const CLAUDE_MODELS = [
+  "claude-fable-5-2",
+  "claude-opus-5-5",
+  "claude-sonnet-5-5",
+  "claude-haiku-5-5",
+  "claude-opus-4-8",
+];
+
 // A sensible default model when the user switches provider.
 function defaultModelFor(provider: string, current: CopilotSettings | null): string {
   if (current && current.provider === provider) return current.model;
   if (provider === "ollama") return current?.models?.[0] ?? "gpt-oss:120b";
-  return "claude-opus-4-8";
+  return "claude-opus-5-5";
 }
 
 export default function SettingsView({ reloadSignal }: { reloadSignal: number }) {
@@ -119,13 +129,20 @@ export default function SettingsView({ reloadSignal }: { reloadSignal: number })
               id="set-model"
               className="svc-edit-input mono"
               value={model}
-              list={ollama ? "ollama-models" : undefined}
-              placeholder={ollama ? "gpt-oss:120b" : "claude-opus-4-8"}
+              list={ollama ? "ollama-models" : provider === "claude" ? "claude-models" : undefined}
+              placeholder={ollama ? "gpt-oss:120b" : "claude-opus-5-5"}
               onChange={(e) => {
                 setModel(e.target.value);
                 setSaved(false);
               }}
             />
+            {provider === "claude" && (
+              <datalist id="claude-models">
+                {CLAUDE_MODELS.map((m) => (
+                  <option value={m} key={m} />
+                ))}
+              </datalist>
+            )}
             {ollama && settings?.models && (
               <datalist id="ollama-models">
                 {settings.models.map((m) => (

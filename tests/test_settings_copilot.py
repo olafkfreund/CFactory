@@ -104,3 +104,10 @@ def test_settings_api_rejects_bad_provider(monkeypatch, tmp_path):
     client = TestClient(create_app())
     resp = client.put("/api/settings/copilot", json={"provider": "nope", "model": "x"})
     assert resp.status_code == 400
+
+
+def test_copilot_model_default_is_opus_5_5_and_legacy_id_still_settable(monkeypatch):
+    monkeypatch.delenv("CFACTORY_COPILOT_MODEL", raising=False)
+    assert Settings(_env_file=None).copilot_model == "claude-opus-5-5"
+    monkeypatch.setenv("CFACTORY_COPILOT_MODEL", "claude-opus-4-8")
+    assert Settings(_env_file=None).copilot_model == "claude-opus-4-8"

@@ -72,7 +72,7 @@ deep.
 - **Services** panel — per-service health with **editable upstream endpoints**
   (repoint PFactory/AIFactory/TFactory without a redeploy) ✅
 - Settle the canonical port map end-to-end (port remap) ✅
-- Copilot defaults to **Claude Opus 4.8** ✅
+- Copilot defaults to **Claude Opus 5.5** (was Opus 4.8) ✅
 
 ## Phase 7 — Ship continuously (GitOps) *(shipped ✅)*
 

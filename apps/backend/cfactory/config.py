@@ -229,7 +229,7 @@ class Settings(BaseSettings):
     poll_interval_seconds: float = 3.0
 
     # Agentic copilot (#13). Model id; meaning depends on copilot_provider below.
-    copilot_model: str = "claude-opus-4-8"
+    copilot_model: str = "claude-opus-5-5"
 
     # Copilot LLM provider (#59). "claude" (default; Claude Agent SDK, reads
     # ANTHROPIC_API_KEY) or "ollama"/"openai_compatible" (any OpenAI-compatible

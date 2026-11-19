@@ -47,7 +47,7 @@ Conventions in the tables below:
 | `CFACTORY_LIVE_PROGRESS` | `false` | no | On: poll PFactory/TFactory + subscribe AIFactory progress and broadcast `{type:"progress"}`. Off: no live-progress. |
 | `CFACTORY_POLL_INTERVAL_SECONDS` | `3.0` | no | Live-progress poll interval, seconds. Only relevant when `CFACTORY_LIVE_PROGRESS` is on. |
 | `CFACTORY_STALL_DEADLINE_SECONDS` | `900.0` | no | Idle budget (seconds) before an active, non-terminal stage is flagged stalled. A stalled or stuck item is removed from the board after `CFACTORY_STALLED_PRUNE_HOURS` (default 24) without an update; a running stage is never deleted, however old. Values `<= 0` or unparseable fall back to the default. Read directly in `store.py`. |
-| `CFACTORY_COPILOT_MODEL` | `claude-opus-4-8` | no | Copilot model id; meaning depends on `CFACTORY_COPILOT_PROVIDER`. Editable at runtime from the Settings view. |
+| `CFACTORY_COPILOT_MODEL` | `claude-opus-5-5` | no | Copilot model id; meaning depends on `CFACTORY_COPILOT_PROVIDER`. Editable at runtime from the Settings view. |
 | `CFACTORY_COPILOT_PROVIDER` | `claude` | no | Copilot LLM provider: `claude` (Claude Agent SDK, reads `ANTHROPIC_API_KEY`) or `ollama`/`openai_compatible` (any OpenAI-compatible chat endpoint). |
 | `CFACTORY_OLLAMA_CLOUD_BASE_URL` | `https://ollama.com/v1` | no | OpenAI-compatible copilot base URL (includes `/v1`). Also accepts the bare `OLLAMA_CLOUD_BASE_URL`. Only used when provider is not `claude`. |
 | `CFACTORY_OLLAMA_API_KEY` | _(unset)_ | if provider is ollama | Bearer key for the OpenAI-compatible copilot endpoint. Also accepts the bare `OLLAMA_API_KEY` (shared factory secret). Server-side only. |

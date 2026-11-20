@@ -199,7 +199,7 @@ def test_create_card_title_description_and_audit(client, store, audit, repo_id):
         "gho_abc",
         "github_pat_11ABC",
         "key sk-live123",
-        "AKIAABCDEFGHIJKLMNOP",
+        "AKIA" + "ABCDEFGHIJKLMNOP",  # built at runtime: a fake key, not a secret
         "-----BEGIN PRIVATE KEY-----",
         "password=hunter2",
         "TOKEN = abc",

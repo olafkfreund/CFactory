@@ -395,7 +395,7 @@ export function CardBody({
             <span
               key={s}
               className={`card-chip card-stage-chip card-stage-chip--${run.status}`}
-              title={run.detail ? `${s}: ${run.status} (${run.detail})` : `${s}: ${run.status}`}
+              title={typeof run.detail === "string" && run.detail ? `${s}: ${run.status} (${run.detail})` : `${s}: ${run.status}`}
             >
               {s} · {run.status}
             </span>

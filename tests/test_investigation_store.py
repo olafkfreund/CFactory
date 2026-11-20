@@ -114,7 +114,8 @@ def test_migration_adds_both_columns_with_one_head(tmp_path):
 
 def test_include_deleted(store):
     inv = _investigation(store, _repo(store))
-    assert store.delete(inv.card_key)
+    deleted = store.delete(inv.card_key)
+    assert deleted
     assert store.get(inv.card_key) is None
     assert store.get(inv.card_key, include_deleted=True).is_investigation
 

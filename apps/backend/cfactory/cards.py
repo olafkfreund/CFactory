@@ -792,7 +792,7 @@ class CardStore:
         """
         return self._tenant or DEFAULT_TENANT
 
-    def _select(self, *, include_deleted: bool = False) -> Select[tuple[CardRow]]:
+    def _select(self, *, include_deleted: bool = False) -> Select[Any]:
         """Base SELECT honouring the tenant scope (no filter when unscoped).
 
         Soft-deleted cards are invisible by default — a deleted card is off the

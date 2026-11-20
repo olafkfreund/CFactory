@@ -121,7 +121,8 @@ def test_dev_open_never_authorizes_investigation_writes(env, monkeypatch):
 
 
 def test_legacy_secret_accepts_write(env, monkeypatch):
-    client, _, _, repo_id = TestClient(env[0]), *env[1:]
+    client = TestClient(env[0])
+    repo_id = env[3]
     monkeypatch.setenv("CFACTORY_MCP_SECRET", _LEGACY_TOKEN)
     config.reset_settings()
     _, payload = _call(

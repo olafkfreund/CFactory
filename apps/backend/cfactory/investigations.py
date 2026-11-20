@@ -441,6 +441,18 @@ def _owned(store: CardStore, key: str, run_id: str | None = None) -> dict[str, A
     return result
 
 
+def _owned_run_id(store: CardStore, key: str, run_id: str) -> str:
+    """The run id as stored on the card, after ownership is proven.
+
+    Upstream URLs are built from this stored value, never from the caller's path
+    parameter, so nothing the caller supplies reaches AIFactory's URL.
+    """
+    stored = _detail(_owned(store, key, run_id)).get("run_id")
+    if not isinstance(stored, str) or not stored:
+        raise InvestigationError(404, "investigation_not_found")
+    return stored
+
+
 def _state(store: CardStore, key: str, run_id: str, body: dict[str, Any]) -> None:
     with store.locked_investigation(key, DEFAULT_TENANT) as (session, row):
         if row is None:
@@ -471,7 +483,7 @@ def get_run(
     run_id: str,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    _owned(store, key, run_id)
+    run_id = _owned_run_id(store, key, run_id)
     status, body = _aifactory(
         settings, "GET", f"/api/investigations/{quote(run_id, safe='')}", transport=transport
     )
@@ -491,7 +503,7 @@ def logs(  # noqa: PLR0913 — relay query and transport
     limit: int = 100,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    _owned(store, key, run_id)
+    run_id = _owned_run_id(store, key, run_id)
     status, body = _aifactory(
         settings,
         "GET",
@@ -511,7 +523,7 @@ def lease(  # noqa: PLR0913 — shared REST/MCP operation
 ) -> dict[str, Any]:
     audit_status = 404
     try:
-        _owned(store, key, run_id)
+        run_id = _owned_run_id(store, key, run_id)
         status, body = _aifactory(
             settings,
             "POST",
@@ -548,7 +560,7 @@ def stop(  # noqa: PLR0913 — shared REST/MCP operation
 ) -> dict[str, Any]:
     audit_status = 404
     try:
-        _owned(store, key, run_id)
+        run_id = _owned_run_id(store, key, run_id)
         status, body = _aifactory(
             settings,
             "POST",

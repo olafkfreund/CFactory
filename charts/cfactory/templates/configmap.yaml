@@ -23,6 +23,7 @@ data:
   CFACTORY_IMPORT_POLL_GAP_SECONDS: {{ .Values.config.importPollGapSeconds | quote }}
   CFACTORY_IMPORT_COMMENTS: {{ .Values.config.importComments | quote }}
   CFACTORY_IMPORT_COMMENT_BACKFILL_MAX: {{ .Values.config.importCommentBackfillMax | quote }}
+  CFACTORY_INVESTIGATIONS: {{ .Values.config.investigations | quote }}
   {{- with .Values.config.publicApiUrl }}
   CFACTORY_PUBLIC_API_URL: {{ . | quote }}
   {{- end }}

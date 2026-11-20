@@ -31,6 +31,7 @@ from . import card_ops
 from .api_deps import action_transport_dep, audit_dep, cards_store_dep
 from .audit import AuditStore
 from .auth import require_scope
+from .card_intake import InvestigationCardError
 from .card_ops import AuditContext, CardNotFoundError, StageRefusedError, UnknownStageError
 from .cards import (
     Card,
@@ -71,6 +72,10 @@ def _stage_action(
         return card_ops.run_card_stage(store, ctx, card_key, stage, transport=transport)
     except CardNotFoundError:
         raise _not_found(card_key) from None
+    except InvestigationCardError:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT, detail={"reason": "investigation_card"}
+        ) from None
     except StageRefusedError as exc:
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
@@ -267,6 +272,10 @@ def update_card(  # noqa: PLR0913 — a FastAPI signature IS the DI surface; the
         )
     except CardNotFoundError:
         raise _not_found(card_key) from None
+    except InvestigationCardError:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT, detail={"reason": "investigation_card"}
+        ) from None
     except DuplicateIssueRefError as exc:
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
@@ -301,6 +310,10 @@ def sync_card_github(
         )
     except CardNotFoundError:
         raise _not_found(card_key) from None
+    except InvestigationCardError:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT, detail={"reason": "investigation_card"}
+        ) from None
 
 
 @dataclass

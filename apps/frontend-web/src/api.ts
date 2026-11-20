@@ -1570,6 +1570,25 @@ export const StageRunSchema = z
   .loose();
 export type StageRun = z.infer<typeof StageRunSchema>;
 
+const InvestigationRunSchema = z
+  .object({
+    status: z.string(),
+    detail: z.record(z.string(), z.unknown()),
+  })
+  .loose();
+
+const StageRunsSchema = z
+  .record(z.string(), z.union([StageRunSchema, InvestigationRunSchema]))
+  .superRefine((runs, ctx) => {
+    for (const [key, run] of Object.entries(runs)) {
+      const result = (key === "investigate" ? InvestigationRunSchema : StageRunSchema).safeParse(
+        run,
+      );
+      if (!result.success)
+        ctx.addIssue({ code: "custom", path: [key], message: "Invalid stage run" });
+    }
+  });
+
 export const CardSchema = z
   .object({
     card_key: z.string(),
@@ -1623,7 +1642,7 @@ export const CardSchema = z
     // stage. Widening the wire type costs nothing here because every reader
     // already narrows: CardParts filters by CARD_STAGES and cards.ts indexes by
     // it, so an unknown key is ignored rather than drawn.
-    stage_runs: z.record(z.string(), StageRunSchema).default({}),
+    stage_runs: StageRunsSchema.default({}),
     // The imported issue DISCUSSION, as two scalars (Factory#375). The bodies are
     // a separate GET — 46 cards each carrying a full thread is a payload nobody
     // asked for, and the thread renders collapsed anyway. `comments_synced_at`

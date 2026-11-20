@@ -104,6 +104,7 @@ the table gives the effect of each state.
 | `CFACTORY_MCP_DEV_OPEN` | `false` | no | Explicit local-dev opt-in reopening `/mcp` when NO credential is configured; unconfigured otherwise DENIES (#302). Never set in a hosted deploy. | `config.py` `mcp_dev_open` | env only — **no Helm knob** (add via `config.extraEnv`) |
 | `CFACTORY_PUBLIC_API_URL` | `None` | no | Public base URL of the token-gated API shown on `/settings/token` for editor/external clients. Display only. | `config.py` `public_api_url` | env / Helm `config.publicApiUrl` |
 | `CFACTORY_MULTI_TENANT` | `false` | no | On: resolve tenant per request from the `X-Tenant-Id` header (hosted). Off: single `default` tenant. Per-tenant data scoping still deferred. | `config.py` `multi_tenant` | env / Helm `config.multiTenant` |
+| `CFACTORY_INVESTIGATIONS` | `off` | no | Read-only investigations through AIFactory (#561): `off` (no routes or MCP tools; direct tool calls return unknown tool), `on` (routes and tools enabled; writes require a non-open `write` key and single-tenant mode), `drain` (card create and dispatch return 503 `investigations_draining` and are hidden from `tools/list`; lease, stop, recovery and reads continue). | `config.py` `investigations` | env / Helm `config.investigations` |
 | `CFACTORY_AUDIT_HMAC_SECRET` | dev secret (`dev-insecure-...`) | in hosted | HMAC secret anchoring the tamper-evident audit chain (#21). MUST be overridden in any hosted/shared deploy (API keys or multi-tenant set) — the default is a clearly-labelled dev value and startup hard-warns if left in place. | `config.py` `audit_hmac_secret` | env / Helm `config.extraEnv` (Secret) |
 
 External secret (read by the Claude Agent SDK, not by CFactory code, when
@@ -168,7 +169,7 @@ Set these to real values in any hosted/shared deployment (never commit them):
 
 Every environment variable read anywhere in the codebase is accounted for above.
 
-**Backend** — 23 `CFACTORY_*` names (22 `Settings` fields + `CFACTORY_STALL_DEADLINE_SECONDS`
+**Backend** — 24 `CFACTORY_*` names (23 `Settings` fields + `CFACTORY_STALL_DEADLINE_SECONDS`
 in `store.py`), 2 bare-name aliases (`OLLAMA_CLOUD_BASE_URL`, `OLLAMA_API_KEY`),
 1 external SDK secret (`ANTHROPIC_API_KEY`), 2 frontend-container runtime env
 (`BACKEND_URL`, `CFACTORY_API_KEY`). Found = documented; 0 unaccounted.

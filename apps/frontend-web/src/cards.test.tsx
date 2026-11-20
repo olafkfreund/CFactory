@@ -138,6 +138,14 @@ describe("CardSchema (HTTP boundary)", () => {
     expect(() => CardSchema.parse({ ...CARD, status: "archived" })).toThrow();
   });
 
+  it("parses investigation cards in a list while rejecting invalid work stages", async () => {
+    stubFetch(() => json({ cards: [{ ...CARD, stage_runs: { investigate: {
+      service: "aifactory", status: "completing", detail: { run_id: "run-1", pods_gone: false },
+    } } }] }));
+    expect((await fetchCards())[0]?.stage_runs.investigate?.status).toBe("completing");
+    expect(() => CardSchema.parse({ ...CARD, stage_runs: { code: { status: "completing" } } })).toThrow();
+  });
+
   it("rejects a card missing a required field", () => {
     expect(() => CardSchema.parse({ ...CARD, priority: undefined })).toThrow();
   });

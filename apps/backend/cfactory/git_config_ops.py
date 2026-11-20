@@ -14,6 +14,7 @@ needs a provider, and a provider needs the config.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -672,8 +673,22 @@ def update_git_repository(
     store: CardStore, ctx: AuditContext, repository_id: int, body: GitRepositoryUpdate
 ) -> dict[str, Any]:
     """Patch a repository, and audit it."""
-    row = store.update_repository(repository_id, body)
+    previous: dict[str, Any] = {}
+    row = store.update_repository(repository_id, body, previous=previous)
     _record(ctx, store, kind="update_git_repository", ok=True, resource="git-repository")
+    if "investigate_test_command" in body.model_fields_set:
+        # Hashes only: the command text never enters the audit chain.
+        old = hashlib.sha256((previous.get("investigate_test_command") or "").encode()).hexdigest()
+        new = hashlib.sha256((row.investigate_test_command or "").encode()).hexdigest()
+        ctx.audit.record(
+            actor=ctx.actor,
+            kind="set_investigate_test_command",
+            correlation_key=f"repo:{repository_id}",
+            target_service=_TARGET,
+            endpoint=f"repo/{repository_id}:old={old};new={new}",
+            status_code=int(HTTPStatus.OK),
+            ok=True,
+        )
     return repository_view(row).model_dump(mode="json")
 
 

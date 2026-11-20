@@ -59,6 +59,11 @@ from .status_taxonomy import is_done, is_failure_or_stuck
 logger = logging.getLogger(__name__)
 _MAX_KEY_LEN = 128  # work_items.correlation_key column width
 
+
+class InvestigationCardError(ValueError):
+    reason = "investigation_card"
+
+
 # The three intake doors. plan/code are verified against the fleet's own driver
 # docs (Factory docs/benchmarks/pipeline-driver-design.md, "Intake: three
 # doors"): ``from-issue`` accepts a pre-fetched ``payload`` so no GitHub issue is
@@ -617,6 +622,8 @@ def dispatch_card(
     to key off ``correlation_key``; that could not survive a multi-stage sequence,
     since planning sets the key and every later stage would then no-op.)
     """
+    if card.is_investigation:
+        return {"dispatched": False, "ok": False, "reason": InvestigationCardError.reason}
     settings = settings or get_settings()
     stage = default_stage(card)
     if stage_status(card, stage) in (DISPATCHED, DONE):
@@ -660,6 +667,8 @@ def maybe_dispatch(
     A ready card with no tier is a legitimate board state (queued for triage), so
     it is left alone — ``None`` means "not an intake event".
     """
+    if card.is_investigation:
+        return None
     if card.status != "ready" or not card.tier:
         return None
     return dispatch_card(store, card, settings=settings, transport=transport)
@@ -673,12 +682,14 @@ def dispatch_stage(
     settings: Settings | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """Send a card into ONE named stage, overriding tier routing. Never raises.
+    """Send a card into ONE named stage, overriding tier routing.
 
     Refuses (``ok=False`` with a ``refused`` code) rather than dispatching into
     nothing; no-ops with a reason on a stage already recorded complete, exactly as
     :func:`maybe_dispatch` no-ops on an already-dispatched card.
     """
+    if card.is_investigation:
+        raise InvestigationCardError(InvestigationCardError.reason)
     settings = settings or get_settings()
     if stage_status(card, stage) == DONE:
         return {
@@ -725,6 +736,8 @@ def start_sequence(
     payload. Stages already recorded complete are SKIPPED rather than re-run, so
     ``run`` resumes a part-finished card instead of restarting it.
     """
+    if card.is_investigation:
+        raise InvestigationCardError(InvestigationCardError.reason)
     settings = settings or get_settings()
     if not card.tier:
         return _refused(_no_tier(card), SEQUENCE[0])
@@ -854,7 +867,7 @@ def apply_status(
     GitHub-issue case) and nothing changed.
     """
     card = cards.get_by_correlation_key(item.correlation_key)
-    if card is None:
+    if card is None or card.is_investigation:
         return None
     settled = _settle(cards, card, item)
     advanced = _advance(

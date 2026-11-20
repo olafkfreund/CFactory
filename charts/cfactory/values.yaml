@@ -154,6 +154,12 @@ config:
   # fills in over consecutive passes instead of firing 200 requests in one tick.
   importComments: true
   importCommentBackfillMax: 25
+  # Read-only investigations through AIFactory (#561): "off" | "on" | "drain".
+  # "off" (default): no routes or MCP tools are mounted. "on": routes and tools
+  # enabled (single-tenant only; writes require a configured write key and refuse
+  # dev-open). "drain": card creation and dispatch return 503 while lease, stop,
+  # recovery and reads stay active. Rollback order: on -> drain -> off.
+  investigations: "off"
   # Extra free-form CFACTORY_* (or other) env vars, e.g.
   #   - name: ANTHROPIC_API_KEY
   #     valueFrom: { secretKeyRef: { name: cfactory-llm, key: anthropic-key } }

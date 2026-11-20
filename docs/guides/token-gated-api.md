@@ -236,6 +236,40 @@ reachable only through the proxy — perimeter work, tracked in Factory#312.
 
 ---
 
+## Read-only investigations (`CFACTORY_INVESTIGATIONS`)
+
+Read-only investigations (#561) dispatch bounded investigation runs to AIFactory
+over REST (`/api/investigations/context`, `/api/investigations/cards`,
+`/api/cards/{key}/actions/investigate`, `/api/cards/{key}/investigate`, and
+`/api/cards/{key}/investigate/{run_id}[/logs|/lease|/stop]`) and MCP
+(`cfactory_investigation_context`, `cfactory_create_investigation_card`,
+`cfactory_investigate_card`, `cfactory_investigation_lease`,
+`cfactory_investigation_stop`, `cfactory_investigation_get`,
+`cfactory_investigation_logs`, `cfactory_investigation_recover`). The feature is
+controlled by `CFACTORY_INVESTIGATIONS` (Helm `config.investigations`), which
+defaults to `off` (`off` | `on` | `drain`).
+
+- **Write key required, dev-open refused:** every investigation write (card
+  creation, dispatch, lease, stop) requires the `write` scope backed by a
+  configured key store (`CFACTORY_API_KEYS`, or `CFACTORY_MCP_SECRET` on MCP).
+  Requests admitted only via `CFACTORY_API_DEV_OPEN=true` or
+  `CFACTORY_MCP_DEV_OPEN=true` are refused with 403 `keys_required`. Reads
+  require the `read` scope.
+- **Single-tenant only:** when `CFACTORY_MULTI_TENANT=true`, every investigation
+  route and MCP tool refuses with 409 `multi_tenant_unsupported`.
+- **Rollback order (`on` -> `drain` -> `off`):**
+  1. Switch `CFACTORY_INVESTIGATIONS` from `on` to `drain`. Card creation and
+     dispatch immediately refuse with 503 `investigations_draining` and are
+     hidden from MCP `tools/list`, while lease, stop, recovery and status/log
+     reads continue to work.
+  2. Wait until every investigation card with a recorded `run_id` reports
+     `pods_gone: true` and AIFactory shows no live run for the investigated
+     projects.
+  3. Switch `CFACTORY_INVESTIGATIONS` to `off` to unmount the routes and hide
+     all investigation tools.
+
+---
+
 ## Reference
 
 **Endpoints**
@@ -248,6 +282,7 @@ reachable only through the proxy — perimeter work, tracked in Factory#312.
 - `CFACTORY_PUBLIC_API_URL` — shown on `/settings/token` as the editor API URL.
 - `CFACTORY_OIDC_ISSUER` / `CFACTORY_OIDC_AUDIENCE` — who the audit trail names
   (above). Both unset = `unattributed:key-<digest>`.
+- `CFACTORY_INVESTIGATIONS` (Helm `config.investigations`) — `off` (default) | `on` | `drain`; gates investigation routes and MCP tools (requires real write keys, refuses dev-open, single-tenant only; rollback `on` -> `drain` -> `off`).
 
 **Extension settings**
 - `factory.cfactoryUrl` — the API base URL (the direct-to-backend host).

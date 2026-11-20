@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 561
 spec: spec/2026-11-20-561-investigate-card-action.md
 coders:

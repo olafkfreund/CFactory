@@ -13,52 +13,83 @@ Needed by olafkfreund/RFactory#18, whose plan is approved. It depends on olafkfr
 In a call, RFactory can only talk. #18 lets a meeting approve a **read-only investigation**: Claude reads a repository at a pinned commit, may run the project's tests in an isolated pod, and reports back. AIFactory now has the run kind. RFactory, however, reaches the factories only through CFactory, and CFactory has no way to dispatch one:
 
 - **No action.** Cards dispatch `plan`, `code`, `test` and `run`, and nothing else.
-- **No safe card to hang it on.** A card with no tier is idle only until someone gives it a tier. Then CFactory's intake hook (`card_intake.maybe_dispatch`) builds it as ordinary work, and the explicit stage actions work on it too. A `ready` card also opens a GitHub issue by itself (`github_sync.maybe_sync`), which would publish what was said in the meeting.
-- **No test command.** Nothing in CFactory records a project's test command. AIFactory's design takes the command from CFactory, and RFactory's approval text shows it to the meeting. It has to come from configuration, never from speech.
+- **No safe card to hang it on.** A card with no tier is idle only until something gives it work. Every one of these paths can turn it into ordinary work or publish it:
+  - **Intake:** `card_intake.maybe_dispatch` builds a `ready` card once it has a tier.
+  - **Stage actions:** `actions/plan|code|test` call `dispatch_stage`. `actions/run` writes queued stages into `stage_runs` *before* dispatching (`card_intake.start_sequence`).
+  - **Completion events:** `apply_status` rewrites the status and starts the next queued stage of any card whose `correlation_key` matches.
+  - **GitHub:**
+    - `maybe_sync` opens an issue when a card reaches `ready`, and resyncs on any write once `issue_ref` is set;
+    - `POST /sync-github` calls `sync_card` directly, bypassing `maybe_sync`.
+
+    Either would publish what was said in the meeting.
+- **No commit or test command to pin.** CFactory has no way to read a repository's default-branch commit, and nothing in it records a test command. AIFactory's design takes the command from CFactory, and RFactory's approval text shows the commit and the command to the meeting. Both must come from CFactory, never from speech.
 - **No way to follow a run.** RFactory needs to read the run's state, logs and report, renew its lease every 10 s, and stop it. AIFactory exposes these per run (`/api/investigations/{id}`, `/logs?after=`, `/lease`, `/stop`). CFactory relays none of them.
+- **CFactory is the only scope boundary.** CFactory calls AIFactory with its own credential, which is a member of the intake project. AIFactory cannot tell one CFactory tenant or key from another, so CFactory alone must stop:
+  - a read key from starting or extending a run;
+  - one tenant from touching another tenant's run.
 
 ## Proposed outcome
 
-With the switch on, RFactory can do all of this through CFactory, with the write key for writes and the read key for reads:
+With the switch on, RFactory can do all of this through CFactory. Every operation is on both REST and MCP, writes need the write key, and reads need the read key:
 
-1. **Create an investigation card** that can never start plan, code or test work, and never opens or syncs a GitHub issue.
-2. **Read the project's configured test command** (or "none configured") and the default-branch commit, to show in the approval text.
-3. **Dispatch the investigation:** `request`, `sha` and the approved `test_command`. CFactory checks, in one step with the run's creation:
+1. **Create an investigation card** for one repository. The card can never start plan, code or test work, and never opens, adopts or syncs a GitHub issue.
+2. **Read, for that repository:**
+   - its default-branch commit;
+   - its configured test command, or "none configured" (`null`).
+3. **Dispatch the investigation:** `request`, `sha`, the approved `test_command` (a string or `null`) and `limits`. Before creating the run, the dispatch call checks again itself, without trusting what was read at proposal time:
+   - that the repository, and its AIFactory project, are still the card's;
    - that `sha` is on the repository's default branch;
-   - that the approved test command equals the configured one at that moment.
+   - that the approved command equals the configured one. A `null` matches only "none configured", which starts an investigation with no tests.
 
-   If either fails, nothing starts. Otherwise CFactory creates the AIFactory run, records stage `investigate` with the run id on the card, and returns `{ run_id }`.
-4. **Renew the lease and stop the run**, both relayed to AIFactory.
-5. **Read the run's state** (including `pods_gone`), its logs by cursor, and its report.
+   If any check fails, nothing starts. Otherwise CFactory creates the AIFactory run, records stage `investigate` with the run id on the card, and returns `{ run_id }`.
+4. **Renew the lease and stop the run.** CFactory relays both after checking that the run belongs to the caller's tenant and card.
+5. **Read the run** after the same ownership check:
+   - its state, including whether its pods are gone;
+   - its logs, by cursor;
+   - its report.
+6. **Recover by card.** If RFactory lost the start response, it can still find, stop and follow the run through the card key, even after the card is deleted, until its pods are confirmed gone.
 
-With the switch off, the action, the relays and the MCP tool do not exist, and nothing else in CFactory changes.
+With the switch off, none of these exist, and nothing else in CFactory changes. Cards already created stay inert.
 
 ## Affected users and systems
 
 - **CFactory:**
-  - the card model and its write paths (intake hook, stage actions, GitHub sync);
+  - the card model and every write path above: intake, stage actions, sequences, completion events, GitHub sync, create and update;
   - `routes_cards.py` and the MCP tools (`mcp.py`);
   - the AIFactory client;
-  - repository or project configuration, which gains a test command;
+  - the git providers, for a default-branch lookup;
+  - repository configuration, which gains a test command;
   - `openapi.yaml`;
+  - the planning-card schema check (`scripts/check_planning_card_conformance.py`, Factory#554), if the card gains a field;
   - the Helm chart and the factory-gitops manifests for the switch.
-- **AIFactory:** called through its investigation API, not changed. AIFactory authorizes each call against the run's project, and creating a run needs `member`. CFactory's AIFactory credential must therefore be a member of the repository's intake project.
-- **RFactory:** the consumer. Its plan step 3 records any difference from the shapes defined here as a deviation.
-- **People:** whoever sets a project's test command, since that command runs in a test pod when a meeting asks for tests.
+- **AIFactory:** called through its investigation API, not changed. Creating a run needs `member` on the run's project, so CFactory's AIFactory credential must be a member of each repository's intake project.
+- **RFactory:** the consumer. Its plan step 3 records any difference from the shapes defined here as a deviation. One is already known: it expects `pod_gone`, and AIFactory returns `pods_gone`.
+- **People:** whoever sets a repository's test command, since that command runs in a test pod when a meeting asks for tests.
 
 ## Constraints
 
-- **Off by default** behind a switch; with it off, CFactory behaves exactly as today.
-- **The investigation card is inert:**
-  - setting a tier on it, or moving it to `ready`, must never dispatch it;
-  - the stage actions refuse it;
-  - it never creates, adopts or syncs a GitHub issue.
-- **Configuration only:** the test command comes from CFactory configuration, never from the request. A mismatch with the approved command refuses the dispatch, with no fallback.
-- **One check, one creation:** the commit check, the command check and the run's creation happen in one step. A configuration change between the approval and the dispatch starts nothing.
-- **Key scopes:** writes (create, dispatch, lease, stop) need the write key; reads need the read key. A read key can never start or extend a run.
-- **The caller's limits** are passed to AIFactory, which bounds them per kind. CFactory may refuse anything above AIFactory's caps but must never raise them.
-- **No secrets** in card fields, the audit log or relayed logs. AIFactory scrubs logs before storing them; CFactory relays them as they are.
-- **The existing actions** (`plan`, `code`, `test`, `run`), tier routing and GitHub sync for every other card are unchanged.
+- **The switch:** off by default; with it off, CFactory behaves exactly as today.
+- **The investigation card is inert, on every path:**
+  - it is an investigation for its whole life, and no update turns it into an ordinary card or back;
+  - it never gets a tier, `issue_ref` or `correlation_key`;
+  - intake, the stage actions, `run` and completion events refuse it before writing anything;
+  - `sync-github` refuses it before any provider call;
+  - `investigate` is refused on an ordinary card.
+- **Configuration only:**
+  - the commit is checked against the default branch;
+  - the test command comes from repository configuration, never from the request;
+  - setting or changing that command needs the write key and is audited;
+  - any mismatch refuses the dispatch, with no fallback.
+- **Checked at dispatch:** the checks run inside the dispatch call, immediately before the run is created, and refuse if anything changed since approval. A configuration change after the meeting's approval starts nothing. (These are calls to the git provider and to AIFactory, so they can't be one transaction. "One step" means one call that trusts nothing read earlier.)
+- **Key scopes:**
+  - creating a card, dispatching, renewing the lease and stopping need the write key, on REST and MCP alike;
+  - a read key can never start or extend a run;
+  - these writes are refused when no keys are configured, even in dev-open mode;
+  - all four are audited.
+- **Ownership:** every relayed call resolves the run through the caller's tenant and card before using CFactory's AIFactory credential. A run id alone is never enough.
+- **Limits:** passed to AIFactory, which bounds them per kind. CFactory may refuse anything above AIFactory's caps but never raises them.
+- **No secrets:** none in card fields, the audit log or relayed logs. AIFactory scrubs logs before storing them. What the meeting said (the request, the card title) is stored on the card and in the audit log and goes nowhere else.
+- **Other cards unchanged:** the existing actions, tier routing and GitHub sync for every other card behave as today.
 - **Workflow:** the artifact workflow applies, and agents that are started never stage, commit, push or deploy.
 
 ## Open questions
@@ -67,12 +98,24 @@ With the switch off, the action, the relays and the MCP tool do not exist, and n
    - per git repository, next to `intake_project`;
    - in a new project setting.
 
-   *Recommendation:* per repository, because the investigation is already scoped to one repository.
-2. **How the card is made inert:**
-   - a new card field (for example `kind: investigation`) that every write path respects;
+   *Recommendation:* per repository, because the investigation is already pinned to one repository.
+2. **How the card is made inert.** Options:
+   - a card field, for example `kind: investigation`, that every write path checks;
    - a separate investigation record that is not a card.
 
-   *Recommendation:* a card field. #18 already plans "Investigate: <request>" cards, and the board then shows them like any other card.
-3. **Showing the run on the board.** Should the card show the run's state and the report summary, or only the run id and state, leaving logs and the report to RFactory's page? *Recommendation:* state and run id only for now.
-4. **The read side:** relay AIFactory's responses as they are, or define CFactory's own shapes? *Recommendation:* relay as they are, with `pods_gone` and the cursor unchanged, so RFactory's plan step 3 maps one to one.
-5. **The switch name:** for example `CFACTORY_INVESTIGATIONS=off|on`. Should it also have AIFactory's `drain` (refuse new dispatches, keep stop, lease and reads)? *Recommendation:* yes, for the same rollback reason as AIFactory's deviation 12.
+   *Recommendation:* a card field. #18 already plans "Investigate: <request>" cards, so they show on the board like any other card. It is set at creation, never changes, and every path above refuses it (an allow-list, not a growing deny-list). The cost is updating the planning-card schema check.
+3. **"On the default branch".** Options:
+   - the branch's current head;
+   - any commit reachable from it.
+
+   *Recommendation:* reachable from it, read through the repository's git provider. A commit that lands between the proposal and the approval then does not refuse a run of the approved commit.
+4. **What the board shows:** the run's state and the report summary, or only the run id and state, with logs and the report on RFactory's page? *Recommendation:* run id and state only for now.
+5. **The read side.** Options:
+   - relay AIFactory's responses as they are;
+   - define CFactory's own shapes.
+
+   *Recommendation:* relay them as they are, field for field, minus anything internal. RFactory's plan then records its one rename (`pod_gone` → `pods_gone`) as a deviation.
+6. **The switch.** Should `CFACTORY_INVESTIGATIONS=off|on` also have AIFactory's `drain`? *Recommendation:* yes.
+   - `drain` refuses new investigation cards and new dispatches.
+   - It removes `cfactory_investigate_card` from the MCP tool list, so RFactory's `investigateAvailable()` turns false.
+   - It keeps lease, stop, recovery and reads.

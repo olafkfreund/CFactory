@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 561
 intent: intent/2026-11-20-561-investigate-card-action.md
 ---

@@ -224,6 +224,11 @@ The hub conformance gate (`Factory/scripts/check_planning_card_conformance.py`) 
    - **Refusals** are HTTP errors with `detail={"reason": ...}`.
    - **`_repository`** also refuses with 404 `no_repository` when the repository's connection is gone or its tenant is not `default`.
    - **Empty repositories:** card creation reads the default-branch head, so an empty repository or a failing provider refuses creation as well. That follows from "the same repository refusals apply".
+6. **Step 5 (Codex): three small departures.**
+   - **An empty repository** at dispatch refuses with `sha_not_on_default_branch`: no commit can be on a branch that has none.
+   - **An AIFactory refusal** returns 409 with reason `upstream_refused` and AIFactory's `detail`.
+   - **`_aifactory`** takes `Settings` explicitly.
+   - **Not tested on PostgreSQL:** the concurrency test ran on SQLite only, because CI has no PostgreSQL job. Recorded for the PR.
 
 ## Steps
 

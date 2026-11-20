@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from http import HTTPStatus
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,8 +22,10 @@ from .enterprise import identity_dep
 router = APIRouter(tags=["investigations"])
 
 
-def _refuse(status: int, reason: str) -> HTTPException:
-    return HTTPException(status_code=status, detail={"reason": reason})
+def _refuse(status: int, reason: str, detail: Any = None) -> HTTPException:
+    return HTTPException(
+        status_code=status, detail=detail if detail is not None else {"reason": reason}
+    )
 
 
 def _tenancy() -> None:
@@ -57,6 +59,15 @@ class CreateInvestigationCard(BaseModel):
 
     request: str = Field(min_length=1, max_length=investigations.REQUEST_MAX)
     repository_id: int
+
+
+class DispatchInvestigation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request: str
+    sha: str
+    test_command: str | None
+    limits: dict[str, Any] | None = None
 
 
 @router.get("/api/investigations/context", dependencies=[Depends(investigation_read)])
@@ -95,6 +106,115 @@ def create_investigation_card(
             body.request,
             body.repository_id,
             transport,
+        )
+    except investigations.InvestigationError as exc:
+        raise _refuse(exc.status, exc.reason) from None
+
+
+@router.post(
+    "/api/cards/{key}/actions/investigate", dependencies=[Depends(investigation_write("dispatch"))]
+)
+def dispatch_investigation(  # noqa: PLR0913 — FastAPI dependencies
+    key: str,
+    body: DispatchInvestigation,
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, str]:
+    try:
+        return investigations.dispatch(
+            store,
+            AuditContext(audit, actor),
+            get_settings(),
+            key,
+            body.request,
+            body.sha,
+            body.test_command,
+            body.limits,
+            transport,
+        )
+    except investigations.InvestigationError as exc:
+        raise _refuse(exc.status, exc.reason, exc.detail) from None
+
+
+@router.get("/api/cards/{key}/investigate", dependencies=[Depends(investigation_read)])
+def recover_investigation(
+    key: str, store: Annotated[CardStore, Depends(cards_store_dep)]
+) -> dict[str, Any]:
+    try:
+        return investigations.recover(store, key)
+    except investigations.InvestigationError as exc:
+        raise _refuse(exc.status, exc.reason) from None
+
+
+@router.get("/api/cards/{key}/investigate/{run_id}", dependencies=[Depends(investigation_read)])
+def get_investigation(
+    key: str,
+    run_id: str,
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
+) -> dict[str, Any]:
+    try:
+        return investigations.get_run(store, get_settings(), key, run_id, transport)
+    except investigations.InvestigationError as exc:
+        raise _refuse(exc.status, exc.reason) from None
+
+
+@router.get(
+    "/api/cards/{key}/investigate/{run_id}/logs", dependencies=[Depends(investigation_read)]
+)
+def investigation_logs(  # noqa: PLR0913 — FastAPI dependencies
+    key: str,
+    run_id: str,
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
+    after: int = 0,
+    limit: int = 100,
+) -> dict[str, Any]:
+    if after < 0 or not 1 <= limit <= 500:  # noqa: PLR2004 — upstream limit
+        raise _refuse(422, "invalid_cursor")
+    try:
+        return investigations.logs(store, get_settings(), key, run_id, after, limit, transport)
+    except investigations.InvestigationError as exc:
+        raise _refuse(exc.status, exc.reason) from None
+
+
+@router.post(
+    "/api/cards/{key}/investigate/{run_id}/lease",
+    dependencies=[Depends(investigation_write("lease"))],
+)
+def lease_investigation(  # noqa: PLR0913 — FastAPI dependencies
+    key: str,
+    run_id: str,
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, Any]:
+    try:
+        return investigations.lease(
+            store, AuditContext(audit, actor), get_settings(), key, run_id, transport
+        )
+    except investigations.InvestigationError as exc:
+        raise _refuse(exc.status, exc.reason) from None
+
+
+@router.post(
+    "/api/cards/{key}/investigate/{run_id}/stop",
+    dependencies=[Depends(investigation_write("stop"))],
+)
+def stop_investigation(  # noqa: PLR0913 — FastAPI dependencies
+    key: str,
+    run_id: str,
+    store: Annotated[CardStore, Depends(cards_store_dep)],
+    audit: Annotated[AuditStore, Depends(audit_dep)],
+    transport: Annotated[httpx.BaseTransport | None, Depends(action_transport_dep)],
+    actor: Annotated[str, Depends(identity_dep)],
+) -> dict[str, Any]:
+    try:
+        return investigations.stop(
+            store, AuditContext(audit, actor), get_settings(), key, run_id, transport
         )
     except investigations.InvestigationError as exc:
         raise _refuse(exc.status, exc.reason) from None

@@ -21,7 +21,7 @@ def test_migration_adds_nullable_columns_and_downgrades_without_losing_rows(tmp_
             )
         )
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "7e4c2a91d6b8")
     with engine.connect() as conn:
         assert conn.execute(
             text("SELECT label, work_item_connection_id FROM git_connection WHERE id = 101")

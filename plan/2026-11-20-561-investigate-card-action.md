@@ -209,6 +209,16 @@ All are under `/api/cards/{key}/investigate/{run_id}`, plus a recovery route:
 
 The hub conformance gate (`Factory/scripts/check_planning_card_conformance.py`) compares the card models' top-level field facets and `additionalProperties`. It does not inspect keys inside `Card.stage_runs` (`dict[str, Any]`, `B/cards.py:362`), so `stage_runs.investigate` closes the spec's conformance risk without a new column. Both reviewers confirmed this against the script.
 
+## Deviations found during implementation
+
+1. **Step 1: `update_repository(..., previous=None)`** takes an optional dict that it fills with the old values from inside its own transaction. The plan had it return the old value. The change keeps the existing `GitRepositoryRow` return type, which `git_config_ops.py:675` and the tests rely on, so steps 4 and 5 pass `previous={}` to get the old command for the audit hashes.
+2. **Step 1: `tests/test_git_mixed_tenant.py`** used to upgrade to `head` and then downgrade one step. That only worked while its own revision was the head, so it now upgrades to `7e4c2a91d6b8`.
+3. **Step 3: `_investigation_path`** prefixes `/` and collapses repeated slashes *before* `posixpath.normpath`, and the order matters:
+   - **Why prefix:** relative endpoints such as `api/investigations` pass `is_safe_endpoint` and are joined onto the base URL, so they must be anchored before dot segments are resolved.
+   - **Why collapse after prefixing:** `normpath` keeps a leading `//`.
+
+   Both forms are now covered by tests.
+
 ## Steps
 
 Checks use the main checkout's virtualenv:

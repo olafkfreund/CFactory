@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Boolean, DateTime, Index, Integer, String
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -157,6 +157,9 @@ class GitRepositoryRow(Base):
     # The project path on the connection's WORK-ITEM provider (RFC-0022 Phase 4).
     # Only meaningful when the connection references a work-item connection.
     work_item_project: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # The test command an investigation of this repository runs (#561). Set by an
+    # operator through the repository update, never taken from a request.
+    investigate_test_command: Mapped[str | None] = mapped_column(Text, nullable=True)
     # THE SINGLE-DEFAULT CONSTRAINT. Holds this row's ``tenant_id`` when it is the
     # tenant's default repository and NULL otherwise, with a UNIQUE index on it:
     # NULLs are distinct in both SQLite and PostgreSQL, so any number of
@@ -200,6 +203,7 @@ class GitRepository(BaseModel):
     aifactory_project_id: str | None = None
     default_labels: list[str] = Field(default_factory=list)
     work_item_project: str | None = None
+    investigate_test_command: str | None = None
     # Whether a card that names no repository resolves to this one.
     is_default: bool = False
     created_at: datetime | None = None
@@ -281,6 +285,9 @@ class GitRepositoryCreate(BaseModel):
     make_default: bool = False
 
 
+TEST_COMMAND_MAX = 1000
+
+
 class GitRepositoryUpdate(BaseModel):
     """PATCH body for a repository: only the fields present are applied.
 
@@ -294,6 +301,7 @@ class GitRepositoryUpdate(BaseModel):
     aifactory_project_id: str | None = Field(default=None, max_length=128)
     default_labels: list[str] | None = None
     work_item_project: str | None = Field(default=None, max_length=256)
+    investigate_test_command: str | None = Field(default=None, max_length=TEST_COMMAND_MAX)
 
 
 # ── validation ───────────────────────────────────────────────────────────────
@@ -355,6 +363,17 @@ def _work_item_project(value: str | None, work_item_provider: str | None) -> str
     return validate_project(value, work_item_provider, field="work_item_project")
 
 
+def validate_test_command(value: str | None) -> str | None:
+    """``""`` is stored as ``None``; one line, at most 1,000 characters, no NUL."""
+    if value is None or value == "":
+        return None
+    if len(value) > TEST_COMMAND_MAX:
+        raise GitConfigError("investigate_test_command must be at most 1000 characters")
+    if any(ch in value for ch in ("\n", "\r", "\x00")):
+        raise GitConfigError("investigate_test_command must be a single line without NUL")
+    return value
+
+
 def repository_patch(
     body: GitRepositoryUpdate, provider: str, work_item_provider: str | None = None
 ) -> dict[str, object]:
@@ -376,6 +395,8 @@ def repository_patch(
         fields["aifactory_project_id"] = (body.aifactory_project_id or "").strip() or None
     if "default_labels" in sent:
         fields["default_labels"] = validate_labels(body.default_labels)
+    if "investigate_test_command" in sent:
+        fields["investigate_test_command"] = validate_test_command(body.investigate_test_command)
     return fields
 
 
@@ -487,6 +508,7 @@ def repository_view(row: GitRepositoryRow) -> GitRepository:
         aifactory_project_id=row.aifactory_project_id,
         default_labels=[label for label in (row.default_labels or []) if isinstance(label, str)],
         work_item_project=row.work_item_project,
+        investigate_test_command=row.investigate_test_command,
         is_default=row.is_default,
         created_at=row.created_at,
         updated_at=row.updated_at,

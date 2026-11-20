@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 from cfactory.actions import (
+    ActionStep,
     PreparedAction,
     _nothing_to_act_on,
     execute_action,
@@ -348,6 +349,35 @@ def test_execute_action_runs_follow_ups_in_order():
     assert len(result["steps"]) == 2
 
 
+@pytest.mark.parametrize("endpoint", [
+    "/api/investigations", "/API/Investigations/x", "/api/investigationsX",
+    "/api/tasks/../investigations", "/api//investigations",
+    "%2Fapi%2Finvestigations", "%252Fapi%252Finvestigations",
+    "/api/investigations%2F1",
+    "/api/investigations?x=1", "/api/investigations%3Fx=1",
+    "/api/investigations#x",
+    "api/investigations",
+    "./api/investigations/x",
+])
+@pytest.mark.parametrize("follow_up", [False, True])
+def test_execute_action_refuses_investigation_paths_before_any_call(endpoint, follow_up):
+    recorder = _RecordingTransport()
+    action = PreparedAction.model_construct(
+        kind="recover", correlation_key="42", target_service="aifactory",
+        method="POST", endpoint="/api/tasks/ai-7/recover" if follow_up else endpoint,
+        payload={}, follow_ups=[ActionStep.model_construct(
+            method="POST", endpoint=endpoint, payload={}
+        )] if follow_up else [], rationale="why",
+    )
+    result = execute_action(action, transport=recorder)
+    assert result["ok"] is False
+    assert result["status_code"] == 403
+    assert result["reason"] == "investigations_via_executor"
+    assert result["refused_endpoint"] == endpoint
+    assert result["steps"] == []
+    assert recorder.requests == []
+
+
 def test_execute_action_stops_chain_on_first_failure():
     # create-pr fails → merge must NOT run.
     def handler(request: httpx.Request) -> httpx.Response:
@@ -529,6 +559,35 @@ def test_execute_delete_task_prunes_local_card(client_with_transport, store):
     assert resp.status_code == 200
     assert resp.json()["work_item_removed"] is True
     assert store.get("42") is None  # card gone from the cockpit
+
+
+def test_execute_refused_delete_task_preserves_work_item_and_audits(store, tmp_path):
+    recorder = _RecordingTransport()
+    audit = AuditStore(f"sqlite:///{tmp_path / 'audit.db'}")
+    app = create_app()
+    app.dependency_overrides[store_dep] = lambda: store
+    app.dependency_overrides[action_transport_dep] = lambda: recorder
+    app.dependency_overrides[audit_dep] = lambda: audit
+    _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7")
+
+    endpoint = "/api/tasks/../investigations/1"
+    resp = TestClient(app).post("/api/actions/execute", json={
+        "kind": "delete_task", "correlation_key": "42", "target_service": "aifactory",
+        "method": "DELETE", "endpoint": "/api/tasks/ai-7", "payload": {},
+        "follow_ups": [{"method": "POST", "endpoint": endpoint}], "rationale": "remove",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["status_code"] == 403
+    assert resp.json()["reason"] == "investigations_via_executor"
+    assert "work_item_removed" not in resp.json()
+    assert store.get("42") is not None
+    assert recorder.requests == []
+    entries = audit.list()
+    assert len(entries) == 1
+    assert entries[0].kind == "investigation_executor_refused"
+    assert entries[0].endpoint == endpoint
+    assert entries[0].status_code == 403
+    assert entries[0].ok is False
 
 
 def test_execute_delete_task_prunes_card_even_when_upstream_fails(store, tmp_path):

@@ -76,7 +76,7 @@ async def execute_prepared_action(
     # upstream factory. The upstream DELETE is best-effort: an orphaned/failed
     # task whose upstream is already gone (404) must STILL leave the cockpit, so
     # prune the local work item regardless of the upstream result.
-    if action.kind == "delete_task":
+    if action.kind == "delete_task" and result.get("reason") != "investigations_via_executor":
         removed = await run_in_threadpool(store.delete, action.correlation_key)
         result["work_item_removed"] = bool(removed)
         # A 404 from the upstream means the task is ALREADY gone (e.g. an orphaned
@@ -90,10 +90,18 @@ async def execute_prepared_action(
     await run_in_threadpool(
         audit.record,
         actor=actor,
-        kind=action.kind,
+        kind=(
+            "investigation_executor_refused"
+            if result.get("reason") == "investigations_via_executor"
+            else action.kind
+        ),
         correlation_key=action.correlation_key,
         target_service=action.target_service,
-        endpoint=action.endpoint,
+        endpoint=(
+            str(result["refused_endpoint"])[:512]
+            if result.get("reason") == "investigations_via_executor"
+            else action.endpoint
+        ),
         status_code=int(result.get("status_code", 0)),
         ok=bool(result.get("ok", False)),
     )

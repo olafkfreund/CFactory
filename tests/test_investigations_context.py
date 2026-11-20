@@ -365,3 +365,33 @@ def test_is_reachable_other_errors_raise():
     )
     with pytest.raises(httpx.HTTPStatusError):
         asyncio.run(provider.is_reachable_from_default("a/b", "main", _SHA))
+
+
+@pytest.mark.parametrize("body", ["not-json", "[]"])
+@pytest.mark.parametrize("endpoint", ["repo", "commit", "compare"])
+def test_provider_malformed_success_is_http_error(body, endpoint):
+    import asyncio  # noqa: PLC0415
+
+    from cfactory.git_providers import HttpGitHubProvider  # noqa: PLC0415
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if endpoint == "repo" or (endpoint == "commit" and "/commits/" in path) or (endpoint == "compare" and "/compare/" in path):
+            return httpx.Response(200, text=body)
+        return httpx.Response(200, json={"default_branch": "main"})
+
+    provider = HttpGitHubProvider("a/b", "t", "https://api.github.com", httpx.MockTransport(handler))
+    with pytest.raises(httpx.HTTPError):
+        if endpoint == "compare":
+            asyncio.run(provider.is_reachable_from_default("a/b", "main", _SHA))
+        else:
+            asyncio.run(provider.default_branch_head("a/b"))
+
+
+def test_malformed_provider_response_maps_to_502(client, repo_id):
+    client.app.dependency_overrides[action_transport_dep] = lambda: httpx.MockTransport(
+        lambda _request: httpx.Response(200, text="not-json")
+    )
+    response = client.get(f"/api/investigations/context?repository_id={repo_id}")
+    assert response.status_code == 502
+    assert response.json()["detail"] == {"reason": "provider_unavailable"}

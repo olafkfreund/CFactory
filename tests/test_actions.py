@@ -13,11 +13,10 @@ Action kinds map to the factories' real task API:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
-
 from cfactory.actions import (
     ActionStep,
     PreparedAction,
@@ -47,7 +46,7 @@ def _seed(store, *, service: Service, correlation_key: str, task_id: str,
             task_id=task_id,
             status=status,
             phase=phase,
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         )
     )
 
@@ -358,6 +357,8 @@ def test_execute_action_runs_follow_ups_in_order():
     "/api/investigations#x",
     "api/investigations",
     "./api/investigations/x",
+    "/api/mcp-stdio/investigations", "/API/MCP-STDIO/Investigations/x",
+    "%2Fapi%2Fmcp-stdio%2Finvestigations",
 ])
 @pytest.mark.parametrize("follow_up", [False, True])
 def test_execute_action_refuses_investigation_paths_before_any_call(endpoint, follow_up):

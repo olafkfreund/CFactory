@@ -189,6 +189,16 @@ def test_read_tools_work_with_read_scope_alone(client):
     assert payload(client, READER, "cfactory_get_card", {"card_key": "FCT-1"})["title"] == "seed"
 
 
+def test_unscoped_rest_and_mcp_hide_other_tenant_investigation_cards(client, cards):
+    hidden = cards.scoped("other").create_investigation_card(
+        title="private", description="private", repository_id=1, binding={"repository_id": 1}
+    )
+    assert rest(client, "GET", "/api/cards").json()["cards"] == []
+    assert rest(client, "GET", f"/api/cards/{hidden.card_key}").status_code == 404
+    assert payload(client, READER, "cfactory_list_cards")["count"] == 0
+    assert "error" in payload(client, READER, "cfactory_get_card", {"card_key": hidden.card_key})
+
+
 # ── audit chain ──────────────────────────────────────────────────────────────
 
 

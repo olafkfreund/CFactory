@@ -234,14 +234,26 @@ class HttpGitHubProvider:
         async with self._client() as client:
             resp = await client.get(f"/repos/{repo}")
             resp.raise_for_status()
-            branch = resp.json().get("default_branch")
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise httpx.HTTPError("invalid repository response") from exc
+            if not isinstance(data, dict):
+                raise httpx.HTTPError("invalid repository response")
+            branch = data.get("default_branch")
             if not isinstance(branch, str) or not branch:
                 raise EmptyRepository(repo)
             resp = await client.get(f"/repos/{repo}/commits/{quote(branch, safe='')}")
             if resp.status_code == _HTTP_CONFLICT:  # GitHub: "Git Repository is empty."
                 raise EmptyRepository(repo)
             resp.raise_for_status()
-            sha = resp.json().get("sha")
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise httpx.HTTPError("invalid commit response") from exc
+            if not isinstance(data, dict):
+                raise httpx.HTTPError("invalid commit response")
+            sha = data.get("sha")
             if not isinstance(sha, str) or not sha:
                 raise EmptyRepository(repo)
             return branch, sha
@@ -255,7 +267,13 @@ class HttpGitHubProvider:
             if resp.status_code in (_HTTP_NOT_FOUND, _HTTP_UNPROCESSABLE):
                 return False
             resp.raise_for_status()
-            return resp.json().get("status") in ("identical", "behind")
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise httpx.HTTPError("invalid compare response") from exc
+            if not isinstance(data, dict):
+                raise httpx.HTTPError("invalid compare response")
+            return data.get("status") in ("identical", "behind")
 
     async def create_issue(
         self,

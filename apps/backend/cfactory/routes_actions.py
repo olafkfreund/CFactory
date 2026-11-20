@@ -95,7 +95,11 @@ async def execute_prepared_action(
             if result.get("reason") == "investigations_via_executor"
             else action.kind
         ),
-        correlation_key=action.correlation_key,
+        correlation_key=(
+            action.correlation_key[:128]
+            if result.get("reason") == "investigations_via_executor"
+            else action.correlation_key
+        ),
         target_service=action.target_service,
         endpoint=(
             str(result["refused_endpoint"])[:512]

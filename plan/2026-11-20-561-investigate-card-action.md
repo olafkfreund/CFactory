@@ -117,8 +117,8 @@ Steps in this order:
    - it is in the tenant, not deleted, and an investigation card (otherwise 409 `not_investigation_card`);
    - then `request` must equal its description (otherwise 409 `request_changed`).
 4. **No live run.**
-   - Live means `starting` (younger than 120 s), `running` or `stopping`, or a final state whose pods are not yet gone.
-   - `refused` and `uncertain` are not live. Neither is `starting` older than 120 s (plan deviation 1), which is read as `uncertain`.
+   - Live means a recorded run id with pods not gone, or `starting` without a run id younger than 300 s.
+   - A `starting` without a run id older than 300 s is read as `uncertain` (plan deviation 1).
    - A live run gives 409 `run_live`.
 5. **The repository and the command:**
    - the binding's repository is re-read by its id, with no fallback (409 `repository_gone`);
@@ -194,7 +194,7 @@ All are under `/api/cards/{key}/investigate/{run_id}`, plus a recovery route:
 - a `@model_validator` on `Card`, which the mypy ratchet blocks (see the `CardUpdate.model_post_init` docstring, `B/cards.py:483-492`).
 
 ### Deviations from the spec (made while planning)
-1. **A stale `starting` counts as `uncertain`.** The spec leaves no way out of `starting` if CFactory exits between the reservation and recording the outcome. The card would refuse every later dispatch with `run_live`. A `starting` older than 120 s (twice the 60 s start timeout) is therefore read as `uncertain`: not live, no run id. AIFactory's slot and lease cover a run that might exist, exactly as for any `uncertain`.
+1. **A stale `starting` counts as `uncertain`.** The spec leaves no way out of `starting` if CFactory exits between the reservation and recording the outcome. The card would refuse every later dispatch with `run_live`. A `starting` without a run id older than 300 s is therefore read as `uncertain`: the create call's 60 s read timeout is per phase, so the whole call may exceed 120 s. AIFactory's slot and lease cover a run that might exist, exactly as for any `uncertain`.
 2. **Where the audit fields go.** `AuditStore.record` (`B/audit.py:412-441`) has fixed fields and no metadata. The spec's hashes and ids are therefore packed into `endpoint` (`String(512)`), with `correlation_key` set to the card key or `repo:<id>`:
 
    | kind | endpoint |
@@ -229,6 +229,7 @@ The hub conformance gate (`Factory/scripts/check_planning_card_conformance.py`) 
    - **An AIFactory refusal** returns 409 with reason `upstream_refused` and AIFactory's `detail`.
    - **`_aifactory`** takes `Settings` explicitly.
    - **Not tested on PostgreSQL:** the concurrency test ran on SQLite only, because CI has no PostgreSQL job. Recorded for the PR.
+7. **Step 5: use phase-specific HTTP timeouts and a 300 s stale window.** A 60 s httpx timeout applies to each network phase, not the entire create request. The former 120 s stale window could expire while a create was still in progress. Create now uses connect/write/pool 10 s and read 60 s; stop uses read 45 s. A `starting` record without a run id becomes stale after 300 s.
 
 ## Steps
 
@@ -360,7 +361,7 @@ Traps that apply to every step:
      - two concurrent dispatches through a `threading.Barrier`-gated fake compare: exactly one reaches AIFactory;
      - a slow read of run A after run B is reserved: B untouched;
      - every row of the outcome table, including a malformed 200 and a 500;
-     - a stale `starting` (older than 120 s) is not live, and a fresh one is;
+     - a stale `starting` (older than 300 s) is not live, and a fresh one is;
      - relay ownership with a wrong `run_id`, a work card, and a deleted card that is both readable **and** stoppable;
      - monotonic `pods_gone` and final states;
      - a stop timeout recording `stopping`;

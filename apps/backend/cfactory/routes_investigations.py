@@ -23,9 +23,10 @@ router = APIRouter(tags=["investigations"])
 
 
 def _refuse(status: int, reason: str, detail: Any = None) -> HTTPException:
-    return HTTPException(
-        status_code=status, detail=detail if detail is not None else {"reason": reason}
-    )
+    body = {"reason": reason}
+    if detail is not None:
+        body["detail"] = detail
+    return HTTPException(status_code=status, detail=body)
 
 
 def _tenancy() -> None:
@@ -158,7 +159,7 @@ def get_investigation(
     try:
         return investigations.get_run(store, get_settings(), key, run_id, transport)
     except investigations.InvestigationError as exc:
-        raise _refuse(exc.status, exc.reason) from None
+        raise _refuse(exc.status, exc.reason, exc.detail) from None
 
 
 @router.get(
@@ -177,7 +178,7 @@ def investigation_logs(  # noqa: PLR0913 — FastAPI dependencies
     try:
         return investigations.logs(store, get_settings(), key, run_id, after, limit, transport)
     except investigations.InvestigationError as exc:
-        raise _refuse(exc.status, exc.reason) from None
+        raise _refuse(exc.status, exc.reason, exc.detail) from None
 
 
 @router.post(
@@ -197,7 +198,7 @@ def lease_investigation(  # noqa: PLR0913 — FastAPI dependencies
             store, AuditContext(audit, actor), get_settings(), key, run_id, transport
         )
     except investigations.InvestigationError as exc:
-        raise _refuse(exc.status, exc.reason) from None
+        raise _refuse(exc.status, exc.reason, exc.detail) from None
 
 
 @router.post(
@@ -217,4 +218,4 @@ def stop_investigation(  # noqa: PLR0913 — FastAPI dependencies
             store, AuditContext(audit, actor), get_settings(), key, run_id, transport
         )
     except investigations.InvestigationError as exc:
-        raise _refuse(exc.status, exc.reason) from None
+        raise _refuse(exc.status, exc.reason, exc.detail) from None

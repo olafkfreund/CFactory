@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StringConstraints
-from sqlalchemy import DateTime, Index, Integer, Select, String, Text, func, select, update
+from sqlalchemy import DateTime, Index, Integer, Select, String, Text, func, or_, select, update
 from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, column_property, mapped_column, sessionmaker
@@ -803,6 +803,10 @@ class CardStore:
         stmt = select(CardRow)
         if self._tenant is not None:
             stmt = stmt.where(CardRow.tenant_id == self._tenant)
+        else:
+            stmt = stmt.where(
+                or_(CardRow.kind != "investigation", CardRow.tenant_id == DEFAULT_TENANT)
+            )
         if not include_deleted:
             stmt = stmt.where(CardRow.deleted_at.is_(None))
         return stmt
@@ -998,6 +1002,20 @@ class CardStore:
                 select(CardRow).where(CardRow.card_key == card_key, CardRow.tenant_id == tenant_id)
             ).first()
             yield session, row
+
+    @staticmethod
+    def locked_investigation_repository(
+        session: Session, repository_id: int
+    ) -> tuple[GitRepositoryRow | None, GitConnectionRow | None]:
+        session.execute(
+            update(GitRepositoryRow)
+            .where(GitRepositoryRow.id == repository_id)
+            .values(updated_at=GitRepositoryRow.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        row = session.get(GitRepositoryRow, repository_id)
+        connection = session.get(GitConnectionRow, row.connection_id) if row else None
+        return row, connection
 
     @staticmethod
     def write_investigation(session: Session, row: CardRow, record: dict[str, Any]) -> None:

@@ -55,7 +55,7 @@ def _investigation_path(endpoint: str) -> bool:
     path = urlsplit(path).path
     # Relative endpoints join onto the base URL, so anchor before resolving dot segments.
     path = posixpath.normpath(re.sub(r"/+", "/", "/" + path)).lower()
-    return path.startswith("/api/investigations")
+    return any(segment.startswith("investigation") for segment in path.split("/"))
 
 
 # Code/test task endpoints — AIFactory & TFactory expose this surface and accept

@@ -11,9 +11,11 @@ import hashlib
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
+from sqlalchemy.orm import Session
 
 from .card_ops import AuditContext
 from .cards import Card, CardRow, CardStore
@@ -26,6 +28,7 @@ TITLE_PREFIX = "Investigate: "
 TITLE_REQUEST_MAX = 200
 _AUDIT_TARGET = "cfactory"
 _HTTP_OK = 200
+_HTTP_BAD_REQUEST = 400
 _HTTP_DRAINING = 503
 _HTTP_SERVER_ERROR = 500
 
@@ -158,9 +161,9 @@ def create_card(  # noqa: PLR0913 — the plan's signature
     ctx.audit.record(
         actor=ctx.actor,
         kind="create_investigation_card",
-        correlation_key=card.card_key,
+        correlation_key=card.card_key[:128],
         target_service=_AUDIT_TARGET,
-        endpoint=f"card/{card.card_key}:request={sha256(request)}",
+        endpoint=f"card/{card.card_key}:request={sha256(request)}"[:512],
         status_code=_HTTP_OK,
         ok=True,
     )
@@ -182,29 +185,43 @@ def _detail(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _live(record: dict[str, Any]) -> bool:
+    if _detail(record).get("run_id") and _detail(record).get("pods_gone") is not True:
+        return True
     status = record.get("status")
-    if status == "starting":
+    if status == "starting" and not _detail(record).get("run_id"):
         started = record.get("started_at")
         if isinstance(started, str):
             try:
-                return datetime.fromisoformat(started) > datetime.now(UTC) - timedelta(seconds=120)
+                return datetime.fromisoformat(started) > datetime.now(UTC) - timedelta(seconds=300)
             except ValueError:
                 pass
         return False
-    return status in {"running", "stopping"} or (
-        status in _FINAL and not _detail(record).get("pods_gone")
-    )
+    return False
 
 
-def _binding_repository(store: CardStore, record: dict[str, Any]) -> GitRepositoryRow:
+def _binding_repository(
+    store: CardStore, record: dict[str, Any], session: Session | None = None
+) -> GitRepositoryRow:
     binding = _detail(record).get("binding")
     if not isinstance(binding, dict) or not isinstance(binding.get("repository_id"), int):
         raise InvestigationError(409, "repository_gone")
-    try:
-        row = _repository(store, binding["repository_id"], fallback=False)
-        connection = store.connection(row.connection_id)
-    except (InvestigationError, GitResourceNotFoundError):
-        raise InvestigationError(409, "repository_gone") from None
+    if session is None:
+        try:
+            row = _repository(store, binding["repository_id"], fallback=False)
+            connection = store.connection(row.connection_id)
+        except (InvestigationError, GitResourceNotFoundError):
+            raise InvestigationError(409, "repository_gone") from None
+    else:
+        locked_row, locked_connection = store.locked_investigation_repository(
+            session, binding["repository_id"]
+        )
+        if (
+            locked_row is None
+            or locked_connection is None
+            or locked_row.tenant_id != DEFAULT_TENANT
+        ):
+            raise InvestigationError(409, "repository_gone")
+        row, connection = locked_row, locked_connection
     if (
         connection.provider.lower() != "github"
         or row.project != binding.get("repo")
@@ -231,7 +248,7 @@ def _aifactory(  # noqa: PLR0913 — transport, timeout and request are independ
     path: str,
     *,
     payload: dict[str, Any] | None = None,
-    timeout: float = 10,
+    timeout: float | httpx.Timeout = 10,
     transport: httpx.BaseTransport | None = None,
 ) -> tuple[int, dict[str, Any] | None]:
     headers: dict[str, str] = {}
@@ -252,6 +269,14 @@ def _aifactory(  # noqa: PLR0913 — transport, timeout and request are independ
         return response.status_code, body if isinstance(body, dict) else None
     except httpx.RequestError:
         return 0, None
+
+
+def _relay_body(status: int, body: dict[str, Any] | None) -> dict[str, Any]:
+    if status == _HTTP_OK and body is not None:
+        return body
+    if _HTTP_BAD_REQUEST <= status < _HTTP_SERVER_ERROR:
+        raise InvestigationError(409, "upstream_refused", (body or {}).get("detail"))
+    raise InvestigationError(504 if status == 0 else 502, "upstream_unavailable")
 
 
 def dispatch(  # noqa: PLR0913, PLR0912, PLR0915 — the ordered ten-step protocol
@@ -312,7 +337,7 @@ def dispatch(  # noqa: PLR0913, PLR0912, PLR0915 — the ordered ten-step protoc
     with store.locked_investigation(key, DEFAULT_TENANT) as (session, row):
         locked_row = _card_for_dispatch(row, request)
         record = _record(locked_row)
-        repo = _binding_repository(store, record)
+        repo = _binding_repository(store, record, session)
         if (repo.investigate_test_command or None) != test_command:
             raise InvestigationError(409, "test_command_changed")
         binding = _detail(record)["binding"]
@@ -343,7 +368,7 @@ def dispatch(  # noqa: PLR0913, PLR0912, PLR0915 — the ordered ten-step protoc
             "test_command": test_command,
             "limits": limits or {},
         },
-        timeout=60,
+        timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10),
         transport=transport,
     )
     run_id = body.get("id") if body else None
@@ -370,12 +395,12 @@ def dispatch(  # noqa: PLR0913, PLR0912, PLR0915 — the ordered ten-step protoc
     ctx.audit.record(
         actor=ctx.actor,
         kind="investigate",
-        correlation_key=key,
+        correlation_key=key[:128],
         target_service="aifactory",
         endpoint=(
             f"card/{key}:attempt={attempt};"
             f"run={run_id if outcome == 'running' else '-'};outcome={outcome}"
-        ),
+        )[:512],
         status_code=response_status,
         ok=response_status == _HTTP_OK,
     )
@@ -434,11 +459,12 @@ def get_run(
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
     _owned(store, key, run_id)
-    status, body = _aifactory(settings, "GET", f"/api/investigations/{run_id}", transport=transport)
-    if status != _HTTP_OK or body is None:
-        raise InvestigationError(504 if status == 0 else 502, "upstream_unavailable")
-    _state(store, key, run_id, body)
-    return body
+    status, body = _aifactory(
+        settings, "GET", f"/api/investigations/{quote(run_id, safe='')}", transport=transport
+    )
+    result = _relay_body(status, body)
+    _state(store, key, run_id, result)
+    return result
 
 
 def logs(  # noqa: PLR0913 — relay query and transport
@@ -454,12 +480,10 @@ def logs(  # noqa: PLR0913 — relay query and transport
     status, body = _aifactory(
         settings,
         "GET",
-        f"/api/investigations/{run_id}/logs?after={after}&limit={limit}",
+        f"/api/investigations/{quote(run_id, safe='')}/logs?after={after}&limit={limit}",
         transport=transport,
     )
-    if status != _HTTP_OK or body is None:
-        raise InvestigationError(504 if status == 0 else 502, "upstream_unavailable")
-    return body
+    return _relay_body(status, body)
 
 
 def lease(  # noqa: PLR0913 — shared REST/MCP operation
@@ -470,25 +494,32 @@ def lease(  # noqa: PLR0913 — shared REST/MCP operation
     run_id: str,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    status = 404
+    audit_status = 404
     try:
         _owned(store, key, run_id)
         status, body = _aifactory(
-            settings, "POST", f"/api/investigations/{run_id}/lease", transport=transport
+            settings,
+            "POST",
+            f"/api/investigations/{quote(run_id, safe='')}/lease",
+            transport=transport,
         )
-        if status != _HTTP_OK or body is None:
-            status = 504 if status == 0 else 502
-            raise InvestigationError(status, "upstream_unavailable")
-        return body
+        audit_status = status
+        if status == 0:
+            audit_status = 504
+        elif _HTTP_BAD_REQUEST <= status < _HTTP_SERVER_ERROR:
+            audit_status = 409
+        elif status != _HTTP_OK or body is None:
+            audit_status = 502
+        return _relay_body(status, body)
     finally:
         ctx.audit.record(
             actor=ctx.actor,
             kind="investigation_lease",
-            correlation_key=key,
+            correlation_key=key[:128],
             target_service="aifactory",
-            endpoint=f"card/{key}:run={run_id}",
-            status_code=status,
-            ok=status == _HTTP_OK,
+            endpoint=f"card/{key}:run={run_id}"[:512],
+            status_code=audit_status,
+            ok=audit_status == _HTTP_OK,
         )
 
 
@@ -504,26 +535,30 @@ def stop(  # noqa: PLR0913 — shared REST/MCP operation
     try:
         _owned(store, key, run_id)
         status, body = _aifactory(
-            settings, "POST", f"/api/investigations/{run_id}/stop", timeout=45, transport=transport
+            settings,
+            "POST",
+            f"/api/investigations/{quote(run_id, safe='')}/stop",
+            timeout=httpx.Timeout(connect=10, read=45, write=10, pool=10),
+            transport=transport,
         )
         if status == 0 or status >= _HTTP_SERVER_ERROR:
             _state(store, key, run_id, {"state": "stopping"})
             audit_status = 504
             raise InvestigationError(504, "stop_uncertain")
-        if body is not None:
+        if status == _HTTP_OK and body is not None:
             _state(store, key, run_id, body)
         if status != _HTTP_OK or body is None:
-            audit_status = 502
-            raise InvestigationError(502, "upstream_unavailable")
+            audit_status = 409 if _HTTP_BAD_REQUEST <= status < _HTTP_SERVER_ERROR else 502
+            return _relay_body(status, body)
         audit_status = status
         return body
     finally:
         ctx.audit.record(
             actor=ctx.actor,
             kind="investigation_stop",
-            correlation_key=key,
+            correlation_key=key[:128],
             target_service="aifactory",
-            endpoint=f"card/{key}:run={run_id}",
+            endpoint=f"card/{key}:run={run_id}"[:512],
             status_code=audit_status,
             ok=audit_status == _HTTP_OK,
         )

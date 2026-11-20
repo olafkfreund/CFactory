@@ -50,6 +50,7 @@ tags:
   - name: Actions
   - name: Audit
   - name: Git config
+  - name: Investigations
 
 paths:
   /health:
@@ -668,6 +669,357 @@ paths:
                   config: { $ref: "#/components/schemas/GitConfig" }
         "403": { description: The tenant in the path is not the caller's tenant. }
 
+  /api/tenants/{tenant}/git-repositories:
+    parameters:
+      - { name: tenant, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Git config]
+      summary: List this tenant's git repositories (requires `read`)
+      parameters:
+        - { name: connection_id, in: query, required: false, schema: { type: integer } }
+      responses:
+        "200":
+          description: The tenant's configured repositories.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  default_repository_id: { type: integer, nullable: true }
+                  repositories:
+                    type: array
+                    items: { $ref: "#/components/schemas/GitRepository" }
+        "403": { description: The tenant in the path is not the caller's tenant. }
+
+  /api/tenants/{tenant}/git-repositories/{repository_id}:
+    parameters:
+      - { name: tenant, in: path, required: true, schema: { type: string } }
+      - { name: repository_id, in: path, required: true, schema: { type: integer } }
+    patch:
+      tags: [Git config]
+      summary: Update a repository's projects, AIFactory project, labels, or investigation test command (requires `write`)
+      description: >-
+        Partial update: only fields present in the body are applied. Sending
+        `null` (or `""` for `investigate_test_command`) clears a nullable field.
+        Changing `investigate_test_command` is audited as
+        `set_investigate_test_command` with SHA-256 digests of the old and new
+        values.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GitRepositoryUpdate" }
+      responses:
+        "200":
+          description: The updated repository.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitRepository" }
+        "400": { description: "Invalid project path, label, or investigate_test_command." }
+        "403": { description: The tenant in the path is not the caller's tenant. }
+        "404": { description: No such repository for this tenant. }
+
+  /api/investigations/context:
+    get:
+      tags: [Investigations]
+      summary: Read the repository, default branch, head SHA and test command for a proposal (requires `read`)
+      description: >-
+        Mounted only when `CFACTORY_INVESTIGATIONS` is `on` or `drain`. With no
+        `repository_id`, falls back to the default repository and names the
+        repository it resolved. Single-tenant only. The MCP twin is
+        `cfactory_investigation_context`.
+      parameters:
+        - name: repository_id
+          in: query
+          required: false
+          schema: { type: integer }
+          description: Repository to inspect; omit to use the default repository.
+      responses:
+        "200":
+          description: Resolved repository context for an investigation proposal.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repository_id, repo, default_branch, sha, test_command]
+                properties:
+                  repository_id: { type: integer }
+                  repo: { type: string }
+                  default_branch: { type: string }
+                  sha: { type: string }
+                  test_command: { type: string, nullable: true }
+        "404": { description: "Refused: `no_repository`." }
+        "409":
+          description: >-
+            Refused: `multi_tenant_unsupported`, `no_aifactory_project`,
+            `unsupported_provider` (only GitHub is supported), or
+            `empty_repository`.
+        "502": { description: "Refused: `provider_unavailable`." }
+
+  /api/investigations/cards:
+    post:
+      tags: [Investigations]
+      summary: Create an investigation card bound to an explicit repository (requires `write` and a configured key store)
+      description: >-
+        Creates a read-only investigation card in `backlog` with `tier: null`
+        and fixes `{repository_id, repo, aifactory_project_id}` in
+        `stage_runs.investigate.detail.binding`. Refuses dev-open (`keys_required`),
+        multi-tenant (`multi_tenant_unsupported`), `drain` mode
+        (`investigations_draining`), and requests matching secret patterns
+        (`request_contains_secret`). Audited as `create_investigation_card` with
+        the request SHA-256 digest. The MCP twin is
+        `cfactory_create_investigation_card`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request, repository_id]
+              additionalProperties: false
+              properties:
+                request: { type: string, minLength: 1, maxLength: 2000 }
+                repository_id: { type: integer }
+      responses:
+        "200":
+          description: The created investigation card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Card" }
+        "403": { description: "Refused: `keys_required` (dev-open is not permitted) or missing `write` scope." }
+        "404": { description: "Refused: `no_repository`." }
+        "409":
+          description: >-
+            Refused: `multi_tenant_unsupported`, `no_aifactory_project`,
+            `unsupported_provider`, or `empty_repository`.
+        "422": { description: "Refused: `request_contains_secret` or validation error." }
+        "502": { description: "Refused: `provider_unavailable`." }
+        "503": { description: "Refused: `investigations_draining`." }
+
+  /api/cards/{key}/actions/investigate:
+    parameters:
+      - { name: key, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Investigations]
+      summary: Dispatch a read-only investigation run to AIFactory (requires `write` and a configured key store)
+      description: >-
+        Verifies the switch is `on`, single-tenant mode holds, the caller uses a
+        non-open write key, the card is an investigation card whose description
+        matches `request`, no live run is active, the bound repository still has
+        the same GitHub repo, AIFactory project and `investigate_test_command`,
+        and `sha` is reachable from the default branch. Reserves the attempt
+        under a row lock before calling AIFactory `POST /api/investigations`.
+        Audited as `investigate`. The MCP twin is `cfactory_investigate_card`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request, sha, test_command]
+              additionalProperties: false
+              properties:
+                request: { type: string }
+                sha:
+                  type: string
+                  pattern: "^[0-9a-f]{40}$"
+                  description: 40-character lowercase hex commit SHA on the default branch.
+                test_command:
+                  type: string
+                  nullable: true
+                  description: Must match the repository's configured `investigate_test_command`.
+                limits:
+                  type: object
+                  nullable: true
+                  additionalProperties: false
+                  properties:
+                    minutes: { type: integer, minimum: 1, maximum: 30 }
+                    tokens: { type: integer, minimum: 1, maximum: 2000000 }
+                    turns: { type: integer, minimum: 1, maximum: 200 }
+                    test_calls: { type: integer, minimum: 1, maximum: 10 }
+      responses:
+        "200":
+          description: The started AIFactory investigation run id.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run_id]
+                properties:
+                  run_id: { type: string }
+        "403": { description: "Refused: `keys_required` or missing `write` scope." }
+        "409":
+          description: >-
+            Refused: `multi_tenant_unsupported`, `not_investigation_card`,
+            `request_changed`, `run_live`, `repository_gone`,
+            `repository_changed`, `test_command_changed`,
+            `sha_not_on_default_branch`, or `upstream_refused`.
+        "422": { description: "Refused: `invalid_sha`, `invalid_test_command`, or `invalid_limits`." }
+        "502": { description: "Refused: `provider_unavailable`." }
+        "503": { description: "Refused: `investigations_draining`." }
+        "504": { description: "Refused: `start_uncertain` (outcome could not be confirmed)." }
+
+  /api/cards/{key}/investigate:
+    parameters:
+      - { name: key, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Investigations]
+      summary: Read the local investigation stage record for recovery (requires `read`)
+      description: >-
+        Returns the card's stored `stage_runs.investigate` record without making
+        an upstream call (including for soft-deleted investigation cards). A
+        stale `starting` record older than 120s is reported as `uncertain`. The
+        MCP twin is `cfactory_investigation_recover`.
+      responses:
+        "200":
+          description: Local `stage_runs.investigate` record.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404": { description: "Refused: `investigation_not_found`." }
+        "409": { description: "Refused: `multi_tenant_unsupported`." }
+
+  /api/cards/{key}/investigate/{run_id}:
+    parameters:
+      - { name: key, in: path, required: true, schema: { type: string } }
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Investigations]
+      summary: Relay the investigation run status and report from AIFactory (requires `read`)
+      description: >-
+        Checks card ownership of `run_id`, fetches the run from AIFactory, and
+        monotonically updates the local state and `pods_gone` flag. The MCP twin
+        is `cfactory_investigation_get`.
+      responses:
+        "200":
+          description: Relayed AIFactory investigation run payload.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  state: { type: string }
+                  reason: { type: string, nullable: true }
+                  pods_gone: { type: boolean }
+                  tests: { type: array, items: { type: object } }
+                  report: { type: string, nullable: true }
+                  usage:
+                    type: object
+                    properties:
+                      tokens: { type: integer }
+                      turns: { type: integer }
+                      run_tests: { type: integer }
+                additionalProperties: true
+        "404": { description: "Refused: `investigation_not_found`." }
+        "409": { description: "Refused: `multi_tenant_unsupported`." }
+        "502": { description: "Refused: `upstream_unavailable`." }
+        "504": { description: "Refused: `upstream_unavailable` (timeout)." }
+
+  /api/cards/{key}/investigate/{run_id}/logs:
+    parameters:
+      - { name: key, in: path, required: true, schema: { type: string } }
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Investigations]
+      summary: Relay investigation run log entries from AIFactory (requires `read`)
+      description: >-
+        Checks card ownership of `run_id` and relays log lines from AIFactory.
+        The MCP twin is `cfactory_investigation_logs`.
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: Relayed log entries and cursor.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        seq: { type: integer }
+                        at: { type: string }
+                        line: { type: string }
+                  cursor: { type: integer }
+                additionalProperties: true
+        "404": { description: "Refused: `investigation_not_found`." }
+        "409": { description: "Refused: `multi_tenant_unsupported`." }
+        "422": { description: "Refused: `invalid_cursor`." }
+        "502": { description: "Refused: `upstream_unavailable`." }
+        "504": { description: "Refused: `upstream_unavailable` (timeout)." }
+
+  /api/cards/{key}/investigate/{run_id}/lease:
+    parameters:
+      - { name: key, in: path, required: true, schema: { type: string } }
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Investigations]
+      summary: Renew the lease on a running investigation in AIFactory (requires `write` and a configured key store)
+      description: >-
+        Checks card ownership of `run_id` and relays `POST /api/investigations/{run_id}/lease`
+        to AIFactory. Allowed in both `on` and `drain` modes. Audited on every
+        call as `investigation_lease`. The MCP twin is
+        `cfactory_investigation_lease`.
+      responses:
+        "200":
+          description: Lease renewed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                additionalProperties: true
+        "403": { description: "Refused: `keys_required` or missing `write` scope." }
+        "404": { description: "Refused: `investigation_not_found`." }
+        "409": { description: "Refused: `multi_tenant_unsupported`." }
+        "502": { description: "Refused: `upstream_unavailable`." }
+        "504": { description: "Refused: `upstream_unavailable` (timeout)." }
+
+  /api/cards/{key}/investigate/{run_id}/stop:
+    parameters:
+      - { name: key, in: path, required: true, schema: { type: string } }
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Investigations]
+      summary: Stop an investigation run in AIFactory (requires `write` and a configured key store)
+      description: >-
+        Checks card ownership of `run_id` and relays `POST /api/investigations/{run_id}/stop`
+        to AIFactory (45s timeout). On timeout or upstream 5xx, records local
+        status `stopping` and returns 504 `stop_uncertain`. Allowed in both `on`
+        and `drain` modes. Audited on every call as `investigation_stop`. The
+        MCP twin is `cfactory_investigation_stop`.
+      responses:
+        "200":
+          description: Stop response from AIFactory.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state: { type: string }
+                  pods_gone: { type: boolean }
+                additionalProperties: true
+        "403": { description: "Refused: `keys_required` or missing `write` scope." }
+        "404": { description: "Refused: `investigation_not_found`." }
+        "409": { description: "Refused: `multi_tenant_unsupported`." }
+        "502": { description: "Refused: `upstream_unavailable`." }
+        "504": { description: "Refused: `stop_uncertain`." }
+
   /api/cards/{card_key}:
     parameters:
       - { name: card_key, in: path, required: true, schema: { type: string } }
@@ -913,6 +1265,57 @@ components:
           description: >-
             `env` while the tenant is still falling back to the deployment's
             (deprecated, one-release) environment variables; `stored` once saved.
+
+    GitRepository:
+      type: object
+      description: >-
+        One repository a tenant works on through a git connection (RFC-0020 §3.3,
+        phase 8). Holds no credential — credentials belong to the connection.
+      required: [id, connection_id, tenant_id, project, default_labels, is_default]
+      properties:
+        id: { type: integer }
+        connection_id: { type: integer }
+        tenant_id: { type: string }
+        project: { type: string }
+        intake_project: { type: string, nullable: true }
+        aifactory_project_id: { type: string, nullable: true }
+        default_labels: { type: array, items: { type: string } }
+        work_item_project: { type: string, nullable: true }
+        investigate_test_command:
+          type: string
+          nullable: true
+          maxLength: 1000
+          description: >-
+            Operator-configured test command for read-only investigations of
+            this repository (#561). Single line without NUL, at most 1,000
+            characters; empty string is stored as null. Never taken from an
+            investigation request.
+        is_default: { type: boolean }
+        created_at: { type: string, format: date-time, nullable: true }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    GitRepositoryUpdate:
+      type: object
+      description: >-
+        PATCH /api/tenants/{tenant}/git-repositories/{repository_id} body. Only
+        fields present are applied; sending `null` clears nullable fields.
+      additionalProperties: false
+      properties:
+        project: { type: string, minLength: 1, maxLength: 256, nullable: true }
+        intake_project: { type: string, maxLength: 256, nullable: true }
+        aifactory_project_id: { type: string, maxLength: 128, nullable: true }
+        default_labels:
+          type: array
+          nullable: true
+          items: { type: string }
+        work_item_project: { type: string, maxLength: 256, nullable: true }
+        investigate_test_command:
+          type: string
+          nullable: true
+          maxLength: 1000
+          description: >-
+            Single-line test command for read-only investigations (#561). `""` or
+            `null` clears it.
 
     Card:
       type: object

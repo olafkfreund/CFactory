@@ -14,8 +14,10 @@ so they pass the factories' ``TokenAuthMiddleware``.
 from __future__ import annotations
 
 import logging
+import posixpath
+import re
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from pydantic import BaseModel, field_validator
@@ -44,6 +46,16 @@ def is_safe_endpoint(endpoint: str) -> bool:
         return False
     parts = urlsplit(endpoint)
     return parts.scheme == "" and parts.netloc == ""
+
+
+def _investigation_path(endpoint: str) -> bool:
+    path = urlsplit(endpoint).path
+    while (decoded := unquote(path)) != path:
+        path = decoded
+    path = urlsplit(path).path
+    # Relative endpoints join onto the base URL, so anchor before resolving dot segments.
+    path = posixpath.normpath(re.sub(r"/+", "/", "/" + path)).lower()
+    return any(segment.startswith("investigation") for segment in path.split("/"))
 
 
 # Code/test task endpoints — AIFactory & TFactory expose this surface and accept
@@ -448,6 +460,16 @@ def execute_action(
     ]
     # Defense in depth: re-check every endpoint reached us as a safe path.
     for _m, ep, _p in steps:
+        if _investigation_path(ep):
+            return {
+                "status_code": 403,
+                "ok": False,
+                "reason": "investigations_via_executor",
+                "error": "investigations_via_executor",
+                "refused_endpoint": ep,
+                "body": {"detail": {"reason": "investigations_via_executor"}},
+                "steps": [],
+            }
         if not is_safe_endpoint(ep):
             return {
                 "status_code": 0,

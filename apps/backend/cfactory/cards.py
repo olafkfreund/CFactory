@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import copy
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from sqlalchemy import DateTime, Index, Integer, Select, String, Text, func, select, update
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StringConstraints
+from sqlalchemy import DateTime, Index, Integer, Select, String, Text, func, or_, select, update
 from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, column_property, mapped_column, sessionmaker
@@ -250,6 +251,12 @@ class CardRow(Base):
     # import sees the tombstone and does NOT resurrect the card.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # "work" or "investigation" (#561). Never a field of Card/CardCreate/CardUpdate:
+    # a caller cannot choose it, only the investigation store path sets it.
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="work", server_default="work"
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -380,6 +387,13 @@ class Card(BaseModel):
     deleted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+    # Not a field, so the wire schema is unchanged. ``CardStore._card`` sets it.
+    _kind: str = PrivateAttr(default="work")
+
+    @property
+    def is_investigation(self) -> bool:
+        return self._kind == "investigation"
 
 
 class CardCreate(BaseModel):
@@ -634,6 +648,8 @@ _LATE_COLUMNS = {
     # every existing card, which is exactly what it means — never read — so the
     # next poll backfills rather than claiming an empty thread is complete.
     "comments_synced_at": "",
+    # #561: "work" for every existing card.
+    "kind": "NOT NULL DEFAULT 'work'",
 }
 
 # The same guard for ``tenant_git_config``, which RFC-0020 phase 2 shipped and
@@ -641,7 +657,7 @@ _LATE_COLUMNS = {
 # table, so ``create_all`` will not add it and every config read would fail.
 _LATE_CONFIG_COLUMNS = {"credential_rejected": ""}
 _LATE_CONNECTION_COLUMNS = {"work_item_connection_id": ""}
-_LATE_REPOSITORY_COLUMNS = {"work_item_project": ""}
+_LATE_REPOSITORY_COLUMNS = {"work_item_project": "", "investigate_test_command": ""}
 
 # And for ``card_import_state``, which #374 gives the poll lease. A board created
 # by §3.6 already HAS the table, so ``create_all`` will not add the column and
@@ -776,7 +792,7 @@ class CardStore:
         """
         return self._tenant or DEFAULT_TENANT
 
-    def _select(self, *, include_deleted: bool = False) -> Select[tuple[CardRow]]:
+    def _select(self, *, include_deleted: bool = False) -> Select[Any]:
         """Base SELECT honouring the tenant scope (no filter when unscoped).
 
         Soft-deleted cards are invisible by default — a deleted card is off the
@@ -787,12 +803,26 @@ class CardStore:
         stmt = select(CardRow)
         if self._tenant is not None:
             stmt = stmt.where(CardRow.tenant_id == self._tenant)
+        else:
+            stmt = stmt.where(
+                or_(CardRow.kind != "investigation", CardRow.tenant_id == DEFAULT_TENANT)
+            )
         if not include_deleted:
             stmt = stmt.where(CardRow.deleted_at.is_(None))
         return stmt
 
-    def _get_row(self, session: Session, card_key: str) -> CardRow | None:
-        return session.scalars(self._select().where(CardRow.card_key == card_key)).first()
+    def _get_row(
+        self, session: Session, card_key: str, *, include_deleted: bool = False
+    ) -> CardRow | None:
+        stmt = self._select(include_deleted=include_deleted).where(CardRow.card_key == card_key)
+        return session.scalars(stmt).first()
+
+    @staticmethod
+    def _card(row: CardRow) -> Card:
+        """The one place a row becomes a :class:`Card`, so ``_kind`` is always set."""
+        card = Card.model_validate(row)
+        card._kind = row.kind
+        return card
 
     def list(
         self,
@@ -814,12 +844,12 @@ class CardStore:
                 stmt = stmt.where(column == value)
         stmt = stmt.order_by(CardRow.priority.asc(), CardRow.created_at.asc())
         with self._session() as session:
-            return [Card.model_validate(row) for row in session.scalars(stmt)]
+            return [self._card(row) for row in session.scalars(stmt)]
 
-    def get(self, card_key: str) -> Card | None:
+    def get(self, card_key: str, *, include_deleted: bool = False) -> Card | None:
         with self._session() as session:
-            row = self._get_row(session, card_key)
-            return Card.model_validate(row) if row is not None else None
+            row = self._get_row(session, card_key, include_deleted=include_deleted)
+            return self._card(row) if row is not None else None
 
     def get_by_correlation_key(self, correlation_key: str) -> Card | None:
         """The card joined to a work item, if any (RFC-0019 §3.2 write-back).
@@ -834,7 +864,7 @@ class CardStore:
         stmt = stmt.order_by(CardRow.created_at.asc())
         with self._session() as session:
             row = session.scalars(stmt).first()
-            return Card.model_validate(row) if row is not None else None
+            return self._card(row) if row is not None else None
 
     def get_by_issue_ref(self, issue_ref: str) -> Card | None:
         """The card for a provider issue, **including a soft-deleted one**.
@@ -846,7 +876,7 @@ class CardStore:
         stmt = self._select(include_deleted=True).where(CardRow.issue_ref == issue_ref)
         with self._session() as session:
             row = session.scalars(stmt).first()
-            return Card.model_validate(row) if row is not None else None
+            return self._card(row) if row is not None else None
 
     def create(self, data: CardCreate) -> Card:
         """Insert a card, assigning a key when the caller omitted one.
@@ -866,7 +896,7 @@ class CardStore:
                 row = CardRow(**fields, tenant_id=tenant)
                 session.add(row)
                 session.flush()
-                return Card.model_validate(row)
+                return self._card(row)
         except IntegrityError as exc:
             # Which constraint fired? Asked of the database rather than parsed
             # out of the driver's message, which differs per backend.
@@ -913,9 +943,87 @@ class CardStore:
                     setattr(row, field, value)
                 row.updated_at = _now()
                 session.flush()
-                return Card.model_validate(row)
+                return self._card(row)
         except IntegrityError as exc:
             raise DuplicateIssueRefError(changes.get("issue_ref")) from exc
+
+    # ── Investigation cards (#561) ───────────────────────────────────────────
+
+    def create_investigation_card(
+        self, *, title: str, description: str, repository_id: int, binding: dict[str, Any]
+    ) -> Card:
+        """Insert an investigation card: no tier, no issue, no correlation key.
+
+        ``binding`` is fixed here and never rewritten, so a later repository edit
+        cannot redirect a run.
+        """
+        tenant = self._tenant or DEFAULT_TENANT
+        with self._session.begin() as session:
+            row = CardRow(
+                card_key=self._next_card_key(session),
+                tenant_id=tenant,
+                title=title,
+                description=description,
+                status="backlog",
+                repository_id=repository_id,
+                kind="investigation",
+                stage_runs={
+                    "investigate": {
+                        "service": "aifactory",
+                        "status": "created",
+                        "started_at": None,
+                        "detail": {"binding": binding},
+                    }
+                },
+            )
+            session.add(row)
+            session.flush()
+            return self._card(row)
+
+    @contextmanager
+    def locked_investigation(
+        self, card_key: str, tenant_id: str
+    ) -> Iterator[tuple[Session, CardRow | None]]:
+        """One write transaction on a card (deleted included), lock taken first.
+
+        A no-op UPDATE, like :meth:`_lock_connections`: a row lock on PostgreSQL and
+        the database write lock on SQLite, so the re-read that follows cannot
+        interleave with another writer. Yields ``(session, row)``; ``row`` is None
+        when no such card exists in the tenant.
+        """
+        with self._session.begin() as session:
+            session.execute(
+                update(CardRow)
+                .where(CardRow.card_key == card_key, CardRow.tenant_id == tenant_id)
+                .values(updated_at=CardRow.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+            row = session.scalars(
+                select(CardRow).where(CardRow.card_key == card_key, CardRow.tenant_id == tenant_id)
+            ).first()
+            yield session, row
+
+    @staticmethod
+    def locked_investigation_repository(
+        session: Session, repository_id: int
+    ) -> tuple[GitRepositoryRow | None, GitConnectionRow | None]:
+        session.execute(
+            update(GitRepositoryRow)
+            .where(GitRepositoryRow.id == repository_id)
+            .values(updated_at=GitRepositoryRow.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        row = session.get(GitRepositoryRow, repository_id)
+        connection = session.get(GitConnectionRow, row.connection_id) if row else None
+        return row, connection
+
+    @staticmethod
+    def write_investigation(session: Session, row: CardRow, record: dict[str, Any]) -> None:
+        """Set ``stage_runs["investigate"]``. A NEW dict is assigned: SQLAlchemy does
+        not see an in-place edit of a JSON column, so mutating would not persist."""
+        row.stage_runs = {**(row.stage_runs or {}), "investigate": record}
+        row.updated_at = _now()
+        session.add(row)
 
     def delete(self, card_key: str) -> bool:
         """Take a card off the board. True if one was deleted, False if none matched.
@@ -958,7 +1066,7 @@ class CardStore:
             .order_by(CardRow.created_at.asc())
         )
         with self._session() as session:
-            return [Card.model_validate(row) for row in session.scalars(stmt)]
+            return [self._card(row) for row in session.scalars(stmt)]
 
     def comments(self, card_key: str) -> Sequence[CardComment]:
         """One card's stored discussion, oldest first.
@@ -1419,8 +1527,18 @@ class CardStore:
             return self.set_default_repository(created)
         return self.repository(created)
 
-    def update_repository(self, repository_id: int, body: GitRepositoryUpdate) -> GitRepositoryRow:
-        """Patch a repository. Only the fields actually sent are applied."""
+    def update_repository(
+        self,
+        repository_id: int,
+        body: GitRepositoryUpdate,
+        *,
+        previous: dict[str, Any] | None = None,
+    ) -> GitRepositoryRow:
+        """Patch a repository. Only the fields actually sent are applied.
+
+        ``previous``, when given, receives the old ``investigate_test_command``
+        read inside the update's own transaction (for the audit hashes).
+        """
         current = self.repository(repository_id)
         connection = self.connection(current.connection_id)
         fields = repository_patch(
@@ -1448,6 +1566,8 @@ class CardStore:
                     raise GitResourceNotFoundError(
                         f"no git repository {repository_id} for this tenant"
                     )
+                if previous is not None:
+                    previous["investigate_test_command"] = row.investigate_test_command
                 for name, value in fields.items():
                     setattr(row, name, value)
                 row.updated_at = _now()

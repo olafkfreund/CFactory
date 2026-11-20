@@ -32,7 +32,13 @@ from typing import Any
 import httpx
 
 from .audit import AuditStore
-from .card_intake import dispatch_stage, maybe_dispatch, parse_stage, start_sequence
+from .card_intake import (
+    InvestigationCardError,
+    dispatch_stage,
+    maybe_dispatch,
+    parse_stage,
+    start_sequence,
+)
 from .cards import Card, CardCreate, CardList, CardStore, CardUpdate
 from .config import Settings, get_settings
 from .github_sync import maybe_sync, sync_card
@@ -359,11 +365,14 @@ def update_card(
     (``correlation_key`` set, status ``in_progress``). Re-promoting an
     already-joined card does NOT dispatch again.
     """
-    card = store.update(card_key, changes.model_dump(exclude_unset=True))
-    if card is None:
+    card = get_card(store, card_key)
+    if card.is_investigation:
+        raise InvestigationCardError(InvestigationCardError.reason)
+    updated = store.update(card_key, changes.model_dump(exclude_unset=True))
+    if updated is None:
         raise CardNotFoundError(card_key)
     _record(ctx, kind="update_card", card_key=card_key, status_code=int(HTTPStatus.OK))
-    return _intake(store, ctx, _github(store, ctx, card, transport), transport)
+    return _intake(store, ctx, _github(store, ctx, updated, transport), transport)
 
 
 def sync_card_github(
@@ -387,6 +396,8 @@ def sync_card_github(
     an unreachable GitHub is not a board error.
     """
     card = get_card(store, card_key)
+    if card.is_investigation:
+        raise InvestigationCardError(InvestigationCardError.reason)
     result = sync_card(store, card, transport=transport, actor=ctx.actor, audit=ctx.audit)
     _record_sync(ctx, card_key, result)
     return {"sync": result, "card": (store.get(card_key) or card).model_dump(mode="json")}

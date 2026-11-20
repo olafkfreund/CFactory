@@ -299,7 +299,7 @@ def _import_one(
             if existing is None:  # pragma: no cover — the row must exist by now
                 return "skipped"
 
-    if existing.deleted_at is not None:
+    if existing.deleted_at is not None or existing.is_investigation:
         return "skipped"
     changes = _changes_for(existing, issue)
     if changes:
@@ -348,7 +348,11 @@ def _sync_comments(
     must stay distinguishable, and the only thing that distinguishes them is that
     the second one's ``comments_synced_at`` is still NULL.
     """
-    cards = [card for card in store.cards_for_project(project) if card.issue_ref]
+    cards = [
+        card
+        for card in store.cards_for_project(project)
+        if card.issue_ref and not card.is_investigation
+    ]
     if not cards:
         return {"ok": True, "cards": 0, "comments": 0, "backfilled": 0, "refreshed": 0}
 

@@ -11,6 +11,7 @@ import logging
 import warnings
 from functools import cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -215,6 +216,11 @@ class Settings(BaseSettings):
     # connection is rejected with a message naming this flag until the owner has a
     # Jira Cloud site and credential and has run the live smoke test.
     jira_enabled: bool = False
+
+    # Read-only investigations through AIFactory (#561). "off": no routes or tools;
+    # "on": everything; "drain": no new cards or runs, but lease, stop and reads
+    # keep working so a rollback can wait for live runs to finish.
+    investigations: Literal["off", "on", "drain"] = "off"
 
     # WorkItem correlation store (set when Postgres is wired in #6).
     database_url: str | None = None

@@ -902,6 +902,11 @@ BOARD_TOOLS: list[dict[str, Any]] = [
                 },
                 "aifactory_project_id": {"type": ["string", "null"]},
                 "default_labels": {"type": "array", "items": {"type": "string"}},
+                "investigate_test_command": {
+                    "type": ["string", "null"],
+                    "description": "Test command an investigation runs: one line, at most "
+                    "1000 characters; empty or null clears it.",
+                },
             },
         },
     },

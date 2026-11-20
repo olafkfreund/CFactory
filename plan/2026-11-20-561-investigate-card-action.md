@@ -218,6 +218,12 @@ The hub conformance gate (`Factory/scripts/check_planning_card_conformance.py`) 
    - **Why collapse after prefixing:** `normpath` keeps a leading `//`.
 
    Both forms are now covered by tests.
+4. **Step 2 (Codex): `issue_import` also skips investigation cards.** Both `_import_one` and the comment sync (`_sync_comments`) skip them. The plan's own check requires that an import never touches one, and this is where that is enforced.
+5. **Step 4: refusals and the repository lookup.**
+   - **Signatures:** `context()` and `create_card()` take an `AuditContext` rather than separate audit and actor arguments.
+   - **Refusals** are HTTP errors with `detail={"reason": ...}`.
+   - **`_repository`** also refuses with 404 `no_repository` when the repository's connection is gone or its tenant is not `default`.
+   - **Empty repositories:** card creation reads the default-branch head, so an empty repository or a failing provider refuses creation as well. That follows from "the same repository refusals apply".
 
 ## Steps
 

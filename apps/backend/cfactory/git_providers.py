@@ -44,6 +44,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, TypeVar, runtime_checkable
+from urllib.parse import quote
 
 import httpx
 from runners.github.providers.factory import get_provider
@@ -73,6 +74,7 @@ from .git_config import (
 
 __all__ = [
     "SUPPORTED_PROVIDERS",
+    "EmptyRepository",
     "HttpGitHubProvider",
     "IssueProvider",
     "build_provider",
@@ -81,6 +83,15 @@ __all__ = [
 ]
 
 _TIMEOUT_SECONDS = 10.0
+_HTTP_NOT_FOUND = 404
+_HTTP_CONFLICT = 409
+_HTTP_UNPROCESSABLE = 422
+
+
+class EmptyRepository(Exception):  # noqa: N818 — a state, not a failure of the caller
+    """The repository has no commits, so there is nothing to investigate."""
+
+
 # GitHub's maximum page size for a list endpoint.
 _GITHUB_PAGE_SIZE = 100
 # Pages a comment read will walk before giving up (Factory#375). The cap bounds a
@@ -217,6 +228,34 @@ class HttpGitHubProvider:
                 "Authorization": f"Bearer {self._token}",
             },
         )
+
+    async def default_branch_head(self, repo: str) -> tuple[str, str]:
+        """``(default branch, its head sha)``. Raises :class:`EmptyRepository`."""
+        async with self._client() as client:
+            resp = await client.get(f"/repos/{repo}")
+            resp.raise_for_status()
+            branch = resp.json().get("default_branch")
+            if not isinstance(branch, str) or not branch:
+                raise EmptyRepository(repo)
+            resp = await client.get(f"/repos/{repo}/commits/{quote(branch, safe='')}")
+            if resp.status_code == _HTTP_CONFLICT:  # GitHub: "Git Repository is empty."
+                raise EmptyRepository(repo)
+            resp.raise_for_status()
+            sha = resp.json().get("sha")
+            if not isinstance(sha, str) or not sha:
+                raise EmptyRepository(repo)
+            return branch, sha
+
+    async def is_reachable_from_default(self, repo: str, branch: str, sha: str) -> bool:
+        """Whether ``sha`` is the default branch head or one of its ancestors."""
+        async with self._client() as client:
+            resp = await client.get(
+                f"/repos/{repo}/compare/{quote(branch, safe='')}...{quote(sha, safe='')}"
+            )
+            if resp.status_code in (_HTTP_NOT_FOUND, _HTTP_UNPROCESSABLE):
+                return False
+            resp.raise_for_status()
+            return resp.json().get("status") in ("identical", "behind")
 
     async def create_issue(
         self,

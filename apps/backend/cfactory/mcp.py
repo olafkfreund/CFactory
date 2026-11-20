@@ -63,6 +63,7 @@ from .api_deps import action_transport_dep, cards_store_dep
 from .audit import get_audit_store
 from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
 from .capabilities import capability_matrix
+from .card_intake import InvestigationCardError
 from .card_ops import CardNotFoundError, StageRefusedError
 from .cards import (
     CardCreate,
@@ -1411,6 +1412,7 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
 # rather than a ladder of ``except`` clauses because every entry says the same
 # thing in the same shape, and the ladder grew one rung per phase.
 _TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...] = (
+    (InvestigationCardError, lambda exc: {"error": str(exc), "reason": exc.reason}),
     (CardNotFoundError, lambda exc: {"error": f"no card {exc.args[0]!r}"}),
     (DuplicateCardKeyError, lambda exc: {"error": f"card already exists: {exc.args[0]!r}"}),
     (

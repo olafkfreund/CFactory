@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 561
 author: olafkfreund
 ---
@@ -119,3 +119,7 @@ With the switch off, none of these exist, and nothing else in CFactory changes. 
    - `drain` refuses new investigation cards and new dispatches.
    - It removes `cfactory_investigate_card` from the MCP tool list, so RFactory's `investigateAvailable()` turns false.
    - It keeps lease, stop, recovery and reads.
+
+## Decisions (owner, 2026-11-20: "approve")
+
+The recommendations above are the answers. The test command lives per git repository. The card gets an immutable `kind: investigation`. "On the default branch" means reachable from it. The board shows the run id and state. Reads are relayed field for field. The switch is `off|on|drain`.

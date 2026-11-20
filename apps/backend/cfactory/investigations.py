@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
@@ -219,6 +220,7 @@ def _binding_repository(
             locked_row is None
             or locked_connection is None
             or locked_row.tenant_id != DEFAULT_TENANT
+            or locked_connection.tenant_id != DEFAULT_TENANT
         ):
             raise InvestigationError(409, "repository_gone")
         row, connection = locked_row, locked_connection
@@ -269,6 +271,17 @@ def _aifactory(  # noqa: PLR0913 — transport, timeout and request are independ
         return response.status_code, body if isinstance(body, dict) else None
     except httpx.RequestError:
         return 0, None
+
+
+def _forgotten(status: int, body: dict[str, Any] | None) -> bool:
+    """AIFactory no longer has the run, so it has no pods either. Only its exact
+    "run not found": a 404 for a lost project membership must not free the card."""
+    detail = (body or {}).get("detail")
+    return (
+        status == HTTPStatus.NOT_FOUND
+        and isinstance(detail, str)
+        and detail.strip().lower() == "run not found"
+    )
 
 
 def _relay_body(status: int, body: dict[str, Any] | None) -> dict[str, Any]:
@@ -462,6 +475,8 @@ def get_run(
     status, body = _aifactory(
         settings, "GET", f"/api/investigations/{quote(run_id, safe='')}", transport=transport
     )
+    if _forgotten(status, body):
+        _state(store, key, run_id, {"state": "gone", "pods_gone": True, "reason": "run not found"})
     result = _relay_body(status, body)
     _state(store, key, run_id, result)
     return result
@@ -545,6 +560,10 @@ def stop(  # noqa: PLR0913 — shared REST/MCP operation
             _state(store, key, run_id, {"state": "stopping"})
             audit_status = 504
             raise InvestigationError(504, "stop_uncertain")
+        if _forgotten(status, body):
+            _state(
+                store, key, run_id, {"state": "gone", "pods_gone": True, "reason": "run not found"}
+            )
         if status == _HTTP_OK and body is not None:
             _state(store, key, run_id, body)
         if status != _HTTP_OK or body is None:

@@ -506,3 +506,16 @@ def test_starting_at_old_120_second_limit_is_still_live(env):
         record["started_at"] = (datetime.now(UTC) - timedelta(seconds=121)).isoformat()
         store.write_investigation(session, row, record)
     assert _reason(_post(client, key)) == "run_live"
+
+
+@pytest.mark.parametrize(("detail", "freed"), [("run not found", True), ("Project not found", False)])
+def test_forgotten_run_frees_card_only_on_run_not_found(env, detail, freed):
+    store, _, upstream, client, key, _ = env
+    assert _post(client, key).status_code == 200
+    upstream.relay_status = 404
+    upstream.relay_body = {"detail": detail}
+    assert client.get(f"/api/cards/{key}/investigate/run-1").status_code == 409
+    record = store.get(key).stage_runs["investigate"]
+    assert record["detail"]["pods_gone"] is freed
+    assert record["detail"]["run_id"] == "run-1"
+    assert (_post(client, key).status_code == 409) is not freed

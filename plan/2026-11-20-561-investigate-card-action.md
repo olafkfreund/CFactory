@@ -230,6 +230,7 @@ The hub conformance gate (`Factory/scripts/check_planning_card_conformance.py`) 
    - **`_aifactory`** takes `Settings` explicitly.
    - **Not tested on PostgreSQL:** the concurrency test ran on SQLite only, because CI has no PostgreSQL job. Recorded for the PR.
 7. **Step 5: use phase-specific HTTP timeouts and a 300 s stale window.** A 60 s httpx timeout applies to each network phase, not the entire create request. The former 120 s stale window could expire while a create was still in progress. Create now uses connect/write/pool 10 s and read 60 s; stop uses read 45 s. A `starting` record without a run id becomes stale after 300 s.
+8. **Review round 2 (lead): a run AIFactory has forgotten frees its card.** Once a recorded run stays live until `pods_gone` (round 1), a run AIFactory no longer knows would block its card forever. An AIFactory 404 whose detail is exactly `run not found`, on a read or a stop, records `state: gone, pods_gone: true`. Any other 404, such as a lost project membership, leaves the card live. The reservation also checks the connection's tenant.
 
 ## Steps
 

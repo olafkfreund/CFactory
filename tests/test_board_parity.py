@@ -21,9 +21,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cfactory import config
 from cfactory.app import create_app
 from cfactory.auth import READ, WRITE
-from cfactory.mcp import MCP_TOOLS, TOOL_SCOPES
+from cfactory.mcp import INVESTIGATION_TOOLS, MCP_TOOLS, TOOL_SCOPES
 
 # The prefixes every board REST route lives under, and the substrings that mark
 # a tool as a board tool. Both are how a NEW surface gets noticed: add
@@ -38,8 +39,8 @@ from cfactory.mcp import MCP_TOOLS, TOOL_SCOPES
 # ``git_`` rather than a list of the individual git nouns since RFC-0020 phase 8:
 # the surface grew connections and repositories, and a marker per noun is a marker
 # somebody forgets to add. Any future ``cfactory_*_git_*`` tool is caught.
-BOARD_ROUTE_PREFIXES = ("/api/cards", "/api/tenants")
-BOARD_TOOL_MARKERS = ("card", "git_")
+BOARD_ROUTE_PREFIXES = ("/api/cards", "/api/tenants", "/api/investigations")
+BOARD_TOOL_MARKERS = ("card", "git_", "investigation")
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,57 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
     ),
 )
 
+INVESTIGATION_OPERATIONS: tuple[BoardOperation, ...] = (
+    BoardOperation(
+        "investigation_context",
+        "GET",
+        "/api/investigations/context",
+        "cfactory_investigation_context",
+    ),
+    BoardOperation(
+        "create_investigation_card",
+        "POST",
+        "/api/investigations/cards",
+        "cfactory_create_investigation_card",
+    ),
+    BoardOperation(
+        "investigate_card",
+        "POST",
+        "/api/cards/{key}/actions/investigate",
+        "cfactory_investigate_card",
+    ),
+    BoardOperation(
+        "investigation_lease",
+        "POST",
+        "/api/cards/{key}/investigate/{run_id}/lease",
+        "cfactory_investigation_lease",
+    ),
+    BoardOperation(
+        "investigation_stop",
+        "POST",
+        "/api/cards/{key}/investigate/{run_id}/stop",
+        "cfactory_investigation_stop",
+    ),
+    BoardOperation(
+        "investigation_get",
+        "GET",
+        "/api/cards/{key}/investigate/{run_id}",
+        "cfactory_investigation_get",
+    ),
+    BoardOperation(
+        "investigation_logs",
+        "GET",
+        "/api/cards/{key}/investigate/{run_id}/logs",
+        "cfactory_investigation_logs",
+    ),
+    BoardOperation(
+        "investigation_recover",
+        "GET",
+        "/api/cards/{key}/investigate",
+        "cfactory_investigation_recover",
+    ),
+)
+
 
 def _live_rest_routes() -> set[tuple[str, str]]:
     """Every (method, path) the app actually serves under the board.
@@ -257,7 +309,10 @@ def _live_rest_routes() -> set[tuple[str, str]]:
 def _live_mcp_tools() -> set[str]:
     """Every board tool the MCP catalog actually advertises."""
     return {
-        t["name"] for t in MCP_TOOLS if any(m in t["name"] for m in BOARD_TOOL_MARKERS)
+        t["name"]
+        for t in MCP_TOOLS
+        if any(m in t["name"] for m in BOARD_TOOL_MARKERS)
+        and (config.get_settings().investigations == "on" or t not in INVESTIGATION_TOOLS)
     }
 
 
@@ -291,3 +346,17 @@ def test_scopes_match_the_operation() -> None:
     expected = {op.tool: WRITE if op.mutates else READ for op in BOARD_OPERATIONS}
     actual = {tool: TOOL_SCOPES.get(tool) for tool in expected}
     assert actual == expected
+
+
+def test_investigation_parity_when_on(monkeypatch) -> None:
+    monkeypatch.setenv("CFACTORY_INVESTIGATIONS", "on")
+    config.reset_settings()
+    try:
+        operations = BOARD_OPERATIONS + INVESTIGATION_OPERATIONS
+        assert _live_rest_routes() == {(op.method, op.path) for op in operations}
+        assert _live_mcp_tools() == {op.tool for op in operations}
+        assert {op.tool: TOOL_SCOPES[op.tool] for op in INVESTIGATION_OPERATIONS} == {
+            op.tool: WRITE if op.mutates else READ for op in INVESTIGATION_OPERATIONS
+        }
+    finally:
+        config.reset_settings()

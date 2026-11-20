@@ -57,8 +57,9 @@ from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
-from . import card_ops, git_config_ops
+from . import card_ops, git_config_ops, investigations
 from .api_deps import action_transport_dep, cards_store_dep
 from .audit import get_audit_store
 from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
@@ -86,6 +87,7 @@ from .git_connections import (
     GitResourceNotFoundError,
 )
 from .git_install import InstallError
+from .routes_investigations import CreateInvestigationCard, DispatchInvestigation
 from .store import get_store
 
 logger = logging.getLogger(__name__)
@@ -941,6 +943,101 @@ BOARD_TOOLS: list[dict[str, Any]] = [
 
 MCP_TOOLS += BOARD_TOOLS
 
+_INVESTIGATION_WRITES = {
+    "cfactory_create_investigation_card",
+    "cfactory_investigate_card",
+    "cfactory_investigation_lease",
+    "cfactory_investigation_stop",
+}
+_INVESTIGATION_DRAIN_HIDDEN = {"cfactory_create_investigation_card", "cfactory_investigate_card"}
+_INVESTIGATION_LOG_LIMIT = 500
+INVESTIGATION_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "cfactory_investigation_context",
+        "description": "Read the repository head and investigation command.",
+        "inputSchema": {"type": "object", "properties": {"repository_id": _REPOSITORY_ID_PROP}},
+    },
+    {
+        "name": "cfactory_create_investigation_card",
+        "description": "Create an investigation card for a repository.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["request", "repository_id"],
+            "properties": {
+                "request": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "repository_id": _REPOSITORY_ID_PROP,
+            },
+        },
+    },
+    {
+        "name": "cfactory_investigate_card",
+        "description": "Start a read-only investigation of a card.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key", "request", "sha", "test_command"],
+            "properties": {
+                "card_key": _CARD_KEY_PROP,
+                "request": {"type": "string"},
+                "sha": {"type": "string"},
+                "test_command": {"type": ["string", "null"]},
+                "limits": {"type": "object"},
+            },
+        },
+    },
+    {
+        "name": "cfactory_investigation_lease",
+        "description": "Renew an investigation lease.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key", "run_id"],
+            "properties": {"card_key": _CARD_KEY_PROP, "run_id": {"type": "string"}},
+        },
+    },
+    {
+        "name": "cfactory_investigation_stop",
+        "description": "Stop an investigation.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key", "run_id"],
+            "properties": {"card_key": _CARD_KEY_PROP, "run_id": {"type": "string"}},
+        },
+    },
+    {
+        "name": "cfactory_investigation_get",
+        "description": "Read an investigation run.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key", "run_id"],
+            "properties": {"card_key": _CARD_KEY_PROP, "run_id": {"type": "string"}},
+        },
+    },
+    {
+        "name": "cfactory_investigation_logs",
+        "description": "Read investigation logs.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key", "run_id"],
+            "properties": {
+                "card_key": _CARD_KEY_PROP,
+                "run_id": {"type": "string"},
+                "after": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+            },
+        },
+    },
+    {
+        "name": "cfactory_investigation_recover",
+        "description": "Read the local investigation record.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["card_key"],
+            "properties": {"card_key": _CARD_KEY_PROP},
+        },
+    },
+]
+MCP_TOOLS += INVESTIGATION_TOOLS
+_INVESTIGATION_NAMES = {tool["name"] for tool in INVESTIGATION_TOOLS}
+
 
 # The scope each tool requires. Kept beside the catalog rather than inside the
 # tool dicts so ``tools/list`` stays byte-for-byte the MCP shape clients already
@@ -1002,6 +1099,7 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_update_git_repository": WRITE,
     "cfactory_delete_git_repository": WRITE,
     "cfactory_set_default_git_repository": WRITE,
+    **{name: WRITE if name in _INVESTIGATION_WRITES else READ for name in _INVESTIGATION_NAMES},
 }
 
 
@@ -1012,7 +1110,7 @@ TOOL_SCOPES: dict[str, str] = {
 FULL_SCOPE = frozenset({READ, WRITE})
 
 
-def _authenticate(request: Request) -> frozenset[str]:
+def _authenticate(request: Request) -> tuple[frozenset[str], bool]:
     """Return the scopes the caller holds, or raise 401.
 
     Fails CLOSED: with no credential configured at all the request is denied
@@ -1033,7 +1131,7 @@ def _authenticate(request: Request) -> frozenset[str]:
                 _legacy_mcp_uses["allowed"],
                 user_agent,
             )
-            return FULL_SCOPE
+            return FULL_SCOPE, False
         _legacy_mcp_uses["denied"] += 1
         logger.warning(
             "legacy MCP secret denied (deprecated); total=%d user_agent=%s",
@@ -1046,14 +1144,14 @@ def _authenticate(request: Request) -> frozenset[str]:
     if keystore.configured:
         scopes = keystore.scopes_for(token)
         if scopes is not None:
-            return frozenset(scopes)
+            return frozenset(scopes), False
 
     # 3. Nothing matched. If something IS configured this is a bad token;
     #    if nothing is configured it is an unconfigured server (deny, not open).
     if settings.mcp_secret or keystore.configured:
         raise HTTPException(status_code=401, detail="Invalid MCP token")
     if settings.mcp_dev_open:
-        return FULL_SCOPE
+        return FULL_SCOPE, True
     raise HTTPException(
         status_code=401,
         detail=(
@@ -1148,6 +1246,7 @@ class ToolContext:
     cards: CardStore
     audit: card_ops.AuditContext
     transport: httpx.BaseTransport | None = None
+    dev_open: bool = False
 
 
 def _tool_card_sync_state(_args: dict[str, Any], ctx: ToolContext) -> Any:
@@ -1369,6 +1468,65 @@ def _tool_stage_card(stage: str) -> Callable[[dict[str, Any], ToolContext], Any]
     return handler
 
 
+def _tool_investigation(name: str, args: dict[str, Any], ctx: ToolContext) -> Any:  # noqa: PLR0911, PLR0912
+    """Use the same operation and validation as the REST investigation routes."""
+    settings = get_settings()
+    key = args.get("card_key")
+    run_id = args.get("run_id")
+    if name == "cfactory_investigation_context":
+        repository_id = args.get("repository_id")
+        if repository_id is not None and (type(repository_id) is not int):
+            raise investigations.InvestigationError(422, "invalid_repository_id")
+        return investigations.context(ctx.cards, settings, repository_id, ctx.audit, ctx.transport)
+    if name == "cfactory_create_investigation_card":
+        try:
+            body = CreateInvestigationCard.model_validate(args)
+        except ValidationError:
+            raise investigations.InvestigationError(422, "invalid_arguments") from None
+        return investigations.create_card(
+            ctx.cards, ctx.audit, settings, body.request, body.repository_id, ctx.transport
+        ).model_dump(mode="json")
+    if not isinstance(key, str) or not key:
+        raise investigations.InvestigationError(422, "invalid_card_key")
+    if name == "cfactory_investigate_card":
+        try:
+            dispatch_body = DispatchInvestigation.model_validate(
+                {k: v for k, v in args.items() if k != "card_key"}
+            )
+        except ValidationError:
+            raise investigations.InvestigationError(422, "invalid_arguments") from None
+        return investigations.dispatch(
+            ctx.cards,
+            ctx.audit,
+            settings,
+            key,
+            dispatch_body.request,
+            dispatch_body.sha,
+            dispatch_body.test_command,
+            dispatch_body.limits,
+            ctx.transport,
+        )
+    if name == "cfactory_investigation_recover":
+        return investigations.recover(ctx.cards, key)
+    if not isinstance(run_id, str) or not run_id:
+        raise investigations.InvestigationError(422, "invalid_run_id")
+    if name == "cfactory_investigation_get":
+        return investigations.get_run(ctx.cards, settings, key, run_id, ctx.transport)
+    if name == "cfactory_investigation_logs":
+        after, limit = args.get("after", 0), args.get("limit", 100)
+        if (
+            type(after) is not int
+            or after < 0
+            or type(limit) is not int
+            or not 1 <= limit <= _INVESTIGATION_LOG_LIMIT
+        ):
+            raise investigations.InvestigationError(422, "invalid_cursor")
+        return investigations.logs(ctx.cards, settings, key, run_id, after, limit, ctx.transport)
+    if name == "cfactory_investigation_lease":
+        return investigations.lease(ctx.cards, ctx.audit, settings, key, run_id, ctx.transport)
+    return investigations.stop(ctx.cards, ctx.audit, settings, key, run_id, ctx.transport)
+
+
 _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_list_workitems": lambda _a, _c: _tool_list_workitems(),
     "cfactory_get_workitem": lambda args, _c: _tool_get_workitem(args.get("correlation_key", "")),
@@ -1411,12 +1569,27 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_delete_git_repository": _tool_delete_git_repository,
     "cfactory_set_default_git_repository": _tool_set_default_git_repository,
 }
+_TOOL_HANDLERS.update(
+    {
+        name: (lambda args, ctx, name=name: _tool_investigation(name, args, ctx))
+        for name in _INVESTIGATION_NAMES
+    }
+)
 
 
 # How each transport-neutral domain error is rendered over JSON-RPC. A table
 # rather than a ladder of ``except`` clauses because every entry says the same
 # thing in the same shape, and the ladder grew one rung per phase.
 _TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...] = (
+    (
+        investigations.InvestigationError,
+        lambda exc: {
+            "error": exc.reason,
+            "reason": exc.reason,
+            "status": exc.status,
+            **({"detail": exc.detail} if exc.detail is not None else {}),
+        },
+    ),
     (InvestigationCardError, lambda exc: {"error": str(exc), "reason": exc.reason}),
     (CardNotFoundError, lambda exc: {"error": f"no card {exc.args[0]!r}"}),
     (DuplicateCardKeyError, lambda exc: {"error": f"card already exists: {exc.args[0]!r}"}),
@@ -1455,7 +1628,7 @@ _TOOL_ERRORS: tuple[tuple[type[Exception], Callable[[Any], dict[str, Any]]], ...
 )
 
 
-def _dispatch_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> Any:
+def _dispatch_tool(name: str, arguments: Any, ctx: ToolContext) -> Any:
     """Run a tool, rendering the domain errors as JSON the agent can read.
 
     The REST routes turn these same errors into 404/409/422; over JSON-RPC the
@@ -1466,6 +1639,16 @@ def _dispatch_tool(name: str, arguments: dict[str, Any], ctx: ToolContext) -> An
     if handler is None:
         return {"error": f"unknown tool: {name}"}
     try:
+        if name in _INVESTIGATION_NAMES:
+            if not isinstance(arguments, dict):
+                raise investigations.InvestigationError(422, "invalid_arguments")
+            settings = get_settings()
+            if settings.multi_tenant:
+                raise investigations.InvestigationError(409, "multi_tenant_unsupported")
+            if name in _INVESTIGATION_WRITES and ctx.dev_open:
+                raise investigations.InvestigationError(403, "keys_required")
+            if name in _INVESTIGATION_DRAIN_HIDDEN and settings.investigations == "drain":
+                raise investigations.InvestigationError(503, "investigations_draining")
         return handler(arguments, ctx)
     except tuple(kind for kind, _ in _TOOL_ERRORS) as exc:
         return next(render(exc) for kind, render in _TOOL_ERRORS if isinstance(exc, kind))
@@ -1484,7 +1667,7 @@ def _error(code: int, message: str, rpc_id: Any) -> dict:
     return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
 
 
-def _tool_context(request: Request) -> ToolContext:
+def _tool_context(request: Request, *, dev_open: bool = False) -> ToolContext:
     """Resolve the caller and the stores a board tool operates on.
 
     Reuses the REST seams as plain functions rather than re-deriving any of
@@ -1510,13 +1693,14 @@ def _tool_context(request: Request) -> ToolContext:
         cards=cards_store_dep(request.headers.get("X-Tenant-Id")),
         audit=card_ops.AuditContext(get_audit_store(), actor, endpoint=_MCP_ENDPOINT),
         transport=action_transport_dep(),
+        dev_open=dev_open,
     )
 
 
 @router.post("/mcp")
-async def mcp_endpoint(request: Request) -> Response:
+async def mcp_endpoint(request: Request) -> Response:  # noqa: PLR0911
     """JSON-RPC 2.0 MCP endpoint. Handles initialize, tools/list, tools/call."""
-    granted = _authenticate(request)
+    granted, dev_open = _authenticate(request)
 
     try:
         body = await request.json()
@@ -1549,14 +1733,31 @@ async def mcp_endpoint(request: Request) -> Response:
         )
 
     if method == "tools/list":
-        return JSONResponse(_result({"tools": MCP_TOOLS}, rpc_id))
+        switch = get_settings().investigations
+        tools = [
+            t
+            for t in MCP_TOOLS
+            if t["name"] not in _INVESTIGATION_NAMES
+            or switch == "on"
+            or (switch == "drain" and t["name"] not in _INVESTIGATION_DRAIN_HIDDEN)
+        ]
+        return JSONResponse(_result({"tools": tools}, rpc_id))
 
     if method == "tools/call":
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {}) or {}
+        if tool_name in _INVESTIGATION_NAMES and get_settings().investigations == "off":
+            payload = {"error": f"unknown tool: {tool_name}"}
+            return JSONResponse(
+                _result({"content": [{"type": "text", "text": json.dumps(payload)}]}, rpc_id)
+            )
         _require_tool_scope(tool_name, granted)
         try:
-            payload = _dispatch_tool(tool_name, arguments, _tool_context(request))
+            ctx = _tool_context(request, dev_open=dev_open)
+            if tool_name in _INVESTIGATION_NAMES:
+                payload = await run_in_threadpool(_dispatch_tool, tool_name, arguments, ctx)
+            else:
+                payload = _dispatch_tool(tool_name, arguments, ctx)
         except Exception:
             logger.exception("[cfactory-mcp] tool call failed tool=%s", sanitize_log(tool_name))
             content = _error(-32603, "Internal error", rpc_id)

@@ -250,6 +250,7 @@ def _aifactory(  # noqa: PLR0913 — transport, timeout and request are independ
     path: str,
     *,
     payload: dict[str, Any] | None = None,
+    params: dict[str, int] | None = None,
     timeout: float | httpx.Timeout = 10,
     transport: httpx.BaseTransport | None = None,
 ) -> tuple[int, dict[str, Any] | None]:
@@ -263,7 +264,7 @@ def _aifactory(  # noqa: PLR0913 — transport, timeout and request are independ
             timeout=timeout,
             transport=transport,
         ) as client:
-            response = client.request(method, path, json=payload)
+            response = client.request(method, path, json=payload, params=params)
         try:
             body = response.json()
         except ValueError:
@@ -504,10 +505,13 @@ def logs(  # noqa: PLR0913 — relay query and transport
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
     run_id = _owned_run_id(store, key, run_id)
+    if after < 0 or not 1 <= limit <= 500:  # noqa: PLR2004 — AIFactory's page limit
+        raise InvestigationError(422, "invalid_cursor")
     status, body = _aifactory(
         settings,
         "GET",
-        f"/api/investigations/{quote(run_id, safe='')}/logs?after={after}&limit={limit}",
+        f"/api/investigations/{quote(run_id, safe='')}/logs",
+        params={"after": after, "limit": limit},
         transport=transport,
     )
     return _relay_body(status, body)

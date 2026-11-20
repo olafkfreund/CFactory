@@ -1570,16 +1570,22 @@ export const StageRunSchema = z
   .loose();
 export type StageRun = z.infer<typeof StageRunSchema>;
 
-const InvestigationRunSchema = z.object({
-  status: z.string(),
-  detail: z.record(z.string(), z.unknown()),
-}).loose();
+const InvestigationRunSchema = z
+  .object({
+    status: z.string(),
+    detail: z.record(z.string(), z.unknown()),
+  })
+  .loose();
 
-const StageRunsSchema = z.record(z.string(), z.union([StageRunSchema, InvestigationRunSchema]))
+const StageRunsSchema = z
+  .record(z.string(), z.union([StageRunSchema, InvestigationRunSchema]))
   .superRefine((runs, ctx) => {
     for (const [key, run] of Object.entries(runs)) {
-      const result = (key === "investigate" ? InvestigationRunSchema : StageRunSchema).safeParse(run);
-      if (!result.success) ctx.addIssue({ code: "custom", path: [key], message: "Invalid stage run" });
+      const result = (key === "investigate" ? InvestigationRunSchema : StageRunSchema).safeParse(
+        run,
+      );
+      if (!result.success)
+        ctx.addIssue({ code: "custom", path: [key], message: "Invalid stage run" });
     }
   });
 

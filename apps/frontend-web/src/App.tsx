@@ -39,6 +39,7 @@ export default function App() {
     activeProjectSlug,
     breadcrumbProjects,
     connectionsLoaded,
+    connectionsError,
     defaultRepositoryId,
     setProjectSlug,
     busy,
@@ -59,6 +60,7 @@ export default function App() {
     toggleTicker,
     onSelectStage,
     onRefresh,
+    retryProjects,
   } = useDashboard();
 
   // Command palette (#147): ⌘K / Ctrl-K toggles it anywhere. Task-open is held at
@@ -74,6 +76,7 @@ export default function App() {
     return t && t.trim() ? t.trim() : null;
   });
   const needsCount = useMemo(() => attentionList(items).length, [items]);
+  const scoped = projectRef !== null;
   const openTask = openTaskKey
     ? (items.find((w) => w.correlation_key === openTaskKey) ?? null)
     : null;
@@ -103,7 +106,7 @@ export default function App() {
     const nav: PaletteCommand[] = NAV.map(({ id, label, Icon }) => ({
       id: `nav-${id}`,
       group: "Go to",
-      label,
+      label: scoped && ["tokens", "audit", "services", "settings"].includes(id) ? `${label} (fleet-wide)` : label,
       keywords: label,
       Icon,
       run: () => {
@@ -177,8 +180,8 @@ export default function App() {
         },
       });
     }
-    return [...nav, ...actions];
-  }, [setView, onRefresh, setCopilotOpen, onSelectStage]);
+    return [...nav, ...actions.filter((action) => !scoped || action.id !== "act-copilot")];
+  }, [setView, onRefresh, setCopilotOpen, onSelectStage, scoped]);
 
   return (
     <div className="shell">
@@ -201,7 +204,7 @@ export default function App() {
               onClick={() => setView(id)}
             >
               <Icon size={18} />
-              <span>{label}</span>
+              <span>{scoped && ["tokens", "audit", "services", "settings"].includes(id) ? `${label} (fleet-wide)` : label}</span>
               {id === "needs" && needsCount > 0 && (
                 <span className="nav-badge" aria-label={`${needsCount} need attention`}>
                   {needsCount}
@@ -237,7 +240,7 @@ export default function App() {
         <header className="topbar">
           <PortalSwitcher
             needsCount={needsCount}
-            project={activeProjectSlug ? { slug: activeProjectSlug } : undefined}
+            project={activeProject && activeProjectSlug && !activeProject.id.startsWith("repo:") ? { slug: activeProjectSlug } : undefined}
           />
           <ProjectBreadcrumb
             projects={breadcrumbProjects}
@@ -280,12 +283,19 @@ export default function App() {
           {alarm && <div key={alarm.tick} className="alarm-sweep" aria-hidden="true" />}
           <main className="content">
             {error && <div className="banner banner--error">{error}</div>}
-            {projectRef !== null && !connectionsLoaded ? (
+            {projectRef !== null && connectionsError ? (
+              <div className="mc-panel">
+                <h2 className="panel-title">Could not load projects</h2>
+                <p>{connectionsError}</p>
+                <button type="button" className="primary-btn" onClick={() => { void retryProjects(); }}>Retry</button>
+              </div>
+            ) : projectRef !== null && !connectionsLoaded ? (
               <p className="col-empty">Loading project…</p>
             ) : projectRef !== null && !activeProject ? (
               <div className="mc-panel">
-                <h2 className="panel-title">Project not found</h2>
-                <p>No repository or project matches {projectRef}.</p>
+                <h2 className="panel-title">Choose a project</h2>
+                <p>No unique project matches {projectRef}.</p>
+                {breadcrumbProjects.map((project) => <button key={project.slug} type="button" className="primary-btn" onClick={() => setProjectSlug(project.slug)}>{project.name}</button>)}
                 <button
                   type="button"
                   className="primary-btn"
@@ -298,8 +308,8 @@ export default function App() {
               </div>
             ) : (
               <>
-                {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
-                {view === "needs" && <NeedsYouView items={items} progress={progress} />}
+                {view === "overview" && <MissionControl items={items} reloadSignal={tick} projectScoped={scoped} />}
+                {view === "needs" && <NeedsYouView items={items} progress={progress} projectScoped={scoped} />}
                 {view === "backlog" && (
                   <BacklogView
                     reloadSignal={tick}
@@ -341,7 +351,7 @@ export default function App() {
       </div>
 
       {/* Copilot — floating assistant (robot FAB → chat popup) */}
-      {copilotOpen && (
+      {copilotOpen && !scoped && (
         <div className="copilot-pop" role="dialog" aria-label="Copilot assistant">
           <div className="copilot-pop__head">
             <span className="copilot-pop__title">
@@ -360,7 +370,7 @@ export default function App() {
           </div>
         </div>
       )}
-      <button
+      {!scoped && <button
         className={`copilot-fab ${copilotOpen ? "copilot-fab--open" : ""}`}
         onClick={() => setCopilotOpen((o) => !o)}
         title={copilotOpen ? "Close Copilot" : "Ask Copilot"}
@@ -368,7 +378,7 @@ export default function App() {
         aria-expanded={copilotOpen}
       >
         <IconRobot size={24} />
-      </button>
+      </button>}
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
 
@@ -382,8 +392,9 @@ export default function App() {
         projects={breadcrumbProjects}
         onSwitchProject={setProjectSlug}
         onOpenTask={(correlationKey) => {
-          setOpenTaskKey(correlationKey);
+          if (items.some((item) => item.correlation_key === correlationKey)) setOpenTaskKey(correlationKey);
         }}
+        taskKeys={scoped ? new Set(items.map((item) => item.correlation_key)) : undefined}
       />
       {openTask && (
         <TaskDetail

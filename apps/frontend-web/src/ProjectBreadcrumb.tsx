@@ -112,6 +112,7 @@ export function ProjectBreadcrumb({
     if (!slug) return;
     setOpen(false);
     onSelect(slug);
+    trigger.current?.focus();
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -143,13 +144,19 @@ export function ProjectBreadcrumb({
       >
         <span className="proj-bc-prefix">Project</span>
         <span className="proj-bc-sep">/</span>
-        <span className="proj-bc-name">{current?.name ?? "All projects"}</span>
+        <span className="proj-bc-name">{current?.name ?? (currentSlug ? "Choose a project" : "All projects")}</span>
         <span aria-hidden="true" className="proj-bc-caret">
           ▾
         </span>
       </button>
       {open && (
-        <div className="proj-bc-menu">
+        <div className="proj-bc-menu" onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setOpen(false);
+            trigger.current?.focus();
+          }
+        }}>
           <input
             autoFocus
             value={q}
@@ -170,7 +177,7 @@ export function ProjectBreadcrumb({
           />
           <ul id={listId} role="listbox" aria-label="Projects" className="proj-bc-list">
             {matches.length === 0 && (
-              <li className="proj-bc-empty">No matching projects</li>
+              <li role="option" aria-disabled="true" className="proj-bc-empty">No matching projects</li>
             )}
             {matches.map((p, i) => (
               <li
@@ -202,6 +209,7 @@ export function ProjectBreadcrumb({
               onClick={() => {
                 setOpen(false);
                 onViewAll();
+                trigger.current?.focus();
               }}
               className="proj-bc-all"
             >

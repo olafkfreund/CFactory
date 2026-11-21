@@ -24,18 +24,24 @@ function severityIcon(sev: string) {
   return <g><circle cx="12" cy="12" r="9" /><path d="M12 11 v5 M12 8 h.01" /></g>;
 }
 
-export default function MissionControl({ items, reloadSignal }: { items: WorkItem[]; reloadSignal: number }) {
+export default function MissionControl({ items, reloadSignal, projectScoped = false }: { items: WorkItem[]; reloadSignal: number; projectScoped?: boolean }) {
   const [rollups, setRollups] = useState<Rollups | null>(null);
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
   const [tokens, setTokens] = useState<TokenTotals | null>(null);
 
   useEffect(() => {
+    if (projectScoped) return;
     fetchRollups().then(setRollups).catch(() => setRollups(null));
     fetchAnomalies().then(setAnomalies).catch(() => setAnomalies([]));
     fetchTokens().then(setTokens).catch(() => setTokens(null));
-  }, [reloadSignal]);
+  }, [reloadSignal, projectScoped]);
 
   const totalEvents = rollups?.total_events ?? 0;
+
+  if (projectScoped) return <>
+    <div className="page-head"><h1>Mission Control</h1><p>Work items in this project.</p></div>
+    <div className="mc-stats"><Stat label="Work items" value={items.length} accent="var(--cyan)" /></div>
+  </>;
 
   return (
     <>

@@ -70,13 +70,13 @@ describe("project routes", () => {
     expect(projects).toHaveLength(3);
     expect(projects[0]).toMatchObject({
       id: "uuid-a",
-      name: "acme/widgets",
+      name: "acme/other",
       createdAt: "2026-01-01",
       repositoryIds: [1, 2],
-      repoPaths: ["acme/widgets", "acme/other"],
+      repoPaths: ["acme/other", "acme/widgets"],
     });
-    expect(projects[1]?.name).toBe("else/widgets");
-    expect(projects[2]).toMatchObject({ id: "repo:4", name: "acme/free" });
+    expect(projects[1]).toMatchObject({ id: "repo:4", name: "acme/free" });
+    expect(projects[2]?.name).toBe("else/widgets");
     expect(deriveProjects(null)).toEqual([]);
   });
 
@@ -87,12 +87,15 @@ describe("project routes", () => {
     const projects = [newer, older, namedLikeId];
     expect(slugify("Café / Widgets", "fallback")).toBe("cafe-widgets");
     expect(slugify("---", "fallback")).toBe("fallback");
-    expect(projectSlugs(projects).get(older.id)).toBe("demo");
-    expect(projectSlugs(projects).get(newer.id)).toBe("demo-abcdefgh");
-    expect(projectSlug(projects, older)).toBe("demo");
-    expect(findProjectByRef(projects, "demo")).toBe(older);
+    expect(projectSlugs(projects).get(older.id)).toBe("demo-abcdefgh");
+    expect(projectSlugs(projects).get(newer.id)).toBe("demo-abcdefgh-2");
+    expect(projectSlug(projects, older)).toBe("demo-abcdefgh");
+    expect(findProjectByRef(projects, "demo")).toBe(namedLikeId);
     expect(findProjectByRef(projects, "ABCDEFGH-NEW")).toBe(newer);
-    expect(findProjectByRef(projects, "acme-widgets")).toBe(newer);
+    expect(findProjectByRef(projects, "acme-widgets")).toBeUndefined();
+    expect(findProjectByRef([older, newer], "demo")).toBeUndefined();
+    expect(projectSlugs([newer, older])).toEqual(projectSlugs([older, newer]));
+    expect(projectSlugs([{ ...older, slug: "DEMO" }, project("other", "demo")]).get("other")).not.toBe("demo");
   });
 
   it("parses and builds cross-project and project paths", () => {
@@ -201,11 +204,17 @@ describe("project filters", () => {
       item("unmatched"),
     ];
     expect(
-      filterWorkItemsForProject(items, active, cards.slice(0, 1)).map(
+      filterWorkItemsForProject(items, active, cards, [active], 1).map(
         (work) => work.correlation_key,
       ),
     ).toEqual(["task-one", "external"]);
-    expect(filterWorkItemsForProject(items, null, [])).toBe(items);
+    expect(filterWorkItemsForProject(items, null, [], [], null)).toBe(items);
+    const beta = { ...active, id: "beta", repositoryIds: [2], repoPaths: ["acme/other"] };
+    const conflicting = [item("task-two", "acme/widgets"), item("unknown", "acme/widgets")];
+    expect(filterWorkItemsForProject(conflicting, active, cards, [active, beta], 1).map((w) => w.correlation_key)).toEqual(["unknown"]);
+    expect(filterWorkItemsForProject(conflicting, beta, cards, [active, beta], 1).map((w) => w.correlation_key)).toEqual(["task-two"]);
+    expect(filterWorkItemsForProject([item("unknown", "acme/widgets")], active, [], [active, { ...beta, repoPaths: ["acme/widgets"] }], 1)).toEqual([]);
+    expect(filterWorkItemsForProject([item("task-one", "acme/widgets")], active, [cards[0]!, { ...cards[0]!, repository_id: 2 }], [active, beta], 1)).toEqual([]);
   });
 
   it("initialises route state, rewrites redirects/aliases, and renders project-scoped planning views", () => {

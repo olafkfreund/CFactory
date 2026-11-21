@@ -123,6 +123,7 @@ export default function CommandPalette({
   onSwitchProject,
   initialProjectMode = false,
   initialQuery = "",
+  taskKeys,
 }: {
   open: boolean;
   onClose: () => void;
@@ -132,6 +133,7 @@ export default function CommandPalette({
   onSwitchProject?: ((slug: string | null) => void) | undefined;
   initialProjectMode?: boolean | undefined;
   initialQuery?: string | undefined;
+  taskKeys?: Set<string> | undefined;
 }) {
   const [q, setQ] = useState(initialQuery);
   const [sel, setSel] = useState(0);
@@ -181,7 +183,7 @@ export default function CommandPalette({
       buildPaletteRows({
         q,
         commands,
-        results,
+        results: taskKeys ? results.filter((result) => taskKeys.has(result.correlation_key)) : results,
         projectMode,
         projects,
         onEnterProjectMode: onSwitchProject
@@ -193,7 +195,7 @@ export default function CommandPalette({
             }
           : undefined,
       }),
-    [q, commands, results, projectMode, projects, onSwitchProject],
+    [q, commands, results, projectMode, projects, onSwitchProject, taskKeys],
   );
 
   // Keep the selection in range as the result set shrinks/grows.

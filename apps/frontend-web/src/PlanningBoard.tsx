@@ -36,12 +36,16 @@ export default function PlanningBoard({
 
   const projectCards = filterCardsForProject(cards, project ?? null, defaultRepositoryId);
   const shown = projectCards.filter((c) => matchesQuery(c, query)).sort(byPriority);
+  const scopedSync = syncState && project ? {
+    ...syncState,
+    repositories: syncState.repositories.filter((repo) => project.repositoryIds.includes(repo.repository_id ?? defaultRepositoryId ?? -1)),
+  } : syncState;
   // Amber only when EVERY connected repository has gone stale, or the poll is off:
   // a single lagging repository is a caveat in the text, not an alarm on the board.
   const stale =
-    syncState !== null &&
-    (!syncState.poll.enabled ||
-      (syncState.repositories.length > 0 && syncState.repositories.every((r) => r.stale)));
+    scopedSync !== null &&
+    (!scopedSync.poll.enabled ||
+      (scopedSync.repositories.length > 0 && scopedSync.repositories.every((r) => r.stale)));
 
   return (
     <>
@@ -61,7 +65,7 @@ export default function PlanningBoard({
             className={`card-sync__age${stale ? " card-sync__age--stale" : ""}`}
             title="Issues are imported by a background poll, not a webhook — the board is never live."
           >
-            {syncSummary(syncState)}
+            {syncSummary(scopedSync)}
           </span>
           <button
             className="card-btn"

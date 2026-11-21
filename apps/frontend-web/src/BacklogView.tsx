@@ -109,7 +109,7 @@ export default function BacklogView({
     setBusy(true);
     try {
       if (editing === "create") {
-        await createCard(fields);
+        await createCard({ ...fields, ...(project ? { repository_id: project.repositoryIds[0] } : {}) });
         reload(); // a create changes the list, not one card — refetch
       } else if (editing) {
         // Edits of an existing card go through the same optimistic path as a

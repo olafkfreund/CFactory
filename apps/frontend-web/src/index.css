@@ -160,6 +160,42 @@ body {
 .portal-opt.on { color: var(--text); background: var(--panel-2); cursor: default; }
 .portal-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 6px currentColor; }
 
+/* Project breadcrumb (#570): topbar project scope picker next to the portal switcher. */
+.proj-bc { position: relative; display: inline-flex; }
+.proj-bc-btn {
+  display: inline-flex; align-items: center; gap: 0.35rem; max-width: 15rem;
+  font: 600 0.74rem var(--font-mono); padding: 0.32rem 0.65rem; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer;
+}
+.proj-bc-btn:hover { background: var(--panel-2); border-color: var(--cyan); }
+.proj-bc-prefix, .proj-bc-sep, .proj-bc-caret { color: var(--muted); }
+.proj-bc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-bc-menu {
+  position: absolute; left: 0; top: calc(100% + 0.3rem); z-index: 50; width: 17rem;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45); overflow: hidden;
+}
+.proj-bc-input {
+  width: 100%; border: 0; border-bottom: 1px solid var(--border); outline: none;
+  background: transparent; color: var(--text); font: 500 0.8rem var(--font-ui); padding: 0.5rem 0.7rem;
+}
+.proj-bc-input::placeholder { color: var(--muted); }
+.proj-bc-list { list-style: none; margin: 0; padding: 0.25rem; max-height: 15rem; overflow-y: auto; }
+.proj-bc-empty { padding: 0.7rem 0.5rem; text-align: center; font-size: 0.78rem; color: var(--muted); }
+.proj-bc-opt {
+  display: flex; align-items: center; gap: 0.45rem; padding: 0.38rem 0.55rem;
+  border-radius: 6px; font-size: 0.82rem; color: var(--text); cursor: pointer;
+}
+.proj-bc-opt.sel, .proj-bc-opt:hover { background: var(--panel-2); }
+.proj-bc-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-bc-check { color: var(--cyan); font-family: var(--font-mono); }
+.proj-bc-all {
+  width: 100%; border: 0; border-top: 1px solid var(--border); background: transparent;
+  color: var(--muted); font: 600 0.75rem var(--font-mono); padding: 0.48rem 0.7rem;
+  text-align: left; cursor: pointer;
+}
+.proj-bc-all:hover { background: var(--panel-2); color: var(--text); }
+
 /* Theme toggle (#150): compact Dark/Light/System segmented control in the topbar. */
 .theme-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .theme-opt {

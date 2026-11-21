@@ -3,13 +3,18 @@
 // notification machine, and the refresh/load actions. App becomes a thin
 // composition root that consumes this hook. Pure extraction — the logic, effect
 // ordering and dependency arrays are unchanged.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  fetchCards,
+  fetchGitConnections,
   fetchHealth,
   fetchProgress,
+  fetchSettings,
   fetchWorkItems,
   openFeed,
   refresh as apiRefresh,
+  type Card,
+  type GitConnections,
   type LiveProgress,
   type WorkItem,
 } from "./api";
@@ -20,6 +25,16 @@ import { stageState, type TaskState } from "./taskState";
 import type { StripAlarm, StripStage } from "./PipelineStrip";
 import type { TickerPin } from "./EventTicker";
 import { TICKER_PREF, type Backend, type View } from "./dashboard";
+import type { BreadcrumbProject } from "./ProjectBreadcrumb";
+import {
+  buildCockpitPath,
+  deriveProjects,
+  filterWorkItemsForProject,
+  findProjectByRef,
+  parseCockpitRoute,
+  projectSlugs,
+  type CockpitProject,
+} from "./projectRoute";
 
 export interface ToastEntry {
   id: number;
@@ -31,6 +46,15 @@ export interface Dashboard {
   items: WorkItem[];
   view: View;
   setView: (v: View) => void;
+  projectRef: string | null;
+  activeProject: CockpitProject | null;
+  activeProjectSlug: string | undefined;
+  projects: CockpitProject[];
+  breadcrumbProjects: BreadcrumbProject[];
+  connectionsLoaded: boolean;
+  connectionsError: string | null;
+  defaultRepositoryId: number | null | undefined;
+  setProjectSlug: (slug: string | null) => void;
   busy: boolean;
   live: boolean;
   error: string | null;
@@ -49,12 +73,39 @@ export interface Dashboard {
   toggleTicker: () => void;
   onSelectStage: (stage: StripStage | null) => void;
   onRefresh: () => Promise<void>;
+  retryProjects: () => Promise<void>;
+}
+
+export function initialRouteState(pathname: string): {
+  view: View;
+  projectRef: string | null;
+  redirectTo: string | null;
+} {
+  const route = parseCockpitRoute(pathname);
+  if (route.kind === "project") {
+    return { view: route.view, projectRef: route.ref, redirectTo: null };
+  }
+  if (route.kind === "all") {
+    return { view: route.view, projectRef: null, redirectTo: null };
+  }
+  const target = parseCockpitRoute(route.to);
+  return {
+    view: target.kind === "redirect" ? "overview" : target.view,
+    projectRef: target.kind === "project" ? target.ref : null,
+    redirectTo: route.to,
+  };
 }
 
 export function useDashboard(): Dashboard {
   const [backend, setBackend] = useState<Backend>({ kind: "loading" });
-  const [items, setItems] = useState<WorkItem[]>([]);
-  const [view, setView] = useState<View>("overview");
+  const [allItems, setAllItems] = useState<WorkItem[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [connections, setConnections] = useState<GitConnections | null>(null);
+  const [connectionsLoaded, setConnectionsLoaded] = useState(false);
+  const [connectionsError, setConnectionsError] = useState<string | null>(null);
+  const [routeState, setRouteState] = useState(() =>
+    initialRouteState(window.location.pathname),
+  );
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,9 +131,17 @@ export function useDashboard(): Dashboard {
   const toastIdRef = useRef(0);
   const pinIdRef = useRef(0);
   const alarmTickRef = useRef(0);
+  const scopeRef = useRef<{ ref: string | null; project: CockpitProject | null; projects: CockpitProject[]; cards: Card[]; defaultRepoId: number | null | undefined }>({ ref: null, project: null, projects: [], cards: [], defaultRepoId: null });
+  const [alarmKey, setAlarmKey] = useState<string | null>(null);
 
   const ingest = useCallback((incoming: WorkItem[]) => {
-    const events = diffEvents(statesRef.current, incoming, seededRef.current);
+    const events = diffEvents(statesRef.current, incoming, seededRef.current).filter((ev) => {
+      const scope = scopeRef.current;
+      if (scope.ref === null) return true;
+      return scope.project !== null && filterWorkItemsForProject(
+        incoming, scope.project, scope.cards, scope.projects, scope.defaultRepoId,
+      ).some((item) => item.correlation_key === ev.key);
+    });
     if (!seededRef.current) {
       seededRef.current = true;
       return; // first hydrate is not "news"
@@ -106,6 +165,7 @@ export function useDashboard(): Dashboard {
         ].slice(0, 4),
       );
       const latest = failures.at(-1);
+      setAlarmKey(latest?.key ?? null);
       const wi = incoming.find((w) => w.correlation_key === latest?.key);
       const stage = wi
         ? (["tfactory", "aifactory", "pfactory"] as const).find(
@@ -144,15 +204,132 @@ export function useDashboard(): Dashboard {
     });
   }, []);
 
-  const onSelectStage = useCallback((stage: StripStage | null) => {
-    setStageFilter(stage);
-    if (stage) setView("pipeline"); // the board is where the stage filter lives
+  const projects = useMemo(() => deriveProjects(connections), [connections]);
+  const slugsById = useMemo(() => projectSlugs(projects), [projects]);
+  const breadcrumbProjects = useMemo<BreadcrumbProject[]>(
+    () =>
+      projects.map((p) => ({
+        slug: slugsById.get(p.id) ?? p.id,
+        name: p.name,
+      })),
+    [projects, slugsById],
+  );
+  const activeProject = useMemo(
+    () =>
+      routeState.projectRef ? (findProjectByRef(projects, routeState.projectRef) ?? null) : null,
+    [projects, routeState.projectRef],
+  );
+  const activeProjectSlug = useMemo(
+    () => activeProject ? (slugsById.get(activeProject.id) ?? activeProject.id) : undefined,
+    [activeProject, slugsById],
+  );
+  scopeRef.current = { ref: routeState.projectRef, project: activeProject, projects, cards, defaultRepoId: connections?.default_repository_id };
+  const items = useMemo(
+    () =>
+      routeState.projectRef === null
+        ? allItems
+        : activeProject
+          ? filterWorkItemsForProject(allItems, activeProject, cards, projects, connections?.default_repository_id)
+          : [],
+    [allItems, routeState.projectRef, activeProject, cards, projects, connections?.default_repository_id],
+  );
+  const visibleKeys = new Set(items.map((item) => item.correlation_key));
+
+  // Sync URL on popstate (browser back/forward).
+  useEffect(() => {
+    const onPopState = () => {
+      setRouteState(initialRouteState(window.location.pathname));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, []);
+
+  // Canonicalize redirect routes or non-canonical project refs via replaceState.
+  useEffect(() => {
+    if (routeState.redirectTo) {
+      const targetPath = routeState.redirectTo;
+      if (window.location.pathname !== targetPath) {
+        window.history.replaceState(
+          {},
+          "",
+          targetPath + window.location.search + window.location.hash,
+        );
+      }
+      setRouteState((prev) => ({ ...prev, redirectTo: null }));
+      return;
+    }
+    if (routeState.projectRef && activeProject) {
+      const canonicalSlug = slugsById.get(activeProject.id) ?? activeProject.id;
+      const canonicalPath = buildCockpitPath(canonicalSlug, routeState.view);
+      if (routeState.projectRef !== canonicalSlug || window.location.pathname !== canonicalPath) {
+        if (window.location.pathname !== canonicalPath) {
+          window.history.replaceState(
+            {},
+            "",
+            canonicalPath + window.location.search + window.location.hash,
+          );
+        }
+        if (routeState.projectRef !== canonicalSlug) {
+          setRouteState((prev) => ({ ...prev, projectRef: canonicalSlug }));
+        }
+      }
+    }
+  }, [routeState.redirectTo, routeState.projectRef, routeState.view, activeProject, slugsById]);
+
+  const setView = useCallback(
+    (nextView: View) => {
+      const slug = ["tokens", "audit", "services", "settings"].includes(nextView) ? null : activeProject
+        ? (slugsById.get(activeProject.id) ?? activeProject.id)
+        : routeState.projectRef;
+      const nextPath = buildCockpitPath(slug, nextView);
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({}, "", nextPath);
+      }
+      setRouteState({ view: nextView, projectRef: slug, redirectTo: null });
+    },
+    [activeProject, slugsById, routeState.projectRef],
+  );
+
+  const setProjectSlug = useCallback(
+    (nextSlug: string | null) => {
+      const nextView = nextSlug === null || ["tokens", "audit", "services", "settings"].includes(routeState.view) ? "overview" : routeState.view;
+      const nextPath = buildCockpitPath(nextSlug, nextView);
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({}, "", nextPath);
+      }
+      setRouteState({ view: nextView, projectRef: nextSlug, redirectTo: null });
+    },
+    [routeState.view],
+  );
+
+  const onSelectStage = useCallback(
+    (stage: StripStage | null) => {
+      setStageFilter(stage);
+      if (stage) setView("pipeline"); // the board is where the stage filter lives
+    },
+    [setView],
+  );
+
+  const retryProjects = useCallback(async () => {
+    setConnectionsError(null);
+    setConnectionsLoaded(false);
+    try {
+      const settings = await fetchSettings();
+      const data = await fetchGitConnections(settings.tenant);
+      setConnections(data);
+      setConnectionsLoaded(true);
+    } catch (err) {
+      setConnectionsError(err instanceof Error ? err.message : String(err));
+      setConnectionsLoaded(true);
+    }
   }, []);
 
   const load = useCallback(async () => {
     try {
       const fresh = await fetchWorkItems();
-      setItems(fresh);
+      setAllItems(fresh);
       ingest(fresh);
       setError(null);
       setTick((t) => t + 1);
@@ -160,9 +337,17 @@ export function useDashboard(): Dashboard {
       setError(err instanceof Error ? err.message : String(err));
     }
     fetchProgress()
-      .then((ps) => setProgress(Object.fromEntries(ps.map((p) => [p.correlation_key, p]))))
+      .then((ps) => {
+        setProgress(Object.fromEntries(ps.map((p) => [p.correlation_key, p])));
+      })
       .catch(() => undefined);
-  }, [ingest]);
+    fetchCards()
+      .then((list) => {
+        setCards(list);
+      })
+      .catch(() => undefined);
+    void retryProjects();
+  }, [ingest, retryProjects]);
 
   useEffect(() => {
     ensureNotifyPermission();
@@ -189,12 +374,12 @@ export function useDashboard(): Dashboard {
     const ws = openFeed(
       (msg) => {
         if (msg.type === "snapshot") {
-          setItems(msg.items);
+          setAllItems(msg.items);
           ingest(msg.items);
         } else if (msg.type === "progress")
           setProgress((prev) => ({ ...prev, [msg.item.correlation_key]: msg.item }));
         else {
-          setItems((prev) => [
+          setAllItems((prev) => [
             msg.item,
             ...prev.filter((w) => w.correlation_key !== msg.item.correlation_key),
           ]);
@@ -243,25 +428,35 @@ export function useDashboard(): Dashboard {
   return {
     backend,
     items,
-    view,
+    view: routeState.view,
     setView,
+    projectRef: routeState.projectRef,
+    activeProject,
+    activeProjectSlug,
+    projects,
+    breadcrumbProjects,
+    connectionsLoaded,
+    connectionsError,
+    defaultRepositoryId: connections?.default_repository_id,
+    setProjectSlug,
     busy,
     live,
     error,
     tick,
     progress,
-    toasts,
+    toasts: routeState.projectRef === null ? toasts : toasts.filter((toast) => visibleKeys.has(toast.ev.key)),
     copilotOpen,
     setCopilotOpen,
     stageFilter,
     setStageFilter,
-    pins,
-    alarm,
+    pins: routeState.projectRef === null ? pins : pins.filter((pin) => visibleKeys.has(pin.key)),
+    alarm: routeState.projectRef === null || (alarmKey && visibleKeys.has(alarmKey)) ? alarm : null,
     tickerOpen,
     dismissToast,
     unpin,
     toggleTicker,
     onSelectStage,
     onRefresh,
+    retryProjects,
   };
 }

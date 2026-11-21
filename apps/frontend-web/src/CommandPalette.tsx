@@ -1,9 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 // Command palette (⌘K) — jump to any view or task and run actions from the
 // keyboard (#147). Self-contained: it takes the flat command list its host
 // assembles (navigation + actions), filters those with a case-insensitive
-// substring match, and drives selection with the keyboard. No router — the
-// cockpit is state-routed — so "go to" calls the host's setView and "open task"
-// hands the host a correlation key to render in TaskDetail.
+// substring match, and drives selection with the keyboard.
 //
 // Task results are FEDERATED (#149): as you type, the palette queries the
 // cockpit's cross-portal /api/search (debounced), so a task number, title,
@@ -27,12 +26,92 @@ export type PaletteCommand = {
   run: () => void;
 };
 
-type Row =
-  | { kind: "cmd"; group: string; cmd: PaletteCommand }
-  | { kind: "task"; group: string; result: SearchResult };
+export type PaletteProject = {
+  slug: string;
+  name: string;
+};
+
+export type PaletteRow =
+  | { kind: "cmd"; group: string; cmd: PaletteCommand; keepOpen?: boolean }
+  | { kind: "task"; group: string; result: SearchResult }
+  | { kind: "project"; id: string; group: string; slug: string | null; label: string; hint?: string };
 
 function matches(hay: string, q: string): boolean {
   return hay.toLowerCase().includes(q);
+}
+
+export function buildPaletteRows({
+  q,
+  commands,
+  results,
+  projectMode,
+  projects,
+  onEnterProjectMode,
+}: {
+  q: string;
+  commands: PaletteCommand[];
+  results: SearchResult[];
+  projectMode: boolean;
+  projects?: PaletteProject[] | undefined;
+  onEnterProjectMode?: (() => void) | undefined;
+}): PaletteRow[] {
+  const needle = q.trim().toLowerCase();
+  if (projectMode) {
+    const projectRows: PaletteRow[] = [];
+    if (!needle || matches("all projects", needle)) {
+      projectRows.push({
+        kind: "project",
+        id: "proj-all",
+        group: "Projects",
+        slug: null,
+        label: "All projects",
+      });
+    }
+    for (const p of projects ?? []) {
+      if (!needle || matches(`${p.name} ${p.slug}`, needle)) {
+        projectRows.push({
+          kind: "project",
+          id: `proj-${p.slug}`,
+          group: "Projects",
+          slug: p.slug,
+          label: p.name,
+          hint: p.slug,
+        });
+      }
+    }
+    return projectRows;
+  }
+
+  const allCommands: { cmd: PaletteCommand; keepOpen?: boolean }[] = commands.map((cmd) => ({
+    cmd,
+  }));
+  if (onEnterProjectMode) {
+    allCommands.push({
+      keepOpen: true,
+      cmd: {
+        id: "act-switch-project",
+        group: "Actions",
+        label: "Switch project...",
+        keywords: "project repository filter scope",
+        run: onEnterProjectMode,
+      },
+    });
+  }
+
+  const cmdRows: PaletteRow[] = allCommands
+    .filter(({ cmd }) => !needle || matches(`${cmd.label} ${cmd.keywords ?? ""}`, needle))
+    .map(({ cmd, keepOpen }) =>
+      keepOpen
+        ? { kind: "cmd", group: cmd.group, cmd, keepOpen: true }
+        : { kind: "cmd", group: cmd.group, cmd },
+    );
+  // Tasks only surface once there's a query — a bare palette shouldn't dump
+  // every work item; it should read as "jump/act", then become search.
+  const taskRows: PaletteRow[] = !needle
+    ? []
+    : results.map((result) => ({ kind: "task", group: "Tasks", result }));
+  // Order groups: Tasks first when searching (most specific), then Go to, Actions.
+  return [...taskRows, ...cmdRows];
 }
 
 export default function CommandPalette({
@@ -40,14 +119,25 @@ export default function CommandPalette({
   onClose,
   commands,
   onOpenTask,
+  projects,
+  onSwitchProject,
+  initialProjectMode = false,
+  initialQuery = "",
+  taskKeys,
 }: {
   open: boolean;
   onClose: () => void;
   commands: PaletteCommand[];
   onOpenTask: (correlationKey: string) => void;
+  projects?: PaletteProject[] | undefined;
+  onSwitchProject?: ((slug: string | null) => void) | undefined;
+  initialProjectMode?: boolean | undefined;
+  initialQuery?: string | undefined;
+  taskKeys?: Set<string> | undefined;
 }) {
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialQuery);
   const [sel, setSel] = useState(0);
+  const [projectMode, setProjectMode] = useState(initialProjectMode);
   const [results, setResults] = useState<SearchResult[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -55,19 +145,20 @@ export default function CommandPalette({
   // Reset query + selection each time the palette opens, and focus the input.
   useEffect(() => {
     if (open) {
-      setQ("");
+      setQ(initialQuery);
       setSel(0);
+      setProjectMode(initialProjectMode);
       // focus after paint so the field is ready for the first keystroke
       requestAnimationFrame(() => inputRef.current?.focus());
     }
-  }, [open]);
+  }, [open, initialProjectMode, initialQuery]);
 
   // Federated task search (#149): debounce the query and hit /api/search. A
   // blank query clears results; a stale in-flight response is discarded so the
   // list always reflects the latest keystroke.
   useEffect(() => {
     const needle = q.trim();
-    if (!open || !needle) {
+    if (!open || projectMode || !needle) {
       setResults([]);
       return;
     }
@@ -85,21 +176,27 @@ export default function CommandPalette({
       stale = true;
       clearTimeout(timer);
     };
-  }, [q, open]);
+  }, [q, open, projectMode]);
 
-  const rows: Row[] = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const cmdRows: Row[] = commands
-      .filter((c) => !needle || matches(`${c.label} ${c.keywords ?? ""}`, needle))
-      .map((c) => ({ kind: "cmd", group: c.group, cmd: c }));
-    // Tasks only surface once there's a query — a bare palette shouldn't dump
-    // every work item; it should read as "jump/act", then become search.
-    const taskRows: Row[] = !needle
-      ? []
-      : results.map((result) => ({ kind: "task", group: "Tasks", result }));
-    // Order groups: Tasks first when searching (most specific), then Go to, Actions.
-    return [...taskRows, ...cmdRows];
-  }, [q, commands, results]);
+  const rows: PaletteRow[] = useMemo(
+    () =>
+      buildPaletteRows({
+        q,
+        commands,
+        results: taskKeys ? results.filter((result) => taskKeys.has(result.correlation_key)) : results,
+        projectMode,
+        projects,
+        onEnterProjectMode: onSwitchProject
+          ? () => {
+              setProjectMode(true);
+              setQ("");
+              setSel(0);
+              requestAnimationFrame(() => inputRef.current?.focus());
+            }
+          : undefined,
+      }),
+    [q, commands, results, projectMode, projects, onSwitchProject, taskKeys],
+  );
 
   // Keep the selection in range as the result set shrinks/grows.
   useEffect(() => {
@@ -108,10 +205,16 @@ export default function CommandPalette({
 
   if (!open) return null;
 
-  const runRow = (row: Row | undefined) => {
+  const runRow = (row: PaletteRow | undefined) => {
     if (!row) return;
-    if (row.kind === "cmd") row.cmd.run();
-    else onOpenTask(row.result.correlation_key);
+    if (row.kind === "cmd") {
+      row.cmd.run();
+      if (row.keepOpen) return;
+    } else if (row.kind === "project") {
+      onSwitchProject?.(row.slug);
+    } else {
+      onOpenTask(row.result.correlation_key);
+    }
     onClose();
   };
 
@@ -151,7 +254,11 @@ export default function CommandPalette({
           <input
             ref={inputRef}
             className="cmdk-input"
-            placeholder="Search tasks across portals, or jump to a view…"
+            placeholder={
+              projectMode
+                ? "Switch project..."
+                : "Search tasks across portals, or jump to a view…"
+            }
             value={q}
             onChange={(e) => {
               setQ(e.target.value);
@@ -173,8 +280,14 @@ export default function CommandPalette({
           {rows.map((row, i) => {
             const header = row.group !== lastGroup ? ((lastGroup = row.group), row.group) : null;
             const selected = i === sel;
+            const rowKey =
+              row.kind === "cmd"
+                ? row.cmd.id
+                : row.kind === "project"
+                  ? row.id
+                  : `t-${row.result.correlation_key}`;
             return (
-              <div key={row.kind === "cmd" ? row.cmd.id : `t-${row.result.correlation_key}`}>
+              <div key={rowKey}>
                 {header && <div className="cmdk-gl">{header}</div>}
                 <div
                   id={`cmdk-row-${String(i)}`}
@@ -194,6 +307,8 @@ export default function CommandPalette({
                   <span className="cmdk-label">
                     {row.kind === "cmd" ? (
                       row.cmd.label
+                    ) : row.kind === "project" ? (
+                      row.label
                     ) : (
                       <>
                         <span className="cmdk-key">#{row.result.correlation_key}</span>
@@ -203,6 +318,9 @@ export default function CommandPalette({
                   </span>
                   {row.kind === "cmd" && row.cmd.hint && (
                     <span className="cmdk-hint">{row.cmd.hint}</span>
+                  )}
+                  {row.kind === "project" && row.hint && (
+                    <span className="cmdk-hint">{row.hint}</span>
                   )}
                   {row.kind === "task" && row.result.status && (
                     <span className="cmdk-hint">{row.result.status}</span>

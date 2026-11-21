@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 570
 spec: spec/2026-11-21-570-cf-project-view.md
 coders:

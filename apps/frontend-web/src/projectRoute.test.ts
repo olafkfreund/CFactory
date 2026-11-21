@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
+import { describe, expect, it, vi } from "vitest";
 import { CardSchema, GitConnectionsSchema, WorkItemSchema } from "./api";
+import BacklogView from "./BacklogView";
+import PlanningBoard from "./PlanningBoard";
 import type { CockpitProject } from "./projectRoute";
 import {
   buildCockpitPath,
@@ -12,6 +16,7 @@ import {
   projectSlugs,
   slugify,
 } from "./projectRoute";
+import { initialRouteState } from "./useDashboard";
 
 const project = (id: string, name: string, createdAt = "2026-01-01"): CockpitProject => ({
   id,
@@ -201,5 +206,51 @@ describe("project filters", () => {
       ),
     ).toEqual(["task-one", "external"]);
     expect(filterWorkItemsForProject(items, null, [])).toBe(items);
+  });
+
+  it("initialises route state, rewrites redirects/aliases, and renders project-scoped planning views", () => {
+    expect(initialRouteState("/")).toEqual({
+      view: "overview",
+      projectRef: null,
+      redirectTo: null,
+    });
+    expect(initialRouteState("/projects")).toEqual({
+      view: "overview",
+      projectRef: null,
+      redirectTo: "/",
+    });
+    expect(initialRouteState("/p/uuid/planning")).toEqual({
+      view: "planning",
+      projectRef: "uuid",
+      redirectTo: null,
+    });
+    expect(initialRouteState("/p/uuid/unknown")).toEqual({
+      view: "overview",
+      projectRef: "uuid",
+      redirectTo: "/p/uuid",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ cards }), { status: 200 }))),
+    );
+    const backlogHtml = renderToStaticMarkup(
+      createElement(BacklogView, {
+        reloadSignal: 0,
+        project: active,
+        defaultRepositoryId: 1,
+      }),
+    );
+    expect(backlogHtml).toContain("Backlog");
+
+    const planningHtml = renderToStaticMarkup(
+      createElement(PlanningBoard, {
+        reloadSignal: 0,
+        project: active,
+        defaultRepositoryId: 1,
+      }),
+    );
+    expect(planningHtml).toContain("Planning board");
+    vi.unstubAllGlobals();
   });
 });

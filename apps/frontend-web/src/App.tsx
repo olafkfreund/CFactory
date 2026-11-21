@@ -10,6 +10,7 @@ import CommandPalette, { type PaletteCommand } from "./CommandPalette";
 import TaskDetail from "./TaskDetail";
 import ThemeToggle from "./ThemeToggle";
 import PortalSwitcher from "./PortalSwitcher";
+import ProjectBreadcrumb from "./ProjectBreadcrumb";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import NeedsYouView from "./NeedsYouView";
@@ -33,6 +34,13 @@ export default function App() {
     items,
     view,
     setView,
+    projectRef,
+    activeProject,
+    activeProjectSlug,
+    breadcrumbProjects,
+    connectionsLoaded,
+    defaultRepositoryId,
+    setProjectSlug,
     busy,
     live,
     error,
@@ -227,7 +235,18 @@ export default function App() {
 
       <div className="main">
         <header className="topbar">
-          <PortalSwitcher needsCount={needsCount} />
+          <PortalSwitcher
+            needsCount={needsCount}
+            project={activeProjectSlug ? { slug: activeProjectSlug } : undefined}
+          />
+          <ProjectBreadcrumb
+            projects={breadcrumbProjects}
+            currentSlug={activeProjectSlug}
+            onSelect={setProjectSlug}
+            onViewAll={() => {
+              setProjectSlug(null);
+            }}
+          />
           <div className="tabs">
             <span className="tab active">{NAV.find((n) => n.id === view)?.label}</span>
           </div>
@@ -261,23 +280,55 @@ export default function App() {
           {alarm && <div key={alarm.tick} className="alarm-sweep" aria-hidden="true" />}
           <main className="content">
             {error && <div className="banner banner--error">{error}</div>}
-            {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
-            {view === "needs" && <NeedsYouView items={items} progress={progress} />}
-            {view === "backlog" && <BacklogView reloadSignal={tick} />}
-            {view === "planning" && <PlanningBoard reloadSignal={tick} />}
-            {view === "pipeline" && (
-              <Board
-                items={items}
-                progress={progress}
-                stageFilter={stageFilter}
-                onClearStage={() => setStageFilter(null)}
-              />
+            {projectRef !== null && !connectionsLoaded ? (
+              <p className="col-empty">Loading project…</p>
+            ) : projectRef !== null && !activeProject ? (
+              <div className="mc-panel">
+                <h2 className="panel-title">Project not found</h2>
+                <p>No repository or project matches {projectRef}.</p>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => {
+                    setProjectSlug(null);
+                  }}
+                >
+                  All projects
+                </button>
+              </div>
+            ) : (
+              <>
+                {view === "overview" && <MissionControl items={items} reloadSignal={tick} />}
+                {view === "needs" && <NeedsYouView items={items} progress={progress} />}
+                {view === "backlog" && (
+                  <BacklogView
+                    reloadSignal={tick}
+                    project={activeProject}
+                    defaultRepositoryId={defaultRepositoryId}
+                  />
+                )}
+                {view === "planning" && (
+                  <PlanningBoard
+                    reloadSignal={tick}
+                    project={activeProject}
+                    defaultRepositoryId={defaultRepositoryId}
+                  />
+                )}
+                {view === "pipeline" && (
+                  <Board
+                    items={items}
+                    progress={progress}
+                    stageFilter={stageFilter}
+                    onClearStage={() => setStageFilter(null)}
+                  />
+                )}
+                {view === "running" && <RunningTasksView items={items} progress={progress} />}
+                {view === "tokens" && <TokensView reloadSignal={tick} />}
+                {view === "audit" && <AuditView reloadSignal={tick} />}
+                {view === "services" && <ServicesView backend={backend} reloadSignal={tick} />}
+                {view === "settings" && <SettingsView reloadSignal={tick} />}
+              </>
             )}
-            {view === "running" && <RunningTasksView items={items} progress={progress} />}
-            {view === "tokens" && <TokensView reloadSignal={tick} />}
-            {view === "audit" && <AuditView reloadSignal={tick} />}
-            {view === "services" && <ServicesView backend={backend} reloadSignal={tick} />}
-            {view === "settings" && <SettingsView reloadSignal={tick} />}
           </main>
           <EventTicker
             items={items}
@@ -328,6 +379,8 @@ export default function App() {
           setPaletteOpen(false);
         }}
         commands={commands}
+        projects={breadcrumbProjects}
+        onSwitchProject={setProjectSlug}
         onOpenTask={(correlationKey) => {
           setOpenTaskKey(correlationKey);
         }}

@@ -16,8 +16,17 @@ import {
   useIssueUrl,
 } from "./cards";
 import { CardBanners, CardBody, CardFilterBar } from "./CardParts";
+import { filterCardsForProject, type CockpitProject } from "./projectRoute";
 
-export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }) {
+export default function PlanningBoard({
+  reloadSignal,
+  project,
+  defaultRepositoryId,
+}: {
+  reloadSignal: number;
+  project?: CockpitProject | null | undefined;
+  defaultRepositoryId?: number | null | undefined;
+}) {
   // Status is the column here, so it is never a server-side filter on this view.
   const [filters, setFilters] = useState<CardFilters>({});
   const [query, setQuery] = useState("");
@@ -25,7 +34,8 @@ export default function PlanningBoard({ reloadSignal }: { reloadSignal: number }
     useCards(filters, reloadSignal);
   const hrefOf = useIssueUrl();
 
-  const shown = cards.filter((c) => matchesQuery(c, query)).sort(byPriority);
+  const projectCards = filterCardsForProject(cards, project ?? null, defaultRepositoryId);
+  const shown = projectCards.filter((c) => matchesQuery(c, query)).sort(byPriority);
   // Amber only when EVERY connected repository has gone stale, or the poll is off:
   // a single lagging repository is a caveat in the text, not an alarm on the board.
   const stale =

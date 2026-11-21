@@ -3,13 +3,18 @@
 // notification machine, and the refresh/load actions. App becomes a thin
 // composition root that consumes this hook. Pure extraction — the logic, effect
 // ordering and dependency arrays are unchanged.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  fetchCards,
+  fetchGitConnections,
   fetchHealth,
   fetchProgress,
+  fetchSettings,
   fetchWorkItems,
   openFeed,
   refresh as apiRefresh,
+  type Card,
+  type GitConnections,
   type LiveProgress,
   type WorkItem,
 } from "./api";
@@ -20,6 +25,17 @@ import { stageState, type TaskState } from "./taskState";
 import type { StripAlarm, StripStage } from "./PipelineStrip";
 import type { TickerPin } from "./EventTicker";
 import { TICKER_PREF, type Backend, type View } from "./dashboard";
+import type { BreadcrumbProject } from "./ProjectBreadcrumb";
+import {
+  buildCockpitPath,
+  deriveProjects,
+  filterCardsForProject,
+  filterWorkItemsForProject,
+  findProjectByRef,
+  parseCockpitRoute,
+  projectSlugs,
+  type CockpitProject,
+} from "./projectRoute";
 
 export interface ToastEntry {
   id: number;
@@ -31,6 +47,14 @@ export interface Dashboard {
   items: WorkItem[];
   view: View;
   setView: (v: View) => void;
+  projectRef: string | null;
+  activeProject: CockpitProject | null;
+  activeProjectSlug: string | undefined;
+  projects: CockpitProject[];
+  breadcrumbProjects: BreadcrumbProject[];
+  connectionsLoaded: boolean;
+  defaultRepositoryId: number | null | undefined;
+  setProjectSlug: (slug: string | null) => void;
   busy: boolean;
   live: boolean;
   error: string | null;
@@ -51,10 +75,35 @@ export interface Dashboard {
   onRefresh: () => Promise<void>;
 }
 
+export function initialRouteState(pathname: string): {
+  view: View;
+  projectRef: string | null;
+  redirectTo: string | null;
+} {
+  const route = parseCockpitRoute(pathname);
+  if (route.kind === "project") {
+    return { view: route.view, projectRef: route.ref, redirectTo: null };
+  }
+  if (route.kind === "all") {
+    return { view: route.view, projectRef: null, redirectTo: null };
+  }
+  const target = parseCockpitRoute(route.to);
+  return {
+    view: target.kind === "redirect" ? "overview" : target.view,
+    projectRef: target.kind === "project" ? target.ref : null,
+    redirectTo: route.to,
+  };
+}
+
 export function useDashboard(): Dashboard {
   const [backend, setBackend] = useState<Backend>({ kind: "loading" });
-  const [items, setItems] = useState<WorkItem[]>([]);
-  const [view, setView] = useState<View>("overview");
+  const [allItems, setAllItems] = useState<WorkItem[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [connections, setConnections] = useState<GitConnections | null>(null);
+  const [connectionsLoaded, setConnectionsLoaded] = useState(false);
+  const [routeState, setRouteState] = useState(() =>
+    initialRouteState(window.location.pathname),
+  );
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -144,15 +193,122 @@ export function useDashboard(): Dashboard {
     });
   }, []);
 
-  const onSelectStage = useCallback((stage: StripStage | null) => {
-    setStageFilter(stage);
-    if (stage) setView("pipeline"); // the board is where the stage filter lives
+  const projects = useMemo(() => deriveProjects(connections), [connections]);
+  const slugsById = useMemo(() => projectSlugs(projects), [projects]);
+  const breadcrumbProjects = useMemo<BreadcrumbProject[]>(
+    () =>
+      projects.map((p) => ({
+        slug: slugsById.get(p.id) ?? p.id,
+        name: p.name,
+      })),
+    [projects, slugsById],
+  );
+  const activeProject = useMemo(
+    () =>
+      routeState.projectRef ? (findProjectByRef(projects, routeState.projectRef) ?? null) : null,
+    [projects, routeState.projectRef],
+  );
+  const activeProjectSlug = useMemo(
+    () =>
+      activeProject
+        ? (slugsById.get(activeProject.id) ?? activeProject.id)
+        : (routeState.projectRef ?? undefined),
+    [activeProject, slugsById, routeState.projectRef],
+  );
+  const projectCards = useMemo(
+    () => filterCardsForProject(cards, activeProject, connections?.default_repository_id),
+    [cards, activeProject, connections?.default_repository_id],
+  );
+  const items = useMemo(
+    () =>
+      routeState.projectRef === null
+        ? allItems
+        : activeProject
+          ? filterWorkItemsForProject(allItems, activeProject, projectCards)
+          : [],
+    [allItems, routeState.projectRef, activeProject, projectCards],
+  );
+
+  // Sync URL on popstate (browser back/forward).
+  useEffect(() => {
+    const onPopState = () => {
+      setRouteState(initialRouteState(window.location.pathname));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
   }, []);
+
+  // Canonicalize redirect routes or non-canonical project refs via replaceState.
+  useEffect(() => {
+    if (routeState.redirectTo) {
+      const targetPath = routeState.redirectTo;
+      if (window.location.pathname !== targetPath) {
+        window.history.replaceState(
+          {},
+          "",
+          targetPath + window.location.search + window.location.hash,
+        );
+      }
+      setRouteState((prev) => ({ ...prev, redirectTo: null }));
+      return;
+    }
+    if (routeState.projectRef && activeProject) {
+      const canonicalSlug = slugsById.get(activeProject.id) ?? activeProject.id;
+      const canonicalPath = buildCockpitPath(canonicalSlug, routeState.view);
+      if (routeState.projectRef !== canonicalSlug || window.location.pathname !== canonicalPath) {
+        if (window.location.pathname !== canonicalPath) {
+          window.history.replaceState(
+            {},
+            "",
+            canonicalPath + window.location.search + window.location.hash,
+          );
+        }
+        if (routeState.projectRef !== canonicalSlug) {
+          setRouteState((prev) => ({ ...prev, projectRef: canonicalSlug }));
+        }
+      }
+    }
+  }, [routeState.redirectTo, routeState.projectRef, routeState.view, activeProject, slugsById]);
+
+  const setView = useCallback(
+    (nextView: View) => {
+      const slug = activeProject
+        ? (slugsById.get(activeProject.id) ?? activeProject.id)
+        : routeState.projectRef;
+      const nextPath = buildCockpitPath(slug, nextView);
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({}, "", nextPath);
+      }
+      setRouteState({ view: nextView, projectRef: slug, redirectTo: null });
+    },
+    [activeProject, slugsById, routeState.projectRef],
+  );
+
+  const setProjectSlug = useCallback(
+    (nextSlug: string | null) => {
+      const nextPath = buildCockpitPath(nextSlug, routeState.view);
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({}, "", nextPath);
+      }
+      setRouteState((prev) => ({ ...prev, projectRef: nextSlug, redirectTo: null }));
+    },
+    [routeState.view],
+  );
+
+  const onSelectStage = useCallback(
+    (stage: StripStage | null) => {
+      setStageFilter(stage);
+      if (stage) setView("pipeline"); // the board is where the stage filter lives
+    },
+    [setView],
+  );
 
   const load = useCallback(async () => {
     try {
       const fresh = await fetchWorkItems();
-      setItems(fresh);
+      setAllItems(fresh);
       ingest(fresh);
       setError(null);
       setTick((t) => t + 1);
@@ -160,8 +316,24 @@ export function useDashboard(): Dashboard {
       setError(err instanceof Error ? err.message : String(err));
     }
     fetchProgress()
-      .then((ps) => setProgress(Object.fromEntries(ps.map((p) => [p.correlation_key, p]))))
+      .then((ps) => {
+        setProgress(Object.fromEntries(ps.map((p) => [p.correlation_key, p])));
+      })
       .catch(() => undefined);
+    fetchCards()
+      .then((list) => {
+        setCards(list);
+      })
+      .catch(() => undefined);
+    fetchSettings()
+      .then((s) => fetchGitConnections(s.tenant))
+      .then((data) => {
+        setConnections(data);
+        setConnectionsLoaded(true);
+      })
+      .catch(() => {
+        setConnectionsLoaded(true);
+      });
   }, [ingest]);
 
   useEffect(() => {
@@ -189,12 +361,12 @@ export function useDashboard(): Dashboard {
     const ws = openFeed(
       (msg) => {
         if (msg.type === "snapshot") {
-          setItems(msg.items);
+          setAllItems(msg.items);
           ingest(msg.items);
         } else if (msg.type === "progress")
           setProgress((prev) => ({ ...prev, [msg.item.correlation_key]: msg.item }));
         else {
-          setItems((prev) => [
+          setAllItems((prev) => [
             msg.item,
             ...prev.filter((w) => w.correlation_key !== msg.item.correlation_key),
           ]);
@@ -243,8 +415,16 @@ export function useDashboard(): Dashboard {
   return {
     backend,
     items,
-    view,
+    view: routeState.view,
     setView,
+    projectRef: routeState.projectRef,
+    activeProject,
+    activeProjectSlug,
+    projects,
+    breadcrumbProjects,
+    connectionsLoaded,
+    defaultRepositoryId: connections?.default_repository_id,
+    setProjectSlug,
     busy,
     live,
     error,

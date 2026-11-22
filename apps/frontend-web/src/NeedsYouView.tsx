@@ -35,9 +35,11 @@ const FILTERS: { key: FilterKey; label: string }[] = [
 export default function NeedsYouView({
   items,
   progress,
+  projectScoped = false,
 }: {
   items: WorkItem[];
   progress: Record<string, LiveProgress>;
+  projectScoped?: boolean;
 }) {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export default function NeedsYouView({
       <div className="ny-head">
         <h1 className="ny-title">Needs you</h1>
         <p className="ny-sub">
-          Everything across the fleet that's blocked on a human — plan approvals, review gates and
+          {projectScoped ? "Project tasks" : "Everything across the fleet"} blocked on a human — plan approvals, review gates and
           stalls, most-actionable first.
         </p>
       </div>

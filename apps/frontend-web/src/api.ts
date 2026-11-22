@@ -308,6 +308,7 @@ export const ServiceStateSchema = z.object({
   task_id: z.string().nullable(),
   status: z.string().nullable(),
   phase: z.string().nullable(),
+  repo: z.string().nullable().optional(),
   usage: TokenUsageSchema.nullable().optional(),
   extra: z
     .object({

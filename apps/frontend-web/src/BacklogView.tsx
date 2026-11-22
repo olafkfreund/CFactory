@@ -20,6 +20,7 @@ import {
   useIssueUrl,
 } from "./cards";
 import { CardBanners, CardBody, CardFilterBar } from "./CardParts";
+import { filterCardsForProject, type CockpitProject } from "./projectRoute";
 
 type Draft = {
   title: string;
@@ -60,7 +61,15 @@ const criteria = (s: string): string[] =>
 
 const nullable = (s: string): string | null => s.trim() || null;
 
-export default function BacklogView({ reloadSignal }: { reloadSignal: number }) {
+export default function BacklogView({
+  reloadSignal,
+  project,
+  defaultRepositoryId,
+}: {
+  reloadSignal: number;
+  project?: CockpitProject | null | undefined;
+  defaultRepositoryId?: number | null | undefined;
+}) {
   const [filters, setFilters] = useState<CardFilters>({});
   const [query, setQuery] = useState("");
   const { cards, loading, error, notice, mutate, runStage, reload, setError } = useCards(
@@ -74,7 +83,8 @@ export default function BacklogView({ reloadSignal }: { reloadSignal: number }) 
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [busy, setBusy] = useState(false);
 
-  const shown = cards.filter((c) => matchesQuery(c, query)).sort(byPriority);
+  const projectCards = filterCardsForProject(cards, project ?? null, defaultRepositoryId);
+  const shown = projectCards.filter((c) => matchesQuery(c, query)).sort(byPriority);
 
   function open(target: "create" | Card) {
     setEditing(target === "create" ? "create" : target.card_key);
@@ -99,7 +109,7 @@ export default function BacklogView({ reloadSignal }: { reloadSignal: number }) 
     setBusy(true);
     try {
       if (editing === "create") {
-        await createCard(fields);
+        await createCard({ ...fields, ...(project ? { repository_id: project.repositoryIds[0] } : {}) });
         reload(); // a create changes the list, not one card — refetch
       } else if (editing) {
         // Edits of an existing card go through the same optimistic path as a
@@ -169,7 +179,7 @@ export default function BacklogView({ reloadSignal }: { reloadSignal: number }) 
         <p className="col-empty">Loading cards…</p>
       ) : shown.length === 0 ? (
         <p className="col-empty">
-          {cards.length === 0
+          {projectCards.length === 0
             ? "No cards yet — create the first one."
             : "Nothing matches the filter."}
         </p>

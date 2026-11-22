@@ -20,5 +20,22 @@ describe("PortalSwitcher", () => {
     // sibling portals link out to their hosts
     expect(html).toContain("pfactory");
     expect(html).toContain('aria-label="Factory portals"');
+    expect(html).not.toContain("/p/");
+  });
+
+  it("keeps /p/:slug on sibling portal links when a project is active", () => {
+    const html = renderToStaticMarkup(<PortalSwitcher project={{ slug: "acme/widgets" }} />);
+    expect(html).toContain('href="https://pfactory.freundcloud.org.uk/p/acme%2Fwidgets"');
+    expect(html).toContain('href="https://aifactory.freundcloud.org.uk/p/acme%2Fwidgets"');
+    expect(html).toContain('href="https://tfactory.freundcloud.org.uk/p/acme%2Fwidgets"');
+  });
+
+  it("scopes only the listed sibling portals when project.portals is provided", () => {
+    const html = renderToStaticMarkup(
+      <PortalSwitcher project={{ slug: "widgets", portals: ["build"] }} />,
+    );
+    expect(html).toContain('href="https://aifactory.freundcloud.org.uk/p/widgets"');
+    expect(html).toContain('href="https://pfactory.freundcloud.org.uk"');
+    expect(html).toContain('href="https://tfactory.freundcloud.org.uk"');
   });
 });

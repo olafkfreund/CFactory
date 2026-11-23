@@ -114,6 +114,7 @@ export default function PlanningBoard({
                       key={card.card_key}
                       card={card}
                       busy={false}
+                      compact={col.key === "done"}
                       issueHref={hrefOf(card)}
                       onMutate={(patch) => {
                         void mutate(card.card_key, patch);

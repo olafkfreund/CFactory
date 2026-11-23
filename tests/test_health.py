@@ -2,6 +2,26 @@
 
 from __future__ import annotations
 
+import runpy
+from pathlib import Path
+
+import pytest
+from cfactory import __version__
+
+
+@pytest.mark.parametrize(
+    "configured, expected", [(None, "dev"), ("", "dev"), ("sha-abc123", "sha-abc123")]
+)
+def test_version_from_environment(
+    monkeypatch: pytest.MonkeyPatch, configured: str | None, expected: str
+) -> None:
+    if configured is None:
+        monkeypatch.delenv("CFACTORY_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("CFACTORY_VERSION", configured)
+    package = Path(__file__).resolve().parents[1] / "apps/backend/cfactory/__init__.py"
+    assert runpy.run_path(str(package))["__version__"] == expected
+
 
 def test_health_ok(client):
     resp = client.get("/health")
@@ -9,6 +29,7 @@ def test_health_ok(client):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["service"] == "cfactory"
+    assert body["version"] == __version__
     assert "aifactory" in body["upstreams"]
     # The OpenObserve telemetry backend is listed for Services-view parity (#45).
     assert "observe" in body["upstreams"]

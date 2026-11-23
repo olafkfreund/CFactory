@@ -1,19 +1,13 @@
 import { Fragment, useMemo } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import type { WorkItem } from "./api";
-import { activeStage, stageState } from "./taskState";
+import { activeStage } from "./taskState";
+import { stageFailed, type StripAlarm, type StripStage } from "./pipelineStages";
 
 // The persistent PARR strip: the three-node pipeline lifted out of Mission
 // Control into a slim full-width rail under the topbar, visible on every view.
 // Clicking a node filters the Pipeline board to that stage; a stage with a
 // failed task wears a red ring, and a fresh failure fires a one-shot flare.
-
-export type StripStage = "pfactory" | "aifactory" | "tfactory";
-
-export interface StripAlarm {
-  stage: StripStage;
-  tick: number; // monotonically increasing — keys the one-shot flare
-}
 
 const NODES: { key: StripStage; label: string; svc: string; cls: string }[] = [
   { key: "pfactory", label: "Plan", svc: "PFactory", cls: "plan" },
@@ -73,11 +67,13 @@ export default function PipelineStrip({
   items,
   active,
   onSelect,
+  onSelectFailed,
   alarm,
 }: {
   items: WorkItem[];
   active: StripStage | null;
   onSelect: (stage: StripStage | null) => void;
+  onSelectFailed?: ((stage: StripStage) => void) | undefined;
   alarm: StripAlarm | null;
 }) {
   const reduced = useReducedMotion();
@@ -96,7 +92,7 @@ export default function PipelineStrip({
       });
       if (stage) counts[stage]++;
       for (const k of ["pfactory", "aifactory", "tfactory"] as const) {
-        if (stageState(wi[k].status) === "failed") failed[k]++;
+        if (stageFailed(wi, k)) failed[k]++;
       }
     }
     return { counts, failed };
@@ -115,44 +111,55 @@ export default function PipelineStrip({
                 aria-hidden="true"
               />
             )}
-            <button
-              className={`pstrip-node pstrip-node--${n.cls} ${isOn ? "is-on" : ""} ${failed[n.key] > 0 ? "has-fail" : ""}`}
-              onClick={() => onSelect(isOn ? null : n.key)}
-              aria-pressed={isOn}
-              title={
-                `${n.svc}: ${counts[n.key]} active` +
-                (failed[n.key] > 0 ? `, ${failed[n.key]} failed` : "") +
-                ` — click to ${isOn ? "clear the" : "filter the board to this"} stage`
-              }
-            >
-              <span className="pstrip-ring">
-                <svg className="pstrip-glyph" viewBox="-19 -19 38 38" aria-hidden="true">
-                  <Glyph />
-                </svg>
-                {alarm && alarm.stage === n.key && !reduced && (
-                  <motion.span
-                    key={alarm.tick}
-                    className="pstrip-flare"
-                    initial={{ opacity: 0.9, scale: 1 }}
-                    animate={{ opacity: 0, scale: 1.9 }}
-                    transition={{ duration: 1.4, ease: "easeOut" }}
-                    aria-hidden="true"
-                  />
-                )}
-              </span>
-              <span className="pstrip-meta">
-                <span className="pstrip-label">{n.label}</span>
-                <span className="pstrip-svc">{n.svc}</span>
-              </span>
-              <span className={`pstrip-count ${counts[n.key] === 0 ? "pstrip-count--zero" : ""}`}>
-                {counts[n.key]}
-              </span>
-              {failed[n.key] > 0 && (
-                <span className="pstrip-fail" title={`${failed[n.key]} task(s) failed at ${n.label}`}>
-                  {failed[n.key]} failed
+            <div className="pstrip-item">
+              <button
+                type="button"
+                className={`pstrip-node pstrip-node--${n.cls} ${isOn ? "is-on" : ""} ${failed[n.key] > 0 ? "has-fail" : ""}`}
+                onClick={() => onSelect(isOn ? null : n.key)}
+                aria-pressed={isOn}
+                title={
+                  `${n.svc}: ${counts[n.key]} active` +
+                  (failed[n.key] > 0 ? `, ${failed[n.key]} failed` : "") +
+                  ` — click to ${isOn ? "clear the" : "filter the board to this"} stage`
+                }
+              >
+                <span className="pstrip-ring">
+                  <svg className="pstrip-glyph" viewBox="-19 -19 38 38" aria-hidden="true">
+                    <Glyph />
+                  </svg>
+                  {alarm && alarm.stage === n.key && !reduced && (
+                    <motion.span
+                      key={alarm.tick}
+                      className="pstrip-flare"
+                      initial={{ opacity: 0.9, scale: 1 }}
+                      animate={{ opacity: 0, scale: 1.9 }}
+                      transition={{ duration: 1.4, ease: "easeOut" }}
+                      aria-hidden="true"
+                    />
+                  )}
                 </span>
+                <span className="pstrip-meta">
+                  <span className="pstrip-label">{n.label}</span>
+                  <span className="pstrip-svc">{n.svc}</span>
+                </span>
+                <span className={`pstrip-count ${counts[n.key] === 0 ? "pstrip-count--zero" : ""}`}>
+                  {counts[n.key]}
+                </span>
+              </button>
+              {failed[n.key] > 0 && (
+                <button
+                  type="button"
+                  className="pstrip-fail"
+                  onClick={() => {
+                    if (onSelectFailed) onSelectFailed(n.key);
+                    else onSelect(n.key);
+                  }}
+                  title={`${failed[n.key]} task(s) failed at ${n.label} — click to open failures`}
+                >
+                  {failed[n.key]} failed
+                </button>
               )}
-            </button>
+            </div>
           </Fragment>
         );
       })}

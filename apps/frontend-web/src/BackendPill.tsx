@@ -13,7 +13,7 @@ export function BackendPill({ state }: { state: Backend }) {
   const n = Object.keys(state.health.upstreams).length;
   return (
     <span className="pill pill--up" title={JSON.stringify(state.health.upstreams, null, 2)}>
-      v{state.health.version} · {n} upstreams
+      {state.health.version} · {n} upstreams
     </span>
   );
 }

@@ -146,6 +146,12 @@ export function relativeAge(iso: string | null | undefined, now: number = Date.n
  * that has gone more than two cadences without a successful read is stale, which is
  * the state that used to be invisible.
  */
+function formatStaleRepos(repos: { project: string }[]): string {
+  const shown = repos.slice(0, 3).map((r) => r.project);
+  const extra = repos.length - shown.length;
+  return extra > 0 ? `${shown.join(", ")}, +${String(extra)}` : shown.join(", ");
+}
+
 export function syncSummary(state: CardSyncState | null, now: number = Date.now()): string {
   if (!state) return "Sync state unavailable";
   const repos = state.repositories.filter((repo) => repo.project);
@@ -162,10 +168,10 @@ export function syncSummary(state: CardSyncState | null, now: number = Date.now(
     return `${age} — automatic sync is OFF (CFACTORY_IMPORT_POLL), so use Sync now`;
   }
   if (stale.length === repos.length) {
-    return `${age} — STALE, and the board may be behind the repository`;
+    return `${age} — STALE (${formatStaleRepos(stale)}), and the board may be behind the repository`;
   }
   if (stale.length > 0) {
-    return `${age}, but ${String(stale.length)} of ${String(repos.length)} repositories are stale`;
+    return `${age}, but ${String(stale.length)} of ${String(repos.length)} repositories are stale (${formatStaleRepos(stale)})`;
   }
   return `${age} — polls every ${String(cadence)} min, not live`;
 }

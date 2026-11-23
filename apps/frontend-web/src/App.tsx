@@ -2,7 +2,7 @@
 // the pipeline strip, the routed views, the event ticker, the Copilot FAB and the
 // toast stack. The data/notification plumbing lives in useDashboard, the board in
 // Board.tsx, and the shared types/constants/helpers in dashboard.ts (#115).
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import AuditView from "./AuditView";
 import BacklogView from "./BacklogView";
 import PlanningBoard from "./PlanningBoard";
@@ -24,7 +24,7 @@ import EventTicker from "./EventTicker";
 import { IconBrand, IconExternal, IconRobot, IconLogout, IconRefresh, IconPipeline } from "./icons";
 import { NAV, OBSERVE_URL } from "./dashboard";
 import { useDashboard } from "./useDashboard";
-import { Board } from "./Board";
+import { Board, type BoardChip } from "./Board";
 import { BackendPill } from "./BackendPill";
 import { Toasts } from "./Toasts";
 
@@ -68,6 +68,9 @@ export default function App() {
   // Board/Running views; the item is re-derived from the live list each render so
   // it stays fresh across refreshes.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [boardChip, setBoardChip] = useState<BoardChip>("all");
+  const [boardChipSignal, setBoardChipSignal] = useState(0);
+  const consumeBoardChip = useCallback(() => { setBoardChip("all"); }, []);
   // Deep-link (#149): another portal can jump straight to a task's cross-portal
   // view via /?task=<key>. Seed the open task from the URL on first render; the
   // param is stripped just after (below) so it doesn't linger on refresh/close.
@@ -277,7 +280,17 @@ export default function App() {
           </div>
         </header>
 
-        <PipelineStrip items={items} active={stageFilter} onSelect={onSelectStage} alarm={alarm} />
+        <PipelineStrip
+          items={items}
+          active={stageFilter}
+          onSelect={onSelectStage}
+          onSelectFailed={(stage) => {
+            setBoardChip("failed");
+            setBoardChipSignal((n) => n + 1);
+            onSelectStage(stage);
+          }}
+          alarm={alarm}
+        />
 
         <div className="workspace">
           {alarm && <div key={alarm.tick} className="alarm-sweep" aria-hidden="true" />}
@@ -309,7 +322,13 @@ export default function App() {
             ) : (
               <>
                 {view === "overview" && <MissionControl items={items} reloadSignal={tick} projectScoped={scoped} />}
-                {view === "needs" && <NeedsYouView items={items} progress={progress} projectScoped={scoped} />}
+                {view === "needs" && (
+                  <NeedsYouView
+                    items={items}
+                    progress={progress}
+                    projectScoped={scoped}
+                  />
+                )}
                 {view === "backlog" && (
                   <BacklogView
                     reloadSignal={tick}
@@ -330,6 +349,9 @@ export default function App() {
                     progress={progress}
                     stageFilter={stageFilter}
                     onClearStage={() => setStageFilter(null)}
+                    initialChip={boardChip}
+                    chipSignal={boardChipSignal}
+                    onChipConsumed={consumeBoardChip}
                   />
                 )}
                 {view === "running" && <RunningTasksView items={items} progress={progress} />}

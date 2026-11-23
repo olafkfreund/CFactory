@@ -1,17 +1,17 @@
 // The Pipeline board view (plan → code → test columns), its work-item cards and
 // the live/stage chips — extracted from App.tsx (#115). Pure extraction —
 // behaviour-preserving, no logic or UI change.
-import { useCallback, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { refresh as apiRefresh, type LiveProgress, type ServiceState, type WorkItem } from "./api";
 import TaskDetail from "./TaskDetail";
-import type { StripStage } from "./PipelineStrip";
+import { hasFailedStage, stageFailed, type StripStage } from "./pipelineStages";
 import { activeStage, STATE_LABEL } from "./taskState";
 import { displayTitle, keySlug } from "./correlationKey";
 import { IconClock } from "./icons";
 import { itemState, relTime, STAGES, type StageKey } from "./dashboard";
 
-type BoardChip = "all" | "running" | "review" | "queued" | "failed";
+export type BoardChip = "all" | "running" | "review" | "queued" | "failed";
 
 const BOARD_CHIPS: { id: BoardChip; label: string }[] = [
   { id: "all", label: "All" },
@@ -26,25 +26,50 @@ export function Board({
   progress,
   stageFilter,
   onClearStage,
+  initialChip = "all",
+  chipSignal = 0,
+  onChipConsumed,
 }: {
   items: WorkItem[];
   progress: Record<string, LiveProgress>;
   stageFilter: StripStage | null;
   onClearStage: () => void;
+  initialChip?: BoardChip | undefined;
+  chipSignal?: number | undefined;
+  onChipConsumed?: (() => void) | undefined;
 }) {
   const [query, setQuery] = useState("");
-  const [chip, setChip] = useState<BoardChip>("all");
+  const [chip, setChip] = useState<BoardChip>(initialChip);
+  const consumedSignal = useRef(0);
   const [showFinished, setShowFinished] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!chipSignal || consumedSignal.current === chipSignal) return;
+    consumedSignal.current = chipSignal;
+    setChip(initialChip);
+    onChipConsumed?.();
+  }, [initialChip, chipSignal, onChipConsumed]);
 
   // Same lifecycle semantics as the Mission Control ring and the pipeline
   // strip: an item lives at its furthest ACTIVE stage; finished/idle items
   // drop into the (hidden by default) finished section instead of inflating
-  // the columns.
+  // the columns. When the Failed chip is active, failed tasks in the Finished
+  // section or in another active column still show under the stage that failed.
   const { byStage, finished } = useMemo(() => {
     const m: Record<StageKey, WorkItem[]> = { pfactory: [], aifactory: [], tfactory: [] };
     const finished: WorkItem[] = [];
     for (const wi of items) {
+      if (chip === "failed") {
+        let placed = false;
+        for (const k of ["pfactory", "aifactory", "tfactory"] as const) {
+          if (stageFailed(wi, k)) {
+            m[k].push(wi);
+            placed = true;
+          }
+        }
+        if (placed) continue;
+      }
       const stage = activeStage({
         pfactory: wi.pfactory.status,
         aifactory: wi.aifactory.status,
@@ -54,7 +79,7 @@ export function Board({
       else finished.push(wi);
     }
     return { byStage: m, finished };
-  }, [items]);
+  }, [items, chip]);
 
   const q = query.trim().toLowerCase();
   const matchesQuery = useCallback(
@@ -67,30 +92,41 @@ export function Board({
   );
 
   const visible = useCallback(
-    (wi: WorkItem) => matchesQuery(wi) && (chip === "all" || itemState(wi) === chip),
-    [matchesQuery, chip],
+    (wi: WorkItem) =>
+      matchesQuery(wi) &&
+      (chip === "all" ||
+        (chip === "failed" ? hasFailedStage(wi, stageFilter) : itemState(wi) === chip)),
+    [matchesQuery, chip, stageFilter],
   );
 
   const chipCounts = useMemo(() => {
-    const active = [...byStage.pfactory, ...byStage.aifactory, ...byStage.tfactory].filter(
-      matchesQuery,
-    );
+    const active = items
+      .filter((wi) =>
+        Boolean(
+          activeStage({
+            pfactory: wi.pfactory.status,
+            aifactory: wi.aifactory.status,
+            tfactory: wi.tfactory.status,
+          }),
+        ),
+      )
+      .filter(matchesQuery);
     const c: Record<BoardChip, number> = {
       all: active.length,
       running: 0,
       review: 0,
       queued: 0,
-      failed: 0,
+      failed: items.filter((wi) => matchesQuery(wi) && hasFailedStage(wi, stageFilter)).length,
     };
     for (const wi of active) {
       const st = itemState(wi);
-      if (st === "running" || st === "review" || st === "queued" || st === "failed") c[st]++;
+      if (st === "running" || st === "review" || st === "queued") c[st]++;
     }
     return c;
-  }, [byStage, matchesQuery]);
+  }, [items, matchesQuery, stageFilter]);
 
   const stages = STAGES.filter((s) => !stageFilter || s.key === stageFilter);
-  const shownFinished = finished.filter(matchesQuery);
+  const shownFinished = finished.filter(visible);
 
   // Resolve against the latest items so the open drawer updates live.
   const selected = selectedKey

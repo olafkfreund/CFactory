@@ -11,6 +11,7 @@ import {
   CARD_STATUSES,
   CARD_TIERS,
   peek,
+  relativeAge,
   stageBlocker,
   type StageAction,
 } from "./cards";
@@ -312,6 +313,7 @@ function CardComments({ card }: { card: Card }) {
 export function CardBody({
   card,
   busy,
+  compact = false,
   issueHref,
   onMutate,
   onStage,
@@ -320,6 +322,7 @@ export function CardBody({
 }: {
   card: Card;
   busy: boolean;
+  compact?: boolean | undefined;
   // `| undefined` throughout: callers forward these from optional state and
   // hand over an explicit undefined, which exactOptionalPropertyTypes treats as
   // distinct from omitting the prop.
@@ -329,6 +332,38 @@ export function CardBody({
   onEdit?: (() => void) | undefined;
   onDelete?: (() => void) | undefined;
 }) {
+  if (compact) {
+    return (
+      <article className={`card-pl card-pl--compact ${busy ? "card-pl--busy" : ""}`}>
+        <div className="card-pl__head">
+          <span className="wi-key" title={card.card_key}>
+            {card.card_key}
+          </span>
+          <span className="card-pl__prio mono" title={card.updated_at}>
+            {relativeAge(card.updated_at)}
+          </span>
+        </div>
+        <div className="card-pl__title">{card.title}</div>
+        <div className="card-pl__actions">
+          <select
+            className="card-select card-select--move"
+            value={card.status}
+            disabled={busy}
+            onChange={(e) => {
+              onMutate({ status: e.target.value as CardStatus });
+            }}
+            aria-label={`Status of ${card.card_key}`}
+          >
+            {CARD_STATUSES.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </article>
+    );
+  }
   return (
     <article className={`card-pl ${busy ? "card-pl--busy" : ""}`}>
       <div className="card-pl__head">

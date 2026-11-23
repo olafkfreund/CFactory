@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 
-import { attentionFor, attentionList } from "./needsYou";
+vi.mock("./LiveAgents", () => ({ default: () => null, AgentTerminal: () => null }));
+
+import { attentionFor, attentionList, lastActivityAge } from "./needsYou";
+import NeedsYouView from "./NeedsYouView";
 import { fmtAge } from "./format";
 import type { WorkItem } from "./api";
 
@@ -144,5 +149,68 @@ describe("needsYou", () => {
     );
     expect(a?.kind).toBe("stalled");
     expect(a?.stage).toBe("test");
+  });
+
+  it("computes last activity age from newest timeline event, then updated_at, else unknown age (#576 B16)", () => {
+    const now = Date.parse("2026-07-26T12:00:00Z");
+    const withTimeline = {
+      ...wi({ p: "human_review" }),
+      updated_at: "2026-07-20T12:00:00Z",
+      timeline: [
+        { service: "pfactory", status: "planning", phase: "plan", updated_at: "2026-07-25T12:00:00Z" },
+        { service: "pfactory", status: "human_review", phase: "plan", updated_at: "2026-07-26T10:00:00Z" },
+      ],
+    };
+    const age1 = lastActivityAge(withTimeline, now);
+    expect(age1.age).toBe("2h");
+    expect(age1.older).toBe(false);
+
+    const withUpdatedOnly = {
+      ...wi({ p: "human_review" }),
+      updated_at: "2026-07-16T12:00:00Z",
+    };
+    const age2 = lastActivityAge(withUpdatedOnly, now);
+    expect(age2.age).toBe("10d");
+    expect(age2.older).toBe(true);
+
+    const noTimestamp = wi({ p: "human_review" });
+    const age3 = lastActivityAge(noTimestamp, now);
+    expect(age3.age).toBe("unknown age");
+    expect(age3.older).toBe(false);
+  });
+
+  it("renders recent items, collapsed Older group, and Open/Dismiss buttons (#576 B16)", () => {
+    const now = Date.parse("2026-07-26T12:00:00Z");
+    const fresh = {
+      ...wi({ p: "human_review" }, undefined, "fresh-1"),
+      updated_at: "2026-07-26T11:00:00Z",
+    };
+    fresh.pfactory.task_id = "sess-1";
+    fresh.pfactory.repo = "acme/widgets";
+
+    const old = {
+      ...wi({ p: "done", a: "human_review" }, undefined, "old-1"),
+      updated_at: "2026-07-10T11:00:00Z",
+    };
+    old.aifactory.task_id = "build-1";
+
+    const unknown = wi({ p: "done", a: "done", t: "human_review" }, undefined, "unk-1");
+
+    const html = renderToStaticMarkup(
+      createElement(NeedsYouView, {
+        items: [fresh, old, unknown],
+        progress: {},
+        now,
+      }),
+    );
+    expect(html).toContain("60m");
+    expect(html).toContain("16d");
+    expect(html).toContain("unknown age");
+    expect(html).toContain("Older (1)");
+    expect(html).not.toContain("<details class=\"ny-older\" open");
+    expect(html).not.toContain("session_id=");
+    expect(html).not.toContain("task_id=");
+    expect(html).toContain("Open");
+    expect(html).toContain("Dismiss");
   });
 });

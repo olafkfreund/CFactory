@@ -88,6 +88,9 @@ USER nonroot
 
 EXPOSE 3111
 
+ARG CFACTORY_VERSION=dev
+ENV CFACTORY_VERSION=${CFACTORY_VERSION}
+
 # h11 + wsproto: httptools does not forward the WS Upgrade in this stack.
 CMD ["python", "-m", "uvicorn", "cfactory.app:app", \
      "--host", "0.0.0.0", "--port", "3111", \

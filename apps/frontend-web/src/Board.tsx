@@ -9,6 +9,7 @@ import { hasFailedStage, stageFailed, type StripStage } from "./pipelineStages";
 import { activeStage, STATE_LABEL, stageState } from "./taskState";
 import { displayTitle, keySlug } from "./correlationKey";
 import { WorkCard, type WorkPhase, type WorkTone } from "./components/factory-ui/WorkCard";
+import { WorkColumn } from "./components/factory-ui/WorkColumn";
 import { itemState, relTime, STAGES, type StageKey } from "./dashboard";
 
 export type BoardChip = "all" | "running" | "review" | "queued" | "failed";
@@ -30,6 +31,7 @@ export function Board({
   chipSignal = 0,
   onChipConsumed,
   onChipChange,
+  projectId,
 }: {
   items: WorkItem[];
   progress: Record<string, LiveProgress>;
@@ -39,6 +41,7 @@ export function Board({
   chipSignal?: number | undefined;
   onChipConsumed?: (() => void) | undefined;
   onChipChange?: ((chip: BoardChip) => void) | undefined;
+  projectId?: string | undefined;
 }) {
   const [query, setQuery] = useState("");
   const [chip, setChip] = useState<BoardChip>(initialChip);
@@ -190,32 +193,11 @@ export function Board({
         {stages.map((stage) => {
           const cards = byStage[stage.key].filter(visible);
           return (
-            <div className={`column column--${stage.cls}`} key={stage.key}>
-              <div className="column-head">
-                <span className="column-dot" />
-                <span className="column-title">{stage.label}</span>
-                <span className="column-svc">{stage.svc}</span>
-                <span className="column-count">{cards.length}</span>
-              </div>
-              <div className="column-body">
-                {cards.length === 0 ? (
-                  <p className="col-empty">
-                    {byStage[stage.key].length === 0
-                      ? "No active work items"
-                      : "Nothing matches the filter"}
-                  </p>
-                ) : (
-                  cards.map((wi) => (
-                    <Card
-                      key={wi.correlation_key}
-                      wi={wi}
-                      lp={progress[wi.correlation_key]}
-                      onOpen={() => setSelectedKey(wi.correlation_key)}
-                    />
-                  ))
-                )}
-              </div>
-            </div>
+            <WorkColumn key={stage.key} title={`${stage.label} · ${stage.svc}`} tone={stage.cls === "code" ? "build" : stage.cls} projectId={projectId}
+              emptyLabel={byStage[stage.key].length === 0 ? "No active work items" : "Nothing matches the filter"}
+              showMoreLabel={(count) => `Show ${String(count)} more`}
+              items={cards.map((wi) => ({ id: wi.correlation_key, projectId: projectId ?? wi.pfactory.repo ?? wi.aifactory.repo ?? wi.tfactory.repo ?? "fleet", collapsedByDefault: itemState(wi) === "done",
+                render: (state) => <Card wi={wi} lp={progress[wi.correlation_key]} expanded={state.expanded} onToggle={() => { state.onToggle(); }} onOpen={() => setSelectedKey(wi.correlation_key)} /> }))} />
           );
         })}
       </section>
@@ -226,16 +208,9 @@ export function Board({
           {shownFinished.length === 0 ? (
             <p className="col-empty">No finished work items{q ? " match the filter" : ""}.</p>
           ) : (
-            <div className="board-finished-grid">
-              {shownFinished.map((wi) => (
-                <Card
-                  key={wi.correlation_key}
-                  wi={wi}
-                  lp={progress[wi.correlation_key]}
-                  onOpen={() => setSelectedKey(wi.correlation_key)}
-                />
-              ))}
-            </div>
+            <WorkColumn title="Finished" tone="success" projectId={projectId} emptyLabel="No finished work items" showMoreLabel={(count) => `Show ${String(count)} more`}
+              items={shownFinished.map((wi) => ({ id: wi.correlation_key, projectId: projectId ?? wi.pfactory.repo ?? wi.aifactory.repo ?? wi.tfactory.repo ?? "fleet", collapsedByDefault: true,
+                render: (state) => <Card wi={wi} lp={progress[wi.correlation_key]} expanded={state.expanded} onToggle={() => { state.onToggle(); }} onOpen={() => setSelectedKey(wi.correlation_key)} /> }))} />
           )}
         </section>
       )}
@@ -254,7 +229,7 @@ export function Board({
   );
 }
 
-function Card({ wi, lp, onOpen }: { wi: WorkItem; lp?: LiveProgress | undefined; onOpen: () => void }) {
+function Card({ wi, lp, expanded, onToggle, onOpen }: { wi: WorkItem; lp?: LiveProgress | undefined; expanded: boolean; onToggle: () => void; onOpen: () => void }) {
   const state = itemState(wi);
   const title = displayTitle(wi.title, wi.correlation_key);
   const failed = hasFailedStage(wi);
@@ -268,12 +243,14 @@ function Card({ wi, lp, onOpen }: { wi: WorkItem; lp?: LiveProgress | undefined;
     state === "review" || state === "queued" || state === "idle" ? "warning" : "success";
   return <WorkCard
     title={title}
-    subtitle={`#${keySlug(wi.correlation_key)} · ${wi.timeline.length} events`}
+    subtitle={`#${keySlug(wi.correlation_key)} · ${wi.timeline.length} events${lp?.percent == null && (lp?.subtask || lp?.phase || wi.tfactory.phase || wi.aifactory.phase || wi.pfactory.phase) ? ` · ${lp?.subtask || lp?.phase || wi.tfactory.phase || wi.aifactory.phase || wi.pfactory.phase}` : ""}`}
     status={STATE_LABEL[state]}
     tone={tone}
     age={relTime(wi.timeline.at(-1)?.updated_at ?? null)}
     progress={lp?.percent ?? undefined}
     phases={phases}
+    expanded={expanded}
+    onToggle={onToggle}
     onOpen={onOpen}
     actions={[{ id: "open", label: "Open", onClick: onOpen, variant: "primary" }]}
     collapsedByDefault={state === "done"}

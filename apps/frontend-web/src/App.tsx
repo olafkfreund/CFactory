@@ -2,7 +2,7 @@
 // the pipeline strip, the routed views, the event ticker, the Copilot FAB and the
 // toast stack. The data/notification plumbing lives in useDashboard, the board in
 // Board.tsx, and the shared types/constants/helpers in dashboard.ts (#115).
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AuditView from "./AuditView";
 import BacklogView from "./BacklogView";
 import PlanningBoard from "./PlanningBoard";
@@ -15,6 +15,8 @@ import { attentionList } from "./needsYou";
 import ServicesView from "./ServicesView";
 import SettingsView from "./SettingsView";
 import RunningTasksView from "./RunningTasksView";
+import AgentConsoleModal from "./AgentConsoleModal";
+import type { LiveAgent } from "./api";
 import TokensView from "./TokensView";
 import EventTicker from "./EventTicker";
 import { IconExternal, IconRobot, IconRefresh, IconPipeline } from "./icons";
@@ -34,9 +36,9 @@ const SHELL_LABELS: AppShellLabels = {
   navigation: "Cockpit navigation", openNavigation: "Open navigation", closeNavigation: "Close navigation",
   expandSidebar: "Expand sidebar", collapseSidebar: "Collapse sidebar", projectSettings: "Fleet settings",
   theme: "Colour theme", themeOptions: { light: "Light", dark: "Dark", system: "System" },
-  search: "Search", searchShortcut: "Ctrl+K", needsYou: (count) => `${count} need attention`, userMenu: (name) => `${name} menu`,
+  search: "Search", searchShortcut: "Ctrl+K", needsYou: (count) => `${String(count)} need attention`, userMenu: (name) => `${name} menu`,
   project: { project: "Project", selectProject: "Select project", searchProjects: "Search projects", projects: "Projects", recentProjects: "Recent projects", noProjects: "No projects", allProjects: "All projects", addProject: "Add project" },
-  pipeline: { pipeline: "PARR pipeline", clearFilter: "Clear filter", failures: (count) => `${count} failed`, filterFailures: (stage) => `Show ${stage.label} failures` },
+  pipeline: { pipeline: "PARR pipeline", clearFilter: "Clear filter", failures: (count) => `${String(count)} failed`, filterFailures: (stage) => `Show ${stage.label} failures` },
 };
 
 export default function App() {
@@ -80,7 +82,11 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [boardChip, setBoardChip] = useState<BoardChip>("all");
   const [theme, setThemeState] = useState<Theme>(storedTheme);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem("cfactory-sidebar-collapsed") === "true");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("cfactory-sidebar-collapsed") === "true"; }
+    catch { return false; }
+  });
+  const [consoleAgent, setConsoleAgent] = useState<{ agent: LiveAgent; projectId: string | null } | null>(null);
   const [boardChipSignal, setBoardChipSignal] = useState(0);
   const consumeBoardChip = useCallback(() => {}, []);
   useEffect(() => {
@@ -124,6 +130,17 @@ export default function App() {
     ...(alarm ? { alarm: { key: alarm.stage, event: alarm.tick } } : {}),
   };
   const scoped = projectRef !== null;
+  const consoleScope = activeProject?.id ?? null;
+  const openConsole = (agent: LiveAgent) => setConsoleAgent({ agent, projectId: consoleScope });
+  const previousConsoleScope = useRef(consoleScope);
+  useEffect(() => {
+    if (previousConsoleScope.current !== consoleScope) setConsoleAgent(null);
+    previousConsoleScope.current = consoleScope;
+  }, [consoleScope]);
+  const openFleetSettings = () => {
+    window.history.pushState({}, "", "/settings");
+    window.dispatchEvent(new window.PopStateEvent("popstate"));
+  };
   const openTask = openTaskKey
     ? (items.find((w) => w.correlation_key === openTaskKey) ?? null)
     : null;
@@ -159,7 +176,7 @@ export default function App() {
     const nav: PaletteCommand[] = NAV.map(({ id, label, Icon }) => ({
       id: `nav-${id}`,
       group: "Go to",
-      label: scoped && ["tokens", "audit", "services", "settings"].includes(id) ? `${label} (fleet-wide)` : label,
+      label: scoped && ["tokens", "audit", "services"].includes(id) ? `${label} (fleet-wide)` : label,
       keywords: label,
       Icon,
       run: () => {
@@ -195,7 +212,7 @@ export default function App() {
         keywords: "pfactory pipeline plan",
         Icon: IconPipeline,
         run: () => {
-          onSelectStage("pfactory");
+          selectStage("pfactory");
         },
       },
       {
@@ -206,7 +223,7 @@ export default function App() {
         keywords: "aifactory pipeline build code",
         Icon: IconPipeline,
         run: () => {
-          onSelectStage("aifactory");
+          selectStage("aifactory");
         },
       },
       {
@@ -217,7 +234,7 @@ export default function App() {
         keywords: "tfactory pipeline verify test",
         Icon: IconPipeline,
         run: () => {
-          onSelectStage("tfactory");
+          selectStage("tfactory");
         },
       },
     ];
@@ -234,30 +251,32 @@ export default function App() {
       });
     }
     return [...nav, ...actions.filter((action) => !scoped || action.id !== "act-copilot")];
-  }, [setView, onRefresh, setCopilotOpen, onSelectStage, scoped]);
+  }, [setView, onRefresh, setCopilotOpen, selectStage, scoped]);
 
   return (
     <AppShell
       portal="cockpit"
       portalProject={activeProject && activeProjectSlug && !activeProject.id.startsWith("repo:") ? { slug: activeProjectSlug, portals: ["plan", "build", "test", "cockpit"] } : undefined}
-      nav={[...NAV.filter((entry) => entry.id !== "settings").map(({ id, label, Icon }) => ({ id, label: scoped && ["tokens", "audit", "services"].includes(id) ? `${label} (fleet-wide)` : label, icon: <Icon size={18} />, ...(id === "needs" ? { badge: needsCount } : {}) })), ...(OBSERVE_URL ? [{ id: "observe", label: "Observe", icon: <IconExternal size={18} />, external: { href: OBSERVE_URL } }] : [])]}
+      nav={NAV.filter((entry) => entry.id !== "settings").map(({ id, label, Icon }) => ({ id, label: scoped && ["tokens", "audit", "services"].includes(id) ? `${label} (fleet-wide)` : label, icon: <Icon size={18} />, ...(id === "needs" ? { badge: needsCount } : {}) }))}
       activeNav={view}
       onNavigate={(id) => setView(id as typeof view)}
       projects={breadcrumbProjects}
       currentProject={activeProjectSlug ?? undefined}
       onSelectProject={setProjectSlug}
       onAllProjects={() => setProjectSlug(null)}
-      view={NAV.find((entry) => entry.id === view)?.label ?? "Cockpit"}
+      view={view === "preferences" ? "Preferences" : NAV.find((entry) => entry.id === view)?.label ?? "Cockpit"}
       projectSettings={{ active: view === "settings", onOpen: () => setView("settings") }}
+      sidebarFooter={OBSERVE_URL ? <a className="f-side__item" href={OBSERVE_URL} target="_blank" rel="noopener noreferrer"><IconExternal size={18} />Observe</a> : undefined}
       strip={strip}
-      topbarStatus={<><span className={`live ${live ? "live--on" : "live--off"}`}>{live ? "● live" : "○ offline"}</span><BackendPill state={backend} /><button className="f-icon-btn" onClick={onRefresh} disabled={busy} title="Refresh" aria-label="Refresh"><IconRefresh size={16} /></button></>}
+      topbarStatus={<><span className={`live ${live ? "live--on" : "live--off"}`}>{live ? "● live" : "○ offline"}</span><BackendPill state={backend} /><button className="f-icon-btn" onClick={() => { void onRefresh(); }} disabled={busy} title="Refresh" aria-label="Refresh"><IconRefresh size={16} /></button></>}
       sidebarCollapsed={sidebarCollapsed}
-      onSidebarCollapsedChange={(collapsed) => { setSidebarCollapsed(collapsed); window.localStorage.setItem("cfactory-sidebar-collapsed", String(collapsed)); }}
+      onSidebarCollapsedChange={(collapsed) => { setSidebarCollapsed(collapsed); try { window.localStorage.setItem("cfactory-sidebar-collapsed", String(collapsed)); } catch { /* preference unavailable */ } }}
+      user={{ name: "Account", menu: [{ id: "preferences", label: "Preferences", onSelect: () => setView("preferences") }] }}
       theme={theme}
       onTheme={(next) => { setThemeState(next); setTheme(next); }}
       onSearch={() => setPaletteOpen(true)}
       needsYou={{ count: needsCount, onOpen: () => setView("needs") }}
-      labels={SHELL_LABELS}
+      labels={scoped ? { ...SHELL_LABELS, projectSettings: "Project settings" } : SHELL_LABELS}
     >
         <div className="workspace">
           {alarm && <div key={alarm.tick} className="alarm-sweep" aria-hidden="true" />}
@@ -288,7 +307,7 @@ export default function App() {
               </div>
             ) : (
               <>
-                {view === "overview" && <MissionControl items={items} reloadSignal={tick} projectScoped={scoped} />}
+                {view === "overview" && <MissionControl items={items} reloadSignal={tick} projectScoped={scoped} onOpenConsole={openConsole} />}
                 {view === "needs" && (
                   <NeedsYouView
                     items={items}
@@ -320,15 +339,17 @@ export default function App() {
                     chipSignal={boardChipSignal}
                     onChipConsumed={consumeBoardChip}
                     onChipChange={setBoardChip}
+                    projectId={activeProject?.id}
                   />
                 )}
                 {view === "tokens" && <TokensView reloadSignal={tick} />}
                 {view === "audit" && <AuditView reloadSignal={tick} />}
                 {view === "services" && <ServicesView backend={backend} reloadSignal={tick} />}
-                {view === "settings" && <SettingsView reloadSignal={tick} />}
+                {view === "settings" && (scoped && activeProject ? <section className="mc-panel"><h1>Project Settings</h1><p>{activeProject.name}</p><p>Repositories: {activeProject.repoPaths.join(", ")}</p><button type="button" className="primary-btn" onClick={openFleetSettings}>Fleet settings</button></section> : <SettingsView reloadSignal={tick} />)}
+                {view === "preferences" && <section className="mc-panel"><h1>Preferences</h1><p>Colour theme</p><div role="group" aria-label="Colour theme">{(["light", "dark", "system"] as const).map((option) => <button key={option} type="button" className={`set-toggle-btn ${theme === option ? "active" : ""}`} aria-pressed={theme === option} onClick={() => { setThemeState(option); setTheme(option); }}>{option}</button>)}</div><button type="button" className="primary-btn" onClick={openFleetSettings}>Fleet settings</button></section>}
               </>
             )}
-            <div hidden={view !== "running"}><RunningTasksView items={items} progress={progress} /></div>
+            <div hidden={view !== "running"}><RunningTasksView items={items} progress={progress} visible={view === "running"} onOpenConsole={openConsole} /></div>
           </div>
           <EventTicker
             items={items}
@@ -369,6 +390,7 @@ export default function App() {
       </button>}
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+      {consoleAgent && consoleAgent.projectId === consoleScope && (!scoped || items.some((item) => item.correlation_key === consoleAgent.agent.correlation_key)) && <AgentConsoleModal agent={consoleAgent.agent} onClose={() => setConsoleAgent(null)} />}
 
       {/* Command palette (⌘K) + the task it opens, held at the shell (#147) */}
       <CommandPalette

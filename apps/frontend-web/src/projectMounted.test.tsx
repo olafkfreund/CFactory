@@ -114,7 +114,8 @@ beforeEach(() => {
     Node: dom.window.Node,
     HTMLElement: dom.window.HTMLElement,
     IS_REACT_ACT_ENVIRONMENT: true,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(callback, 0),
+    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(performance.now()), 0),
+    cancelAnimationFrame: (id: number) => clearTimeout(id),
   });
   dom.window.HTMLElement.prototype.scrollIntoView = () => undefined;
   Object.assign(dom.window.HTMLElement.prototype, {
@@ -442,5 +443,86 @@ describe("mounted project controls", () => {
       await new Promise((resolve) => setTimeout(resolve, 180));
     });
     expect(host.textContent).not.toContain("Beta secret");
+  });
+
+  it("switches to Pipeline with Failed chip selected when clicking the strip failure badge, showing finished/other-stage failures (#576 B15)", async () => {
+    api.fetchWorkItems.mockResolvedValueOnce([
+      // A task whose plan stage failed and has no active stage (would otherwise be in Finished)
+      WorkItemSchema.parse({
+        correlation_key: "plan-fail-finished",
+        title: "Plan failed task",
+        timeline: [],
+        pfactory: { task_id: "pf-1", status: "failed", phase: "plan", repo: "acme/alpha" },
+        aifactory: { task_id: null, status: null, phase: null },
+        tfactory: { task_id: null, status: null, phase: null },
+      }),
+      // A task whose code stage failed while test stage is still running (in another active column)
+      WorkItemSchema.parse({
+        correlation_key: "code-fail-active-test",
+        title: "Code failed but test active",
+        timeline: [],
+        pfactory: { task_id: "pf-2", status: "done", phase: "plan", repo: "acme/alpha" },
+        aifactory: { task_id: "ai-2", status: "failed", phase: "code", repo: "acme/alpha" },
+        tfactory: { task_id: "tf-2", status: "running", phase: "test", repo: "acme/alpha" },
+      }),
+    ]);
+    dom.window.history.replaceState({}, "", "/");
+    await mount(<App />);
+    const failBadges = [...host.querySelectorAll("button.pstrip-fail")];
+    expect(failBadges.length).toBeGreaterThanOrEqual(2);
+    // Click the Plan stage failure badge
+    await click(must(failBadges[0]));
+    expect(dom.window.location.pathname).toBe("/pipeline");
+    expect(host.querySelector(".rt-chip--failed.active")).not.toBeNull();
+    expect(host.textContent).toContain("Plan failed task");
+
+    // Click the Code stage failure badge — shows the task even though its activeStage is tfactory
+    const codeFailBadge = must(
+      [...host.querySelectorAll("button.pstrip-fail")].find((b) =>
+        (b.getAttribute("title") ?? "").includes("Code"),
+      ),
+    );
+    await click(codeFailBadge);
+    expect(host.textContent).toContain("Code failed but test active");
+  });
+
+  it("reopens a compact done card on PlanningBoard and persists local Dismiss / Show hidden in NeedsYouView (#576 B14, B16)", async () => {
+    const doneCard = CardSchema.parse({
+      ...card("alpha-task", 1),
+      status: "done",
+      updated_at: "2026-07-26T10:00:00Z",
+    });
+    api.fetchCards.mockResolvedValue([doneCard]);
+    await mount(<PlanningBoard reloadSignal={0} />);
+    const doneCol = must(host.querySelector(".column--card-done"));
+    expect(doneCol.querySelector(".card-pl--compact")).not.toBeNull();
+    expect(doneCol.textContent).not.toContain("▲");
+
+    // Dismiss in NeedsYouView hides the item into localStorage and offers Show hidden
+    const reviewItem = WorkItemSchema.parse({
+      correlation_key: "needs-1",
+      title: "Review me",
+      timeline: [],
+      updated_at: new Date().toISOString(),
+      pfactory: { task_id: "sess-1", status: "human_review", phase: "plan", repo: "acme/alpha" },
+      aifactory: { task_id: null, status: null, phase: null },
+      tfactory: { task_id: null, status: null, phase: null },
+    });
+    api.fetchWorkItems.mockResolvedValue([reviewItem]);
+    dom.window.history.replaceState({}, "", "/needs");
+    await mount(<App />);
+    expect(host.textContent).toContain("Review me");
+    const dismissBtn = must(
+      [...host.querySelectorAll("button.ny-dismiss")].find((b) => b.textContent === "Dismiss"),
+    );
+    await click(dismissBtn);
+    expect(host.textContent).not.toContain("Review me");
+    const showHiddenBtn = must(
+      [...host.querySelectorAll("button.ny-chip")].find((b) =>
+        (b.textContent ?? "").includes("Show hidden"),
+      ),
+    );
+    await click(showHiddenBtn);
+    expect(host.textContent).toContain("Review me");
   });
 });

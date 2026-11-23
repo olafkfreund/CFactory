@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 
-import { attentionFor, attentionList } from "./needsYou";
+vi.mock("./LiveAgents", () => ({ default: () => null, AgentTerminal: () => null }));
+
+import { attentionFor, attentionList, lastActivityAge, upstreamUrlFor } from "./needsYou";
+import NeedsYouView from "./NeedsYouView";
 import { fmtAge } from "./format";
 import type { WorkItem } from "./api";
 
@@ -144,5 +149,101 @@ describe("needsYou", () => {
     );
     expect(a?.kind).toBe("stalled");
     expect(a?.stage).toBe("test");
+  });
+
+  it("computes last activity age from newest timeline event, then updated_at, else unknown age (#576 B16)", () => {
+    const now = Date.parse("2026-07-26T12:00:00Z");
+    const withTimeline = {
+      ...wi({ p: "human_review" }),
+      updated_at: "2026-07-20T12:00:00Z",
+      timeline: [
+        { service: "pfactory", status: "planning", phase: "plan", updated_at: "2026-07-25T12:00:00Z" },
+        { service: "pfactory", status: "human_review", phase: "plan", updated_at: "2026-07-26T10:00:00Z" },
+      ],
+    };
+    const age1 = lastActivityAge(withTimeline, now);
+    expect(age1.age).toBe("2h");
+    expect(age1.older).toBe(false);
+
+    const withUpdatedOnly = {
+      ...wi({ p: "human_review" }),
+      updated_at: "2026-07-16T12:00:00Z",
+    };
+    const age2 = lastActivityAge(withUpdatedOnly, now);
+    expect(age2.age).toBe("10d");
+    expect(age2.older).toBe(true);
+
+    const noTimestamp = wi({ p: "human_review" });
+    const age3 = lastActivityAge(noTimestamp, now);
+    expect(age3.age).toBe("unknown age");
+    expect(age3.older).toBe(false);
+  });
+
+  it("builds verified upstream links for plan, code and test, and omits them for stalled or missing ids (#576 B16)", () => {
+    const planItem = wi({ p: "human_review" });
+    planItem.pfactory.task_id = "sess-42";
+    planItem.pfactory.repo = "acme/widgets";
+    expect(upstreamUrlFor(planItem, "approval", "plan")).toBe(
+      "https://pfactory.freundcloud.org.uk/p/widgets?session_id=sess-42",
+    );
+
+    // Without repo or projectSlug, PFactory link cannot form /p/<slug>.
+    const planNoSlug = wi({ p: "human_review" });
+    planNoSlug.pfactory.task_id = "sess-42";
+    expect(upstreamUrlFor(planNoSlug, "approval", "plan")).toBeNull();
+    expect(upstreamUrlFor(planNoSlug, "approval", "plan", "alpha")).toBe(
+      "https://pfactory.freundcloud.org.uk/p/alpha?session_id=sess-42",
+    );
+
+    const codeItem = wi({ p: "done", a: "human_review" });
+    codeItem.aifactory.task_id = "task-99";
+    expect(upstreamUrlFor(codeItem, "review", "code")).toBe(
+      "https://aifactory.freundcloud.org.uk?task_id=task-99",
+    );
+
+    const testItem = wi({ p: "done", a: "done", t: "human_review" });
+    testItem.tfactory.task_id = "spec-7";
+    expect(upstreamUrlFor(testItem, "review", "test", "beta")).toBe(
+      "https://tfactory.freundcloud.org.uk/p/beta?task_id=spec-7",
+    );
+
+    // Stalled rows and rows without a task_id keep the drawer only.
+    expect(upstreamUrlFor(codeItem, "stalled", "code")).toBeNull();
+    expect(upstreamUrlFor(wi({ a: "human_review" }), "review", "code")).toBeNull();
+  });
+
+  it("renders recent items, collapsed Older group, upstream links and Open/Dismiss buttons (#576 B16)", () => {
+    const now = Date.parse("2026-07-26T12:00:00Z");
+    const fresh = {
+      ...wi({ p: "human_review" }, undefined, "fresh-1"),
+      updated_at: "2026-07-26T11:00:00Z",
+    };
+    fresh.pfactory.task_id = "sess-1";
+    fresh.pfactory.repo = "acme/widgets";
+
+    const old = {
+      ...wi({ p: "done", a: "human_review" }, undefined, "old-1"),
+      updated_at: "2026-07-10T11:00:00Z",
+    };
+    old.aifactory.task_id = "build-1";
+
+    const unknown = wi({ p: "done", a: "done", t: "human_review" }, undefined, "unk-1");
+
+    const html = renderToStaticMarkup(
+      createElement(NeedsYouView, {
+        items: [fresh, old, unknown],
+        progress: {},
+        now,
+      }),
+    );
+    expect(html).toContain("60m");
+    expect(html).toContain("16d");
+    expect(html).toContain("unknown age");
+    expect(html).toContain("Older (1)");
+    expect(html).not.toContain("<details class=\"ny-older\" open");
+    expect(html).toContain("https://pfactory.freundcloud.org.uk/p/widgets?session_id=sess-1");
+    expect(html).toContain("https://aifactory.freundcloud.org.uk?task_id=build-1");
+    expect(html).toContain("Open");
+    expect(html).toContain("Dismiss");
   });
 });

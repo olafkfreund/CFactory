@@ -284,6 +284,34 @@ describe("card components", () => {
     // status IS the column here, so the status filter must not be offered
     expect(html).not.toContain("Filter by status");
   });
+
+  it("renders a compact done card with title, key, timestamp and status select only (#576 B14)", () => {
+    const doneCard: Card = {
+      ...CARD,
+      status: "done",
+      updated_at: "2026-07-26T10:00:00Z",
+    };
+    const html = renderToStaticMarkup(
+      <CardBody card={doneCard} busy={false} compact onMutate={noop} onStage={noop} />,
+    );
+    expect(html).toContain("FCT-42");
+    expect(html).toContain("Ship the planning board");
+    expect(html).toContain("2026-07-26T10:00:00Z");
+    expect(html).toContain("Status of FCT-42");
+    expect(html).not.toContain("Raise priority of FCT-42");
+    expect(html).not.toContain("Lower priority of FCT-42");
+    expect(html).not.toContain("Plan FCT-42");
+    expect(html).not.toContain("Code FCT-42");
+    expect(html).not.toContain("Test FCT-42");
+    expect(html).not.toContain("Run all FCT-42");
+
+    // Full card (or Backlog done card without compact) keeps priority arrows and stage buttons.
+    const fullDone = renderToStaticMarkup(
+      <CardBody card={doneCard} busy={false} onMutate={noop} onStage={noop} />,
+    );
+    expect(fullDone).toContain("Raise priority of FCT-42");
+    expect(fullDone).toContain("Plan FCT-42");
+  });
 });
 
 // ── Stage actions (RFC-0020 §3.7, #369) ─────────────────────────────────────
@@ -726,7 +754,7 @@ describe("sync freshness (#374)", () => {
     };
     const summary = syncSummary(stale, NOW);
     expect(summary).toContain("Synced never");
-    expect(summary).toContain("STALE");
+    expect(summary).toContain("STALE (acme/widgets)");
   });
 
   it("names the ONE lagging repository rather than crying stale for the board", () => {
@@ -737,7 +765,36 @@ describe("sync freshness (#374)", () => {
         { ...at(STATE.repositories, 0), repository_id: 2, project: "acme/gadgets", stale: true },
       ],
     };
-    expect(syncSummary(mixed, NOW)).toContain("1 of 2 repositories are stale");
+    const summary = syncSummary(mixed, NOW);
+    expect(summary).toContain("1 of 2 repositories are stale");
+    expect(summary).toContain("acme/gadgets");
+  });
+
+  it("names up to 3 stale repositories and summarizes the rest as +N", () => {
+    const baseRepo = at(STATE.repositories, 0);
+    const fourStale = [
+      { ...baseRepo, repository_id: 1, project: "acme/alpha", stale: true },
+      { ...baseRepo, repository_id: 2, project: "acme/beta", stale: true },
+      { ...baseRepo, repository_id: 3, project: "acme/gamma", stale: true },
+      { ...baseRepo, repository_id: 4, project: "acme/delta", stale: true },
+    ];
+    const allStale = syncSummary({ ...STATE, repositories: fourStale }, NOW);
+    expect(allStale).toContain("STALE (acme/alpha, acme/beta, acme/gamma, +1)");
+    expect(allStale).not.toContain("acme/delta");
+
+    const mixedFour = syncSummary(
+      {
+        ...STATE,
+        repositories: [
+          ...fourStale,
+          { ...baseRepo, repository_id: 5, project: "acme/fresh", stale: false },
+        ],
+      },
+      NOW,
+    );
+    expect(mixedFour).toContain("4 of 5 repositories are stale");
+    expect(mixedFour).toContain("acme/alpha, acme/beta, acme/gamma, +1");
+    expect(mixedFour).not.toContain("acme/delta");
   });
 
   it("says the poll is OFF, because no timestamp means the board will catch up", () => {

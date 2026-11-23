@@ -28,12 +28,12 @@ describe("theme", () => {
     expect(resolveTheme("system")).toBe("dark");
   });
 
-  it("defaults to dark when nothing is stored or storage is unavailable", () => {
+  it("defaults to system when nothing is stored or storage is unavailable", () => {
     vi.stubGlobal("localStorage", {
       getItem: () => null,
       setItem: () => {},
     });
-    expect(storedTheme()).toBe("dark");
+    expect(storedTheme()).toBe("system");
   });
 
   it("returns a valid stored preference", () => {

@@ -334,7 +334,7 @@ export function CardBody({
 }) {
   if (compact) {
     return (
-      <article className={`card-pl card-pl--compact ${busy ? "card-pl--busy" : ""}`}>
+      <article className={`card-pl f-card card-pl--compact ${busy ? "card-pl--busy" : ""}`}>
         <div className="card-pl__head">
           <span className="wi-key" title={card.card_key}>
             {card.card_key}
@@ -365,7 +365,7 @@ export function CardBody({
     );
   }
   return (
-    <article className={`card-pl ${busy ? "card-pl--busy" : ""}`}>
+    <article className={`card-pl f-card ${busy ? "card-pl--busy" : ""}`}>
       <div className="card-pl__head">
         <span className="wi-key" title={card.card_key}>
           {card.card_key}

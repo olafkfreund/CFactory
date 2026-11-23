@@ -223,6 +223,13 @@ describe("mounted project routes", () => {
     expect(host.querySelector('[data-testid="path"]')?.textContent).toBe("all:tokens");
   });
 
+  it("keeps the settings view when normalizing a scoped deep link", async () => {
+    dom.window.history.replaceState({}, "", "/p/alpha/settings");
+    await mount(<RouteProbe />);
+    expect(dom.window.location.pathname).toBe("/settings");
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe("all:settings");
+  });
+
   it("keeps another project's live failure out of pins and alarm", async () => {
     dom.window.history.replaceState({}, "", "/p/alpha");
     await mount(<RouteProbe />);
@@ -310,6 +317,69 @@ describe("mounted project routes", () => {
 });
 
 describe("mounted project controls", () => {
+  it("switches projects by keyboard and keeps the fleet entry available", async () => {
+    await mount(<App />);
+    const trigger = must(host.querySelector(".f-project-switcher__trigger"));
+    await click(trigger);
+    const input = must(host.querySelector(".f-project-switcher__input"));
+    await act(async () => {
+      input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(dom.window.location.pathname).toMatch(/^\/p\//);
+    await click(must(host.querySelector(".f-project-switcher__trigger")));
+    await click(must([...host.querySelectorAll(".f-project-switcher__action")].find((button) => button.textContent === "All projects")));
+    expect(dom.window.location.pathname).toBe("/");
+  });
+
+  it("opens navigation by Ctrl+1 through Ctrl+9, search by Ctrl+K, and fleet settings", async () => {
+    api.fetchSettings.mockResolvedValue({ tenant: "default", provider: "claude", model: "claude-opus-5-5", providers: ["claude"] });
+    await mount(<App />);
+    const paths = ["/", "/needs", "/backlog", "/planning", "/pipeline", "/running", "/tokens", "/audit", "/services"];
+    for (let index = 1; index <= 9; index++) {
+      await act(async () => {
+        dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: String(index), ctrlKey: true, bubbles: true }));
+        await Promise.resolve();
+      });
+      expect(dom.window.location.pathname).toBe(paths[index - 1]);
+    }
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    await click(must(host.querySelector('[aria-label="Fleet settings"]')));
+    expect(dom.window.location.pathname).toBe("/settings");
+  });
+
+  it("toggles strip stages and clears stage and failure filters together", async () => {
+    api.fetchWorkItems.mockResolvedValue([work("failed-plan", "acme/alpha", "failed"), work("queued-plan", "acme/alpha", "queued")]);
+    await mount(<App />);
+    await click(must(host.querySelector(".f-strip__fail")));
+    expect(host.querySelector(".rt-chip--failed.active")).not.toBeNull();
+    await click(must(host.querySelector(".f-strip__clear")));
+    expect(host.querySelector(".rt-chip--failed.active")).toBeNull();
+    const stage = must(host.querySelector(".f-strip__node"));
+    await click(stage);
+    expect(stage.getAttribute("aria-pressed")).toBe("true");
+    await click(stage);
+    expect(stage.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("keeps Open available on pending and rejected pipeline cards", async () => {
+    api.fetchWorkItems.mockResolvedValue([work("pending-plan", "acme/alpha", "pending"), work("rejected-plan", "acme/alpha", "rejected")]);
+    dom.window.history.replaceState({}, "", "/pipeline");
+    await mount(<App />);
+    for (const key of ["pending-plan", "rejected-plan"]) {
+      if (key === "rejected-plan") await click(must([...host.querySelectorAll("button")].find((button) => button.textContent.startsWith("Finished"))));
+      const card = must([...host.querySelectorAll(".f-card")].find((item) => item.textContent.includes(key)));
+      await click(must(card.querySelector(".f-card__open")));
+      expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+      await click(must(host.querySelector('[aria-label="Close task detail"]')));
+    }
+  });
+
   it("restores breadcrumb focus after selection and Escape from footer", async () => {
     const picked = vi.fn();
     const viewAll = vi.fn();
@@ -472,7 +542,7 @@ describe("mounted project controls", () => {
     ]);
     dom.window.history.replaceState({}, "", "/");
     await mount(<App />);
-    const failBadges = [...host.querySelectorAll("button.pstrip-fail")];
+    const failBadges = [...host.querySelectorAll("button.f-strip__fail")];
     expect(failBadges.length).toBeGreaterThanOrEqual(2);
     // Click the Plan stage failure badge
     await click(must(failBadges[0]));
@@ -482,8 +552,8 @@ describe("mounted project controls", () => {
 
     // Click the Code stage failure badge — shows the task even though its activeStage is tfactory
     const codeFailBadge = must(
-      [...host.querySelectorAll("button.pstrip-fail")].find((b) =>
-        (b.getAttribute("title") ?? "").includes("Code"),
+      [...host.querySelectorAll("button.f-strip__fail")].find((b) =>
+        (b.getAttribute("aria-label") ?? "").includes("Code"),
       ),
     );
     await click(codeFailBadge);
@@ -495,8 +565,8 @@ describe("mounted project controls", () => {
     expect(host.querySelector(".board-finished")?.textContent).not.toContain("queued-no-failure");
     await click(must([...host.querySelectorAll("button")].find((b) => b.textContent.startsWith("All "))));
     expect(host.querySelector(".rt-chip--failed.active")).toBeNull();
-    await click(must(host.querySelector(".nav-item:not(.active)")));
-    await click(must([...host.querySelectorAll("button.nav-item")].find((b) => b.textContent === "Pipeline")));
+    await click(must(host.querySelector(".f-side__item:not([aria-current])")));
+    await click(must([...host.querySelectorAll("button.f-side__item")].find((b) => b.textContent === "Pipeline")));
     expect(host.querySelector(".rt-chip--failed.active")).toBeNull();
   });
 
@@ -538,10 +608,10 @@ describe("mounted project controls", () => {
       [...host.querySelectorAll("button.ny-dismiss")].find((b) => b.textContent === "Dismiss"),
     );
     await click(dismissBtn);
-    expect(host.textContent).not.toContain("Review me");
+    expect(host.querySelector(".ny")?.textContent).not.toContain("Review me");
     await mount(<div />);
     await mount(<App />);
-    expect(host.textContent).not.toContain("Review me");
+    expect(host.querySelector(".ny")?.textContent).not.toContain("Review me");
     const showHiddenBtn = must(
       [...host.querySelectorAll("button.ny-chip")].find((b) =>
         b.textContent.includes("Show hidden"),

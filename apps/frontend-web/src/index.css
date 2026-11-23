@@ -1863,11 +1863,14 @@ body {
 .ny-tag { padding: 0.12rem 0.45rem; border-radius: 999px; border: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.06em; }
 .ny-item--stalled .ny-tag { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .ny-key { color: var(--cyan); }
-.ny-open {
+/* Open is the primary action, Dismiss the quiet one; both share one shape (#576). */
+.ny-actions { display: flex; gap: 0.5rem; align-items: center; }
+.ny-open, .ny-dismiss {
   font-family: var(--font-mono); font-size: 0.76rem; padding: 0.38rem 0.85rem;
-  border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer;
 }
-.ny-open:hover { color: var(--text); border-color: var(--cyan); }
+.ny-dismiss { background: transparent; color: var(--muted); }
+.ny-open:hover, .ny-dismiss:hover { color: var(--text); border-color: var(--cyan); }
 
 /* --- Error boundary fallback (#146) ------------------------------------ */
 .eb { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 2rem; background: var(--bg); z-index: 200; }

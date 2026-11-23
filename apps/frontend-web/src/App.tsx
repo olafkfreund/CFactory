@@ -2,15 +2,12 @@
 // the pipeline strip, the routed views, the event ticker, the Copilot FAB and the
 // toast stack. The data/notification plumbing lives in useDashboard, the board in
 // Board.tsx, and the shared types/constants/helpers in dashboard.ts (#115).
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AuditView from "./AuditView";
 import BacklogView from "./BacklogView";
 import PlanningBoard from "./PlanningBoard";
 import CommandPalette, { type PaletteCommand } from "./CommandPalette";
 import TaskDetail from "./TaskDetail";
-import ThemeToggle from "./ThemeToggle";
-import PortalSwitcher from "./PortalSwitcher";
-import ProjectBreadcrumb from "./ProjectBreadcrumb";
 import CopilotPanel from "./CopilotPanel";
 import MissionControl from "./MissionControl";
 import NeedsYouView from "./NeedsYouView";
@@ -18,15 +15,31 @@ import { attentionList } from "./needsYou";
 import ServicesView from "./ServicesView";
 import SettingsView from "./SettingsView";
 import RunningTasksView from "./RunningTasksView";
+import AgentConsoleModal from "./AgentConsoleModal";
+import type { LiveAgent } from "./api";
 import TokensView from "./TokensView";
-import PipelineStrip from "./PipelineStrip";
 import EventTicker from "./EventTicker";
-import { IconBrand, IconExternal, IconRobot, IconLogout, IconRefresh, IconPipeline } from "./icons";
-import { NAV, OBSERVE_URL } from "./dashboard";
+import { IconExternal, IconRobot, IconRefresh, IconPipeline } from "./icons";
+import { NAV, OBSERVE_URL, STAGES } from "./dashboard";
+import { activeStage } from "./taskState";
+import { stageFailed, type StripStage } from "./pipelineStages";
+import { AppShell, type AppShellLabels } from "./components/factory-ui/AppShell";
+import type { PipelineStripProps } from "./components/factory-ui/PipelineStrip";
+import { applyTheme, setTheme, storedTheme, type Theme } from "./theme";
 import { useDashboard } from "./useDashboard";
 import { Board, type BoardChip } from "./Board";
 import { BackendPill } from "./BackendPill";
 import { Toasts } from "./Toasts";
+
+const SHELL_LABELS: AppShellLabels = {
+  brand: "CFactory", portals: "Factory portals", portalNames: { plan: "Plan", build: "Build", test: "Test", cockpit: "Cockpit", meet: "Meet" },
+  navigation: "Cockpit navigation", openNavigation: "Open navigation", closeNavigation: "Close navigation",
+  expandSidebar: "Expand sidebar", collapseSidebar: "Collapse sidebar", projectSettings: "Fleet settings",
+  theme: "Colour theme", themeOptions: { light: "Light", dark: "Dark", system: "System" },
+  search: "Search", searchShortcut: "Ctrl+K", needsYou: (count) => `${String(count)} need attention`, userMenu: (name) => `${name} menu`,
+  project: { project: "Project", selectProject: "Select project", searchProjects: "Search projects", projects: "Projects", recentProjects: "Recent projects", noProjects: "No projects", allProjects: "All projects", addProject: "Add project" },
+  pipeline: { pipeline: "PARR pipeline", clearFilter: "Clear filter", failures: (count) => `${String(count)} failed`, filterFailures: (stage) => `Show ${stage.label} failures` },
+};
 
 export default function App() {
   const {
@@ -51,7 +64,6 @@ export default function App() {
     copilotOpen,
     setCopilotOpen,
     stageFilter,
-    setStageFilter,
     pins,
     alarm,
     tickerOpen,
@@ -69,8 +81,21 @@ export default function App() {
   // it stays fresh across refreshes.
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [boardChip, setBoardChip] = useState<BoardChip>("all");
+  const [theme, setThemeState] = useState<Theme>(storedTheme);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("cfactory-sidebar-collapsed") === "true"; }
+    catch { return false; }
+  });
+  const [consoleAgent, setConsoleAgent] = useState<{ agent: LiveAgent; projectId: string | null } | null>(null);
   const [boardChipSignal, setBoardChipSignal] = useState(0);
-  const consumeBoardChip = useCallback(() => { setBoardChip("all"); }, []);
+  const consumeBoardChip = useCallback(() => {}, []);
+  useEffect(() => {
+    if (theme !== "system" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const update = () => applyTheme("system");
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [theme]);
   // Deep-link (#149): another portal can jump straight to a task's cross-portal
   // view via /?task=<key>. Seed the open task from the URL on first render; the
   // param is stripped just after (below) so it doesn't linger on refresh/close.
@@ -79,7 +104,43 @@ export default function App() {
     return t && t.trim() ? t.trim() : null;
   });
   const needsCount = useMemo(() => attentionList(items).length, [items]);
+  const stripStages = useMemo(() => STAGES.map((stage) => {
+    let count = 0;
+    let failed = 0;
+    for (const item of items) {
+      if (activeStage({ pfactory: item.pfactory.status, aifactory: item.aifactory.status, tfactory: item.tfactory.status }) === stage.key) count++;
+      if (stageFailed(item, stage.key)) failed++;
+    }
+    return { key: stage.key, label: stage.label, service: stage.svc, count, failed, tone: stage.cls === "code" ? "build" as const : stage.cls };
+  }), [items]);
+  const selectStage = useCallback((key: string | null) => {
+    setBoardChip("all");
+    setBoardChipSignal((n) => n + 1);
+    onSelectStage(key as StripStage | null);
+  }, [onSelectStage]);
+  const strip: PipelineStripProps = {
+    stages: stripStages,
+    activeStage: stageFilter,
+    onSelectStage: selectStage,
+    onSelectFailed: (key) => {
+      setBoardChip("failed");
+      setBoardChipSignal((n) => n + 1);
+      onSelectStage(key as StripStage);
+    },
+    ...(alarm ? { alarm: { key: alarm.stage, event: alarm.tick } } : {}),
+  };
   const scoped = projectRef !== null;
+  const consoleScope = activeProject?.id ?? null;
+  const openConsole = (agent: LiveAgent) => setConsoleAgent({ agent, projectId: consoleScope });
+  const previousConsoleScope = useRef(consoleScope);
+  useEffect(() => {
+    if (previousConsoleScope.current !== consoleScope) setConsoleAgent(null);
+    previousConsoleScope.current = consoleScope;
+  }, [consoleScope]);
+  const openFleetSettings = () => {
+    window.history.pushState({}, "", "/settings");
+    window.dispatchEvent(new window.PopStateEvent("popstate"));
+  };
   const openTask = openTaskKey
     ? (items.find((w) => w.correlation_key === openTaskKey) ?? null)
     : null;
@@ -89,11 +150,17 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
+      } else if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+        const entry = NAV[Number(e.key) - 1];
+        if (entry) {
+          e.preventDefault();
+          setView(entry.id);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [setView]);
 
   // Strip the ?task= deep-link param after it has seeded the open task, so a
   // later refresh or close returns to the plain dashboard URL.
@@ -109,7 +176,7 @@ export default function App() {
     const nav: PaletteCommand[] = NAV.map(({ id, label, Icon }) => ({
       id: `nav-${id}`,
       group: "Go to",
-      label: scoped && ["tokens", "audit", "services", "settings"].includes(id) ? `${label} (fleet-wide)` : label,
+      label: scoped && ["tokens", "audit", "services"].includes(id) ? `${label} (fleet-wide)` : label,
       keywords: label,
       Icon,
       run: () => {
@@ -145,7 +212,7 @@ export default function App() {
         keywords: "pfactory pipeline plan",
         Icon: IconPipeline,
         run: () => {
-          onSelectStage("pfactory");
+          selectStage("pfactory");
         },
       },
       {
@@ -156,7 +223,7 @@ export default function App() {
         keywords: "aifactory pipeline build code",
         Icon: IconPipeline,
         run: () => {
-          onSelectStage("aifactory");
+          selectStage("aifactory");
         },
       },
       {
@@ -167,7 +234,7 @@ export default function App() {
         keywords: "tfactory pipeline verify test",
         Icon: IconPipeline,
         run: () => {
-          onSelectStage("tfactory");
+          selectStage("tfactory");
         },
       },
     ];
@@ -184,117 +251,36 @@ export default function App() {
       });
     }
     return [...nav, ...actions.filter((action) => !scoped || action.id !== "act-copilot")];
-  }, [setView, onRefresh, setCopilotOpen, onSelectStage, scoped]);
+  }, [setView, onRefresh, setCopilotOpen, selectStage, scoped]);
 
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">
-            <IconBrand size={20} />
-          </span>
-          <span className="brand-name">CFactory</span>
-        </div>
-        <div className="side-label">
-          COCKPIT
-          <span className="side-sub">control tower · PARR pipeline</span>
-        </div>
-        <nav className="nav">
-          {NAV.map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              className={`nav-item ${view === id ? "active" : ""}`}
-              onClick={() => setView(id)}
-            >
-              <Icon size={18} />
-              <span>{scoped && ["tokens", "audit", "services", "settings"].includes(id) ? `${label} (fleet-wide)` : label}</span>
-              {id === "needs" && needsCount > 0 && (
-                <span className="nav-badge" aria-label={`${needsCount} need attention`}>
-                  {needsCount}
-                </span>
-              )}
-            </button>
-          ))}
-          {OBSERVE_URL && (
-            <a
-              className="nav-item nav-item--ext"
-              href={OBSERVE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Open the OpenObserve / OTLP backend in a new tab"
-            >
-              <IconExternal size={18} />
-              <span>Observe</span>
-            </a>
-          )}
-        </nav>
-        <div className="side-foot">
-          <button className="primary-btn" onClick={onRefresh} disabled={busy}>
-            <IconRefresh size={16} />
-            {busy ? "Refreshing…" : "Refresh"}
-          </button>
-          <button className="side-logout">
-            <IconLogout size={15} /> Log Out
-          </button>
-        </div>
-      </aside>
-
-      <div className="main">
-        <header className="topbar">
-          <PortalSwitcher
-            needsCount={needsCount}
-            project={activeProject && activeProjectSlug && !activeProject.id.startsWith("repo:") ? { slug: activeProjectSlug } : undefined}
-          />
-          <ProjectBreadcrumb
-            projects={breadcrumbProjects}
-            currentSlug={activeProjectSlug}
-            onSelect={setProjectSlug}
-            onViewAll={() => {
-              setProjectSlug(null);
-            }}
-          />
-          <div className="tabs">
-            <span className="tab active">{NAV.find((n) => n.id === view)?.label}</span>
-          </div>
-          <div className="topbar-right">
-            <ThemeToggle />
-            <button
-              className="cmdk-trigger"
-              onClick={() => {
-                setPaletteOpen(true);
-              }}
-              title="Search or jump to anything"
-              aria-label="Open command palette"
-            >
-              <span className="cmdk-trigger-q" aria-hidden="true" />
-              <span>Search…</span>
-              <kbd>⌘K</kbd>
-            </button>
-            <span className={`live ${live ? "live--on" : "live--off"}`}>
-              {live ? "● live" : "○ offline"}
-            </span>
-            <BackendPill state={backend} />
-            <button className="icon-btn" onClick={onRefresh} disabled={busy} title="Refresh">
-              <IconRefresh size={16} />
-            </button>
-          </div>
-        </header>
-
-        <PipelineStrip
-          items={items}
-          active={stageFilter}
-          onSelect={onSelectStage}
-          onSelectFailed={(stage) => {
-            setBoardChip("failed");
-            setBoardChipSignal((n) => n + 1);
-            onSelectStage(stage);
-          }}
-          alarm={alarm}
-        />
-
+    <AppShell
+      portal="cockpit"
+      portalProject={activeProject && activeProjectSlug && !activeProject.id.startsWith("repo:") ? { slug: activeProjectSlug, portals: ["plan", "build", "test", "cockpit"] } : undefined}
+      nav={NAV.filter((entry) => entry.id !== "settings").map(({ id, label, Icon }) => ({ id, label: scoped && ["tokens", "audit", "services"].includes(id) ? `${label} (fleet-wide)` : label, icon: <Icon size={18} />, ...(id === "needs" ? { badge: needsCount } : {}) }))}
+      activeNav={view}
+      onNavigate={(id) => setView(id as typeof view)}
+      projects={breadcrumbProjects}
+      currentProject={activeProjectSlug ?? undefined}
+      onSelectProject={setProjectSlug}
+      onAllProjects={() => setProjectSlug(null)}
+      view={view === "preferences" ? "Preferences" : NAV.find((entry) => entry.id === view)?.label ?? "Cockpit"}
+      projectSettings={{ active: view === "settings", onOpen: () => setView("settings") }}
+      sidebarFooter={OBSERVE_URL ? <a className="f-side__item" href={OBSERVE_URL} target="_blank" rel="noopener noreferrer"><IconExternal size={18} />Observe</a> : undefined}
+      strip={strip}
+      topbarStatus={<><span className={`live ${live ? "live--on" : "live--off"}`}>{live ? "● live" : "○ offline"}</span><BackendPill state={backend} /><button className="f-icon-btn" onClick={() => { void onRefresh(); }} disabled={busy} title="Refresh" aria-label="Refresh"><IconRefresh size={16} /></button></>}
+      sidebarCollapsed={sidebarCollapsed}
+      onSidebarCollapsedChange={(collapsed) => { setSidebarCollapsed(collapsed); try { window.localStorage.setItem("cfactory-sidebar-collapsed", String(collapsed)); } catch { /* preference unavailable */ } }}
+      user={{ name: "Account", menu: [{ id: "preferences", label: "Preferences", onSelect: () => setView("preferences") }] }}
+      theme={theme}
+      onTheme={(next) => { setThemeState(next); setTheme(next); }}
+      onSearch={() => setPaletteOpen(true)}
+      needsYou={{ count: needsCount, onOpen: () => setView("needs") }}
+      labels={scoped ? { ...SHELL_LABELS, projectSettings: "Project settings" } : SHELL_LABELS}
+    >
         <div className="workspace">
           {alarm && <div key={alarm.tick} className="alarm-sweep" aria-hidden="true" />}
-          <main className="content">
+          <div className="content">
             {error && <div className="banner banner--error">{error}</div>}
             {projectRef !== null && connectionsError ? (
               <div className="mc-panel">
@@ -321,7 +307,7 @@ export default function App() {
               </div>
             ) : (
               <>
-                {view === "overview" && <MissionControl items={items} reloadSignal={tick} projectScoped={scoped} />}
+                {view === "overview" && <MissionControl items={items} reloadSignal={tick} projectScoped={scoped} onOpenConsole={openConsole} />}
                 {view === "needs" && (
                   <NeedsYouView
                     items={items}
@@ -348,20 +334,23 @@ export default function App() {
                     items={items}
                     progress={progress}
                     stageFilter={stageFilter}
-                    onClearStage={() => setStageFilter(null)}
+                    onClearStage={() => selectStage(null)}
                     initialChip={boardChip}
                     chipSignal={boardChipSignal}
                     onChipConsumed={consumeBoardChip}
+                    onChipChange={setBoardChip}
+                    projectId={activeProject?.id}
                   />
                 )}
-                {view === "running" && <RunningTasksView items={items} progress={progress} />}
                 {view === "tokens" && <TokensView reloadSignal={tick} />}
                 {view === "audit" && <AuditView reloadSignal={tick} />}
                 {view === "services" && <ServicesView backend={backend} reloadSignal={tick} />}
-                {view === "settings" && <SettingsView reloadSignal={tick} />}
+                {view === "settings" && (scoped && activeProject ? <section className="mc-panel"><h1>Project Settings</h1><p>{activeProject.name}</p><p>Repositories: {activeProject.repoPaths.join(", ")}</p><button type="button" className="primary-btn" onClick={openFleetSettings}>Fleet settings</button></section> : <SettingsView reloadSignal={tick} />)}
+                {view === "preferences" && <section className="mc-panel"><h1>Preferences</h1><p>Colour theme</p><div role="group" aria-label="Colour theme">{(["light", "dark", "system"] as const).map((option) => <button key={option} type="button" className={`set-toggle-btn ${theme === option ? "active" : ""}`} aria-pressed={theme === option} onClick={() => { setThemeState(option); setTheme(option); }}>{option}</button>)}</div><button type="button" className="primary-btn" onClick={openFleetSettings}>Fleet settings</button></section>}
               </>
             )}
-          </main>
+            <div hidden={view !== "running"}><RunningTasksView items={items} progress={progress} visible={view === "running"} onOpenConsole={openConsole} /></div>
+          </div>
           <EventTicker
             items={items}
             pins={pins}
@@ -370,8 +359,6 @@ export default function App() {
             onToggle={toggleTicker}
           />
         </div>
-      </div>
-
       {/* Copilot — floating assistant (robot FAB → chat popup) */}
       {copilotOpen && !scoped && (
         <div className="copilot-pop" role="dialog" aria-label="Copilot assistant">
@@ -403,6 +390,7 @@ export default function App() {
       </button>}
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+      {consoleAgent && consoleAgent.projectId === consoleScope && (!scoped || items.some((item) => item.correlation_key === consoleAgent.agent.correlation_key)) && <AgentConsoleModal agent={consoleAgent.agent} onClose={() => setConsoleAgent(null)} />}
 
       {/* Command palette (⌘K) + the task it opens, held at the shell (#147) */}
       <CommandPalette
@@ -430,6 +418,6 @@ export default function App() {
           }}
         />
       )}
-    </div>
+    </AppShell>
   );
 }

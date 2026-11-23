@@ -128,7 +128,7 @@ export type CockpitRoute =
   | { kind: "redirect"; to: string };
 
 const viewFor = (segment: string): View | undefined =>
-  NAV.find((entry) => entry.id === segment)?.id;
+  segment === "preferences" ? "preferences" : NAV.find((entry) => entry.id === segment)?.id;
 
 export function parseCockpitRoute(pathname: string): CockpitRoute {
   if (pathname === "/projects" || pathname === "/projects/") return { kind: "redirect", to: "/" };
@@ -142,7 +142,7 @@ export function parseCockpitRoute(pathname: string): CockpitRoute {
     }
     const base = `/p/${encodeURIComponent(ref)}`;
     const segment = parts[3];
-    if (segment && ["tokens", "audit", "services", "settings"].includes(segment)) {
+    if (segment && ["tokens", "audit", "services", "preferences"].includes(segment)) {
       return { kind: "redirect", to: `/${segment}` };
     }
     if (parts.length > 4 || (segment && !viewFor(segment))) return { kind: "redirect", to: base };

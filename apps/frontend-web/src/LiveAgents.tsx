@@ -1,26 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { fetchLiveAgents, openAgentConsole, type LiveAgent } from "./api";
 import { keySlug } from "./correlationKey";
 
-// xterm theme matched to the cockpit's Gruvbox palette (see index.css :root).
-const TERM_THEME = {
-  background: "#32302f",
-  foreground: "#ebdbb2",
-  cursor: "#32302f", // hidden — this view is read-only
-  black: "#282828",
-  brightBlack: "#7c6f64",
-  red: "#fb4934",
-  green: "#b8bb26",
-  yellow: "#fabd2f",
-  blue: "#83a598",
-  magenta: "#d3869b",
-  cyan: "#8ec07c",
-  white: "#ebdbb2",
-} as const;
+function terminalTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const color = (name: string) => css.getPropertyValue(name).trim();
+  return {
+    background: color("--panel"), foreground: color("--text"), cursor: color("--panel"),
+    black: color("--bg"), brightBlack: color("--faint"), red: color("--red"),
+    green: color("--green"), yellow: color("--amber"), blue: color("--code"),
+    magenta: color("--plan"), cyan: color("--cyan"), white: color("--text"),
+  };
+}
 
 type Phase = { loading: boolean; rmuxEnabled: boolean; agents: LiveAgent[] };
 
@@ -48,11 +42,13 @@ export function AgentTerminal({
       fontSize,
       fontFamily: '"JetBrains Mono", ui-monospace, monospace',
       scrollback: 2000,
-      theme: TERM_THEME,
+      theme: terminalTheme(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
+    const themeObserver = new MutationObserver(() => { term.options.theme = terminalTheme(); });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     const refit = () => {
       try {
         fit.fit();
@@ -83,6 +79,7 @@ export function AgentTerminal({
     window.addEventListener("resize", refit);
     return () => {
       window.removeEventListener("resize", refit);
+      themeObserver.disconnect();
       ws.close();
       term.dispose();
     };
@@ -160,9 +157,8 @@ function AgentTile({ agent, onExpand }: { agent: LiveAgent; onExpand: () => void
   );
 }
 
-export default function LiveAgents({ reloadSignal }: { reloadSignal: number }) {
+export default function LiveAgents({ reloadSignal, onOpenConsole }: { reloadSignal: number; onOpenConsole?: (agent: LiveAgent) => void }) {
   const [phase, setPhase] = useState<Phase>({ loading: true, rmuxEnabled: false, agents: [] });
-  const [expanded, setExpanded] = useState<LiveAgent | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -187,38 +183,7 @@ export default function LiveAgents({ reloadSignal }: { reloadSignal: number }) {
   return (
     <div className="mc-panel">
       <h2 className="panel-title">Live agents</h2>
-      <Body phase={phase} onExpand={setExpanded} />
-
-      <AnimatePresence>
-        {expanded && (
-          <motion.div
-            className="mc-term-overlay"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setExpanded(null)}
-          >
-            <motion.div
-              className="mc-term-modal"
-              initial={{ scale: 0.96, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.96, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mc-term-modal-head">
-                <span className="mc-agent-dot mc-agent-dot--live" />
-                <strong title={expanded.correlation_key}>#{keySlug(expanded.correlation_key)}</strong>
-                {expanded.title && <span className="mc-agent-sub">{expanded.title}</span>}
-                {expanded.phase && <span className="mc-agent-sub">· {expanded.phase}</span>}
-                <button className="mc-term-close" onClick={() => setExpanded(null)}>
-                  ✕
-                </button>
-              </div>
-              <AgentTerminal agent={expanded} fontSize={13} />
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Body phase={phase} onExpand={(agent) => onOpenConsole?.(agent)} />
     </div>
   );
 }

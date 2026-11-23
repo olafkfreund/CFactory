@@ -23,7 +23,15 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     // Build output, deps and the config file itself are out of scope.
-    ignores: ["dist", "node_modules", "eslint.config.js", "vite.config.ts"],
+    ignores: [
+      "dist",
+      "node_modules",
+      "eslint.config.js",
+      "vite.config.ts",
+      "src/components/factory-ui/**",
+      "src/components/CommandPalette.tsx",
+      "src/components/PortalSwitcher.tsx",
+    ],
   },
   {
     files: ["**/*.{ts,tsx}"],

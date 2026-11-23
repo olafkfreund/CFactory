@@ -26,7 +26,8 @@ export type View =
   | "tokens"
   | "audit"
   | "services"
-  | "settings";
+  | "settings"
+  | "preferences";
 
 export type Backend =
   | { kind: "loading" }

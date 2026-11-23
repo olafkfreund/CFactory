@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-portal="cockpit">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -11,15 +11,12 @@
       // before React mounts so there's no flash. Mirrors src/theme.ts.
       (function () {
         try {
-          var t = localStorage.getItem("cfactory-theme") || "dark";
+          var t = localStorage.getItem("cfactory-theme") || "system";
           var light =
             t === "light" ||
             (t === "system" &&
               window.matchMedia("(prefers-color-scheme: light)").matches);
-          if (light) {
-            document.documentElement.classList.add("light");
-            document.documentElement.setAttribute("data-theme", "light");
-          }
+          if (!light) document.documentElement.classList.add("dark");
         } catch (e) {}
       })();
     </script>

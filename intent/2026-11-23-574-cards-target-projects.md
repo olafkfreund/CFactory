@@ -51,14 +51,16 @@ Today none of that holds:
    the `git_repository` row bound to the project id. If there is no
    connection, the project is listed but marked "connect GitHub/GitLab
    first", with a link to the connection settings.
-3. **Two-way issue updates.**
-   - Creating a card for a project opens the issue in that project's repo,
-     as today.
-   - Editing the card's title, description or acceptance criteria updates
-     the issue.
-   - Moving the card to done closes the issue; reopening reopens it.
-   - The issue → card mirror keeps working.
-   - The same rules hold on GitHub and GitLab.
+3. **Issue sync, status write-back (owner decision 2026-11-23, the #3857
+   rule).**
+   - The issue is opened once, in the card's target repo, when the card
+     reaches `ready` (as today) or on an explicit sync.
+   - Moving the card to done closes the issue; reopening the card reopens
+     it.
+   - Title, description and acceptance criteria are not pushed. The issue
+     owns them, and the issue → card mirror keeps working.
+   - The same rules hold on GitHub and GitLab. Close already exists in the
+     shared provider protocol; reopen is added in Factory and vendored.
 4. **The board reflects the projects.** The cross-project board and the
    `/p/<slug>` views list the same registry projects, so CFactory, AIFactory,
    PFactory and TFactory show one project list. Archived projects drop out
@@ -76,6 +78,23 @@ Today none of that holds:
   key. Nothing changes in AIFactory unless a read route is missing.
 - GitHub and GitLab repos the projects point at: issues are created,
   edited, closed and reopened there.
+
+## Dependencies (owner decision 2026-11-23)
+
+- AIFactory#2194: projects hold many repos (`project_repositories`), plus
+  a tenant-scoped registry read for services. The picker is Project →
+  Repo.
+- CFactory#575: project/team authorization inside the tenant, so the picker
+  never widens what a user can see.
+- This intent stays draft until both are approved; the review findings of
+  2026-11-23 are carried into the spec:
+  - the registry auth and tenant → org mapping;
+  - legacy cards resolved from their issue evidence;
+  - the target locked once an issue exists, enforced server-side;
+  - no import storm from auto-added repos (opt-in polling, backoff);
+  - lost-response deduplication for issue create;
+  - GHE, port and GitLab path-prefix host matching;
+  - archived, renamed, moved and remote-less projects.
 
 ## Constraints
 
@@ -106,9 +125,8 @@ Today none of that holds:
 1. **Team filtering.** The picker shows all tenant projects in release 1.
    Is that acceptable until CFactory team/project authorization exists?
    Default: yes, and open a tracked follow-up.
-2. **Conflict rule for issue updates.** Default: CFactory pushes only the
-   fields the card changed since the last sync, and skips a field the
-   provider changed after that sync (recording a sync note).
+2. **Conflict rule for issue updates.** Settled: status write-back only,
+   so there is no field conflict.
 3. **Adding a repo from CFactory itself.** Default: CFactory's "add
    repository" form picks from registry projects (the #3857 "becomes a
    picker"). A brand-new repo is registered in AIFactory (link out), not

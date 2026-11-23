@@ -24,7 +24,7 @@ function severityIcon(sev: string) {
   return <g><circle cx="12" cy="12" r="9" /><path d="M12 11 v5 M12 8 h.01" /></g>;
 }
 
-export default function MissionControl({ items, reloadSignal, projectScoped = false }: { items: WorkItem[]; reloadSignal: number; projectScoped?: boolean }) {
+export default function MissionControl({ items, reloadSignal, projectScoped = false, onOpenConsole }: { items: WorkItem[]; reloadSignal: number; projectScoped?: boolean; onOpenConsole?: (agent: import("./api").LiveAgent) => void }) {
   const [rollups, setRollups] = useState<Rollups | null>(null);
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
   const [tokens, setTokens] = useState<TokenTotals | null>(null);
@@ -108,7 +108,7 @@ export default function MissionControl({ items, reloadSignal, projectScoped = fa
 
         <CostByTask tokens={tokens} />
 
-        <LiveAgents reloadSignal={reloadSignal} />
+        <LiveAgents reloadSignal={reloadSignal} {...(onOpenConsole ? { onOpenConsole } : {})} />
       </div>
     </>
   );

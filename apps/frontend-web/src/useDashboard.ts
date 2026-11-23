@@ -280,7 +280,7 @@ export function useDashboard(): Dashboard {
 
   const setView = useCallback(
     (nextView: View) => {
-      const slug = ["tokens", "audit", "services", "settings"].includes(nextView) ? null : activeProject
+      const slug = ["tokens", "audit", "services", "preferences"].includes(nextView) ? null : activeProject
         ? (slugsById.get(activeProject.id) ?? activeProject.id)
         : routeState.projectRef;
       const nextPath = buildCockpitPath(slug, nextView);
@@ -294,7 +294,7 @@ export function useDashboard(): Dashboard {
 
   const setProjectSlug = useCallback(
     (nextSlug: string | null) => {
-      const nextView = nextSlug === null || ["tokens", "audit", "services", "settings"].includes(routeState.view) ? "overview" : routeState.view;
+      const nextView = nextSlug === null || ["tokens", "audit", "services", "preferences"].includes(routeState.view) ? "overview" : routeState.view;
       const nextPath = buildCockpitPath(nextSlug, nextView);
       if (window.location.pathname !== nextPath) {
         window.history.pushState({}, "", nextPath);

@@ -125,7 +125,7 @@ export default function NeedsYouView({
         <div className="ny-actions">
           <button
             type="button"
-            className="ny-open"
+            className="ny-open f-btn f-btn--sm f-btn--primary"
             onClick={() => {
               setSelectedKey(a.wi.correlation_key);
             }}
@@ -134,7 +134,7 @@ export default function NeedsYouView({
           </button>
           <button
             type="button"
-            className="ny-dismiss"
+            className="ny-dismiss f-btn f-btn--sm f-btn--outline"
             onClick={() => {
               toggleDismiss(hideKey(a));
             }}

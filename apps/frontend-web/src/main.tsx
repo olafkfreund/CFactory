@@ -5,10 +5,12 @@ import TokenPage from "./TokenPage";
 import ErrorBoundary from "./ErrorBoundary";
 import { applyTheme, storedTheme } from "./theme";
 import { startVersionWatch } from "./versionWatch";
+import "./styles/tokens.css";
+import "./styles/shell.css";
 import "./index.css";
 
 // Apply the stored light/dark/system choice (the pre-paint guard in index.html
-// already did this to avoid a flash; this keeps class + data-theme consistent).
+// already did this to avoid a flash; this keeps the .dark class consistent).
 applyTheme(storedTheme());
 
 const root = document.getElementById("root");

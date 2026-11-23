@@ -5,7 +5,6 @@ import { IconDocument, IconRobot, IconFlask } from "./icons";
 import { stageState, overallState, isActiveState, STATE_LABEL, STATE_PILL, type TaskState } from "./taskState";
 import { displayTitle, keySlug } from "./correlationKey";
 import TaskDetail from "./TaskDetail";
-import AgentConsoleModal from "./AgentConsoleModal";
 import LiveTaskStamp from "./LiveTaskStamp";
 import { fmtAge } from "./format";
 
@@ -75,13 +74,16 @@ const ORDER: Record<TaskState, number> = { failed: 0, running: 1, review: 2, que
 export default function RunningTasksView({
   items,
   progress,
+  visible = true,
+  onOpenConsole,
 }: {
   items: WorkItem[];
   progress: Record<string, LiveProgress>;
+  visible?: boolean;
+  onOpenConsole?: (agent: LiveAgent) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("active");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [consoleAgent, setConsoleAgent] = useState<LiveAgent | null>(null);
   const [liveAgents, setLiveAgents] = useState<Map<string, LiveAgent>>(new Map());
   // Per-worker usage rows keyed by correlation_key (Tier 1 live cost stamp).
   // Polled on the same 5s cadence as live agents; the WS WorkItem broadcast
@@ -102,6 +104,7 @@ export default function RunningTasksView({
   // Which work items currently have a live, streamable rmux agent — drives the
   // "open console" affordance. Polled so it tracks tasks starting/finishing.
   useEffect(() => {
+    if (!visible) return;
     let alive = true;
     const poll = () =>
       fetchLiveAgents()
@@ -115,10 +118,11 @@ export default function RunningTasksView({
       alive = false;
       window.clearInterval(id);
     };
-  }, []);
+  }, [visible]);
 
   // Per-worker usage poll (Tier 1). Same cadence; additive + best-effort.
   useEffect(() => {
+    if (!visible) return;
     let alive = true;
     const poll = () =>
       fetchTokensByWorker()
@@ -135,10 +139,11 @@ export default function RunningTasksView({
       alive = false;
       window.clearInterval(id);
     };
-  }, []);
+  }, [visible]);
 
   // Scalar-aggregate cost/tokens poll. Same cadence; additive + best-effort.
   useEffect(() => {
+    if (!visible) return;
     let alive = true;
     const poll = () =>
       fetchTokens()
@@ -163,7 +168,7 @@ export default function RunningTasksView({
       alive = false;
       window.clearInterval(id);
     };
-  }, []);
+  }, [visible]);
 
   const rows = useMemo(
     () =>
@@ -187,7 +192,7 @@ export default function RunningTasksView({
   // best-effort. Each task is fetched independently; a single failure leaves
   // that task's last-good series untouched and never blanks others.
   useEffect(() => {
-    if (runningKeys.length === 0) return;
+    if (!visible || runningKeys.length === 0) return;
     let alive = true;
     const poll = () => {
       for (const key of runningKeys) {
@@ -210,7 +215,7 @@ export default function RunningTasksView({
       window.clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runningKeysSig]);
+  }, [runningKeysSig, visible]);
 
   const counts = useMemo(() => {
     const c = { active: 0, running: 0, review: 0, failed: 0, done: 0 };
@@ -347,7 +352,7 @@ export default function RunningTasksView({
                       title="Open live agent console"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setConsoleAgent(liveAgent);
+                        if (liveAgent) onOpenConsole?.(liveAgent);
                       }}
                     >
                       ▸ console
@@ -382,9 +387,6 @@ export default function RunningTasksView({
         )}
       </AnimatePresence>
 
-      {consoleAgent && (
-        <AgentConsoleModal agent={consoleAgent} onClose={() => setConsoleAgent(null)} />
-      )}
     </>
   );
 }

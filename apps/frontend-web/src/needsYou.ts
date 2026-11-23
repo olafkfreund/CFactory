@@ -7,8 +7,6 @@
 import { activeStage, isStalledStatus, overallState, stageState } from "./taskState";
 import type { WorkItem } from "./api";
 import { fmtAge } from "./format";
-import { PORTALS } from "./dashboard";
-import { slugify } from "./projectRoute";
 
 export type AttentionKind = "approval" | "review" | "stalled";
 export type Stage = "plan" | "code" | "test";
@@ -25,7 +23,6 @@ export interface Attention {
   lastActivityAt: string | null;
   age: string;
   older: boolean;
-  upstreamUrl: string | null;
 }
 
 const STAGE_BY_KEY: Record<
@@ -35,12 +32,6 @@ const STAGE_BY_KEY: Record<
   pfactory: { stage: "plan", service: "PFactory" },
   aifactory: { stage: "code", service: "AIFactory" },
   tfactory: { stage: "test", service: "TFactory" },
-};
-
-const PORTAL_KEY: Record<Stage, string> = {
-  plan: "plan",
-  code: "build",
-  test: "test",
 };
 
 /** Newest timeline event timestamp, else WorkItem.updated_at, else null. */
@@ -79,45 +70,6 @@ export function lastActivityAge(
   };
 }
 
-function deriveSlug(wi: WorkItem, projectSlug?: string | null): string | null {
-  if (projectSlug && projectSlug.trim()) return projectSlug.trim();
-  const repo = wi.pfactory.repo || wi.aifactory.repo || wi.tfactory.repo;
-  if (!repo || !repo.trim()) return null;
-  const tail = repo.trim().split("/").pop() ?? repo.trim();
-  const slug = slugify(tail, "");
-  return slug || null;
-}
-
-/**
- * Direct upstream URL where a verified route exists, or null.
- * Stalled rows and rows with no target keep the drawer only.
- */
-export function upstreamUrlFor(
-  wi: WorkItem,
-  kind: AttentionKind,
-  stage: Stage,
-  projectSlug?: string | null,
-): string | null {
-  if (kind === "stalled") return null;
-  const portal = PORTALS.find((p) => p.key === PORTAL_KEY[stage]);
-  const baseUrl = portal?.url.replace(/\/+$/, "");
-  if (!baseUrl) return null;
-
-  if (stage === "plan") {
-    const sessionId = wi.pfactory.task_id?.trim();
-    const slug = deriveSlug(wi, projectSlug);
-    if (!sessionId || !slug) return null;
-    return `${baseUrl}/p/${encodeURIComponent(slug)}?session_id=${encodeURIComponent(sessionId)}`;
-  }
-
-  const stageKey = stage === "code" ? "aifactory" : "tfactory";
-  const taskId = wi[stageKey].task_id?.trim();
-  if (!taskId) return null;
-  const slug = deriveSlug(wi, projectSlug);
-  const path = slug ? `/p/${encodeURIComponent(slug)}` : "";
-  return `${baseUrl}${path}?task_id=${encodeURIComponent(taskId)}`;
-}
-
 /**
  * A gate-specific reason when a stage was parked by a machine security gate
  * (#167): the injection scan flagged the task, or the dependency review failed.
@@ -144,10 +96,9 @@ function gateReason(state: WorkItem["pfactory"]): string | null {
  */
 export function attentionFor(
   wi: WorkItem,
-  options?: { now?: number | undefined; projectSlug?: string | null | undefined },
+  options?: { now?: number | undefined },
 ): Attention | null {
   const now = options?.now ?? Date.now();
-  const projectSlug = options?.projectSlug ?? null;
   const statuses = {
     pfactory: wi.pfactory.status,
     aifactory: wi.aifactory.status,
@@ -175,7 +126,6 @@ export function attentionFor(
       lastActivityAt,
       age,
       older,
-      upstreamUrl: upstreamUrlFor(wi, kind, stage, projectSlug),
     };
   };
 
@@ -234,7 +184,7 @@ const RANK: Record<AttentionKind, number> = { approval: 0, review: 1, stalled: 2
 /** Everything that needs a human, most-actionable first (approvals, gates, stalls). */
 export function attentionList(
   items: readonly WorkItem[],
-  options?: { now?: number | undefined; projectSlug?: string | null | undefined },
+  options?: { now?: number | undefined },
 ): Attention[] {
   return items
     .map((wi) => attentionFor(wi, options))

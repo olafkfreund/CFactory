@@ -22,7 +22,7 @@ import { onReopen } from "./onReopen";
 import { diffEvents } from "./taskEvents";
 import { ensureNotifyPermission, osNotify, type TaskEvent } from "./notify";
 import { stageState, type TaskState } from "./taskState";
-import type { StripAlarm, StripStage } from "./PipelineStrip";
+import type { StripAlarm, StripStage } from "./pipelineStages";
 import type { TickerPin } from "./EventTicker";
 import { TICKER_PREF, type Backend, type View } from "./dashboard";
 import type { BreadcrumbProject } from "./ProjectBreadcrumb";

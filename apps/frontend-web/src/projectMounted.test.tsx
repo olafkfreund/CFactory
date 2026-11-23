@@ -15,6 +15,7 @@ import App from "./App";
 const api = vi.hoisted(() => ({
   fetchWorkItems: vi.fn(),
   fetchCards: vi.fn(),
+  patchCard: vi.fn(),
   fetchSettings: vi.fn(),
   fetchGitConnections: vi.fn(),
   fetchProgress: vi.fn(),
@@ -114,8 +115,8 @@ beforeEach(() => {
     Node: dom.window.Node,
     HTMLElement: dom.window.HTMLElement,
     IS_REACT_ACT_ENVIRONMENT: true,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(performance.now()), 0),
-    cancelAnimationFrame: (id: number) => clearTimeout(id),
+    requestAnimationFrame: (callback: FrameRequestCallback) => dom.window.setTimeout(() => { callback(performance.now()); }, 0),
+    cancelAnimationFrame: (id: number) => { dom.window.clearTimeout(id); },
   });
   dom.window.HTMLElement.prototype.scrollIntoView = () => undefined;
   Object.assign(dom.window.HTMLElement.prototype, {
@@ -130,6 +131,7 @@ beforeEach(() => {
     work("beta-task", "acme/beta"),
   ]);
   api.fetchCards.mockResolvedValue([card("alpha-task", 1), card("beta-task", 2)]);
+  api.patchCard.mockImplementation((key: string, patch: object) => Promise.resolve({ ...card(key, 1), ...patch }));
   api.fetchSettings.mockResolvedValue({ tenant: "default" });
   api.fetchGitConnections.mockResolvedValue(connections);
   api.fetchProgress.mockResolvedValue([]);
@@ -465,6 +467,8 @@ describe("mounted project controls", () => {
         aifactory: { task_id: "ai-2", status: "failed", phase: "code", repo: "acme/alpha" },
         tfactory: { task_id: "tf-2", status: "running", phase: "test", repo: "acme/alpha" },
       }),
+      work("running-no-failure", "acme/alpha", "running"),
+      work("queued-no-failure", "acme/alpha", "queued"),
     ]);
     dom.window.history.replaceState({}, "", "/");
     await mount(<App />);
@@ -484,6 +488,16 @@ describe("mounted project controls", () => {
     );
     await click(codeFailBadge);
     expect(host.textContent).toContain("Code failed but test active");
+    await click(must([...host.querySelectorAll("button")].find((b) => b.textContent.includes("Finished"))));
+    expect(host.querySelector(".board-finished")?.textContent).not.toContain("Code failed but test active");
+    expect(host.querySelector(".board-finished")?.textContent).not.toContain("Plan failed task");
+    expect(host.querySelector(".board-finished")?.textContent).not.toContain("running-no-failure");
+    expect(host.querySelector(".board-finished")?.textContent).not.toContain("queued-no-failure");
+    await click(must([...host.querySelectorAll("button")].find((b) => b.textContent.startsWith("All "))));
+    expect(host.querySelector(".rt-chip--failed.active")).toBeNull();
+    await click(must(host.querySelector(".nav-item:not(.active)")));
+    await click(must([...host.querySelectorAll("button.nav-item")].find((b) => b.textContent === "Pipeline")));
+    expect(host.querySelector(".rt-chip--failed.active")).toBeNull();
   });
 
   it("reopens a compact done card on PlanningBoard and persists local Dismiss / Show hidden in NeedsYouView (#576 B14, B16)", async () => {
@@ -497,6 +511,14 @@ describe("mounted project controls", () => {
     const doneCol = must(host.querySelector(".column--card-done"));
     expect(doneCol.querySelector(".card-pl--compact")).not.toBeNull();
     expect(doneCol.textContent).not.toContain("▲");
+    const status = must(doneCol.querySelector<HTMLSelectElement>("select.card-select--move"));
+    await act(async () => {
+      status.value = "ready";
+      status.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(api.patchCard).toHaveBeenCalledWith("alpha-task", { status: "ready" });
+    expect(host.querySelector(".column--card-ready .card-pl:not(.card-pl--compact)")).not.toBeNull();
 
     // Dismiss in NeedsYouView hides the item into localStorage and offers Show hidden
     const reviewItem = WorkItemSchema.parse({
@@ -517,12 +539,26 @@ describe("mounted project controls", () => {
     );
     await click(dismissBtn);
     expect(host.textContent).not.toContain("Review me");
+    await mount(<div />);
+    await mount(<App />);
+    expect(host.textContent).not.toContain("Review me");
     const showHiddenBtn = must(
       [...host.querySelectorAll("button.ny-chip")].find((b) =>
-        (b.textContent ?? "").includes("Show hidden"),
+        b.textContent.includes("Show hidden"),
       ),
     );
     await click(showHiddenBtn);
+    expect(host.textContent).toContain("Review me");
+    await click(must(host.querySelector("button.ny-open")));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    const codeReview = WorkItemSchema.parse({
+      ...reviewItem,
+      pfactory: { ...reviewItem.pfactory, status: "done" },
+      aifactory: { ...reviewItem.aifactory, status: "human_review" },
+    });
+    api.fetchWorkItems.mockResolvedValue([codeReview]);
+    await mount(<div />);
+    await mount(<App />);
     expect(host.textContent).toContain("Review me");
   });
 });

@@ -1,11 +1,11 @@
 // The Pipeline board view (plan → code → test columns), its work-item cards and
 // the live/stage chips — extracted from App.tsx (#115). Pure extraction —
 // behaviour-preserving, no logic or UI change.
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { refresh as apiRefresh, type LiveProgress, type ServiceState, type WorkItem } from "./api";
 import TaskDetail from "./TaskDetail";
-import { hasFailedStage, stageFailed, type StripStage } from "./PipelineStrip";
+import { hasFailedStage, stageFailed, type StripStage } from "./pipelineStages";
 import { activeStage, STATE_LABEL } from "./taskState";
 import { displayTitle, keySlug } from "./correlationKey";
 import { IconClock } from "./icons";
@@ -28,6 +28,7 @@ export function Board({
   onClearStage,
   initialChip = "all",
   chipSignal = 0,
+  onChipConsumed,
 }: {
   items: WorkItem[];
   progress: Record<string, LiveProgress>;
@@ -35,15 +36,20 @@ export function Board({
   onClearStage: () => void;
   initialChip?: BoardChip | undefined;
   chipSignal?: number | undefined;
+  onChipConsumed?: (() => void) | undefined;
 }) {
   const [query, setQuery] = useState("");
   const [chip, setChip] = useState<BoardChip>(initialChip);
+  const consumedSignal = useRef(0);
   const [showFinished, setShowFinished] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!chipSignal || consumedSignal.current === chipSignal) return;
+    consumedSignal.current = chipSignal;
     setChip(initialChip);
-  }, [initialChip, chipSignal]);
+    onChipConsumed?.();
+  }, [initialChip, chipSignal, onChipConsumed]);
 
   // Same lifecycle semantics as the Mission Control ring and the pipeline
   // strip: an item lives at its furthest ACTIVE stage; finished/idle items
@@ -62,8 +68,7 @@ export function Board({
             placed = true;
           }
         }
-        if (!placed) finished.push(wi);
-        continue;
+        if (placed) continue;
       }
       const stage = activeStage({
         pfactory: wi.pfactory.status,
@@ -121,7 +126,7 @@ export function Board({
   }, [items, matchesQuery, stageFilter]);
 
   const stages = STAGES.filter((s) => !stageFilter || s.key === stageFilter);
-  const shownFinished = finished.filter(matchesQuery);
+  const shownFinished = finished.filter(visible);
 
   // Resolve against the latest items so the open drawer updates live.
   const selected = selectedKey

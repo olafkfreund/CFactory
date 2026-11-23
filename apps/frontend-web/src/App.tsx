@@ -2,7 +2,7 @@
 // the pipeline strip, the routed views, the event ticker, the Copilot FAB and the
 // toast stack. The data/notification plumbing lives in useDashboard, the board in
 // Board.tsx, and the shared types/constants/helpers in dashboard.ts (#115).
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import AuditView from "./AuditView";
 import BacklogView from "./BacklogView";
 import PlanningBoard from "./PlanningBoard";
@@ -70,6 +70,7 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [boardChip, setBoardChip] = useState<BoardChip>("all");
   const [boardChipSignal, setBoardChipSignal] = useState(0);
+  const consumeBoardChip = useCallback(() => { setBoardChip("all"); }, []);
   // Deep-link (#149): another portal can jump straight to a task's cross-portal
   // view via /?task=<key>. Seed the open task from the URL on first render; the
   // param is stripped just after (below) so it doesn't linger on refresh/close.
@@ -326,7 +327,6 @@ export default function App() {
                     items={items}
                     progress={progress}
                     projectScoped={scoped}
-                    projectSlug={activeProjectSlug}
                   />
                 )}
                 {view === "backlog" && (
@@ -351,6 +351,7 @@ export default function App() {
                     onClearStage={() => setStageFilter(null)}
                     initialChip={boardChip}
                     chipSignal={boardChipSignal}
+                    onChipConsumed={consumeBoardChip}
                   />
                 )}
                 {view === "running" && <RunningTasksView items={items} progress={progress} />}

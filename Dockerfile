@@ -11,15 +11,12 @@
 
 FROM python:3.15-slim AS base
 
-ARG CFACTORY_VERSION=dev
-
 # Faster, quieter, deterministic Python + pip behaviour.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONPATH=/app/apps/backend \
-    CFACTORY_VERSION=${CFACTORY_VERSION}
+    PYTHONPATH=/app/apps/backend
 
 WORKDIR /app
 
@@ -90,6 +87,9 @@ RUN useradd --create-home --uid 65532 --user-group nonroot \
 USER nonroot
 
 EXPOSE 3111
+
+ARG CFACTORY_VERSION=dev
+ENV CFACTORY_VERSION=${CFACTORY_VERSION}
 
 # h11 + wsproto: httptools does not forward the WS Upgrade in this stack.
 CMD ["python", "-m", "uvicorn", "cfactory.app:app", \

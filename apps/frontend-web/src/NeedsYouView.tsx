@@ -4,7 +4,7 @@
 // no new backend. Each row opens the task in TaskDetail, where the real Approve /
 // Reject / Unstick actions already live — the inbox routes attention, it doesn't
 // duplicate those controls.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { refresh as apiRefresh, type LiveProgress, type WorkItem } from "./api";
 import { displayTitle } from "./correlationKey";
@@ -42,30 +42,35 @@ export default function NeedsYouView({
   items,
   progress,
   projectScoped = false,
-  projectSlug,
   now,
 }: {
   items: WorkItem[];
   progress: Record<string, LiveProgress>;
   projectScoped?: boolean | undefined;
-  projectSlug?: string | null | undefined;
   now?: number | undefined;
 }) {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<Set<string>>(() => loadDismissedNeedsYou());
   const [showHidden, setShowHidden] = useState(false);
+  const [clock, setClock] = useState(() => now ?? Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(now ?? Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [now]);
 
   const all = useMemo(
-    () => attentionList(items, { now, projectSlug }),
-    [items, now, projectSlug],
+    () => attentionList(items, { now: now ?? clock }),
+    [items, now, clock],
   );
+  const hideKey = (a: Attention) => `${a.wi.correlation_key}:${a.kind}:${a.stage}`;
   const hiddenCount = useMemo(
-    () => all.filter((a) => dismissed.has(a.wi.correlation_key)).length,
+    () => all.filter((a) => dismissed.has(`${a.wi.correlation_key}:${a.kind}:${a.stage}`)).length,
     [all, dismissed],
   );
   const visibleAll = useMemo(
-    () => (showHidden ? all : all.filter((a) => !dismissed.has(a.wi.correlation_key))),
+    () => (showHidden ? all : all.filter((a) => !dismissed.has(`${a.wi.correlation_key}:${a.kind}:${a.stage}`))),
     [all, dismissed, showHidden],
   );
   const counts = useMemo(() => {
@@ -92,7 +97,7 @@ export default function NeedsYouView({
     : null;
 
   const renderRow = (a: Attention) => {
-    const isHidden = dismissed.has(a.wi.correlation_key);
+    const isHidden = dismissed.has(hideKey(a));
     return (
       <motion.div
         key={a.wi.correlation_key}
@@ -127,22 +132,11 @@ export default function NeedsYouView({
           >
             Open
           </button>
-          {a.upstreamUrl && (
-            <a
-              className="ny-link"
-              href={a.upstreamUrl}
-              target="_blank"
-              rel="noreferrer noopener"
-              title={`Open in ${a.service}`}
-            >
-              {a.service} ↗
-            </a>
-          )}
           <button
             type="button"
             className="ny-dismiss"
             onClick={() => {
-              toggleDismiss(a.wi.correlation_key);
+              toggleDismiss(hideKey(a));
             }}
           >
             {isHidden ? "Restore" : "Dismiss"}

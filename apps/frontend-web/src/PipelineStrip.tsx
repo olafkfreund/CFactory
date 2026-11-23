@@ -1,19 +1,13 @@
 import { Fragment, useMemo } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import type { WorkItem } from "./api";
-import { activeStage, stageState } from "./taskState";
+import { activeStage } from "./taskState";
+import { stageFailed, type StripAlarm, type StripStage } from "./pipelineStages";
 
 // The persistent PARR strip: the three-node pipeline lifted out of Mission
 // Control into a slim full-width rail under the topbar, visible on every view.
 // Clicking a node filters the Pipeline board to that stage; a stage with a
 // failed task wears a red ring, and a fresh failure fires a one-shot flare.
-
-export type StripStage = "pfactory" | "aifactory" | "tfactory";
-
-export interface StripAlarm {
-  stage: StripStage;
-  tick: number; // monotonically increasing — keys the one-shot flare
-}
 
 const NODES: { key: StripStage; label: string; svc: string; cls: string }[] = [
   { key: "pfactory", label: "Plan", svc: "PFactory", cls: "plan" },
@@ -68,17 +62,6 @@ const GLYPH: Record<StripStage, () => React.JSX.Element> = {
   aifactory: BotGlyph,
   tfactory: FlaskGlyph,
 };
-
-export function stageFailed(wi: WorkItem, stage: StripStage): boolean {
-  return stageState(wi[stage].status) === "failed";
-}
-
-export function hasFailedStage(wi: WorkItem, stage?: StripStage | null): boolean {
-  if (stage) return stageFailed(wi, stage);
-  return (
-    stageFailed(wi, "pfactory") || stageFailed(wi, "aifactory") || stageFailed(wi, "tfactory")
-  );
-}
 
 export default function PipelineStrip({
   items,

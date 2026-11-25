@@ -122,6 +122,61 @@ def test_aifactory_normalizes_and_extracts_issue_key():
     assert it.phase == "code"
 
 
+def test_aifactory_carries_question_and_reason_to_state():
+    paths = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        if request.url.path.endswith("/questions"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "qid": "q1",
+                        "question": "Which format?",
+                        "choices": ["JSON", "CSV"],
+                        "needs_approval": False,
+                        "status": "open",
+                        "asked_at": "2026-11-25T10:00:00Z",
+                        "timeout_minutes": 30,
+                        "answer": "private",
+                    }
+                ],
+            )
+        return httpx.Response(
+            200,
+            json={
+                "tasks": [
+                    {
+                        "id": "t1",
+                        "status": "human_review",
+                        "reviewReason": "needs_input",
+                        "project": {"slug": "widgets"},
+                    }
+                ]
+            },
+        )
+
+    item = AIFactoryAdapter("http://x", transport=httpx.MockTransport(handler)).list_items()[0]
+    state = item.to_state()
+    assert paths == ["/api/tasks", "/api/tasks/t1/questions"]
+    assert state.extra["reviewReason"] == "needs_input"
+    assert state.extra["question"]["question"] == "Which format?"
+    assert "answer" not in state.extra["question"]
+    assert state.extra["project_slug"] == "widgets"
+
+
+def test_question_arriving_without_status_change_updates_snapshot(store):
+    adapter = AIFactoryAdapter("http://x", transport=_transport({"tasks": []}))
+    first = adapter._normalize({"id": "t1", "status": "human_review"})
+    store.upsert_snapshot("t1", Service.AIFACTORY, first.to_state())
+    paused = adapter._normalize(
+        {"id": "t1", "status": "human_review", "reviewReason": "approval_rejected"}
+    )
+    store.upsert_snapshot("t1", Service.AIFACTORY, paused.to_state())
+    assert store.get("t1").aifactory.extra["reviewReason"] == "approval_rejected"
+
+
 def test_pfactory_accepts_bare_list_and_board_state():
     payload = [
         {

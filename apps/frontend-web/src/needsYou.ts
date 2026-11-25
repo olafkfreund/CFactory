@@ -173,6 +173,13 @@ export function attentionFor(
         gate ?? "Verified — awaiting your review before merge.",
       );
     }
+    if (wi.aifactory.extra?.reviewReason === "needs_input") {
+      return build("review", meta.stage, meta.service,
+        wi.aifactory.extra.question?.question ?? "A question is waiting for your answer in AIFactory.");
+    }
+    if (wi.aifactory.extra?.reviewReason === "approval_rejected") {
+      return build("review", meta.stage, meta.service, "Approval was rejected in AIFactory.");
+    }
     return build("review", meta.stage, meta.service, gate ?? "Build is awaiting your review.");
   }
 

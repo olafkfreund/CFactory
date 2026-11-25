@@ -61,6 +61,10 @@ export default function TaskActions({
 
   /** Why a button is unavailable in the task's current state, or null when ok. */
   const gate = (kind: Kind): string | null => {
+    if ((kind === "approve_review" || kind === "reject_review") &&
+      (wi.aifactory.extra?.reviewReason === "needs_input" || wi.aifactory.extra?.reviewReason === "approval_rejected")) {
+      return "Answer in AIFactory";
+    }
     switch (kind) {
       case "approve_review": {
         if (overall !== "review")

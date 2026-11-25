@@ -109,6 +109,82 @@ def test_propose_reject_review_defaults_reason(store):
     assert action.payload["reason"] == "Rejected from the cockpit."
 
 
+@pytest.mark.parametrize("reason", ["needs_input", "approval_rejected"])
+@pytest.mark.parametrize("kind", ["approve_review", "reject_review"])
+def test_paused_review_cannot_be_proposed(client, store, reason, kind):
+    _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7")
+    wi = store.get("42")
+    wi.aifactory.extra["reviewReason"] = reason
+    store.upsert_snapshot("42", Service.AIFACTORY, wi.aifactory)
+    resp = client.post("/api/actions/propose", json={"kind": kind, "correlation_key": "42"})
+    assert resp.status_code == 409
+    assert "answer in AIFactory" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("reason", ["needs_input", "approval_rejected"])
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/api/tasks/ai-7/worktree/create-pr",
+        "/api/tasks/ai-7/apply-correction",
+    ],
+)
+def test_execute_rechecks_live_pause_before_write(store, tmp_path, reason, endpoint):
+    paths = []
+
+    def handler(request):
+        paths.append((request.method, request.url.path))
+        return httpx.Response(200, json={"id": "ai-7", "reviewReason": reason})
+
+    app = create_app()
+    app.dependency_overrides[store_dep] = lambda: store
+    app.dependency_overrides[action_transport_dep] = lambda: httpx.MockTransport(handler)
+    app.dependency_overrides[audit_dep] = lambda: AuditStore(f"sqlite:///{tmp_path / 'audit.db'}")
+    _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7")
+    resp = TestClient(app).post(
+        "/api/actions/execute",
+        json={
+            "kind": "approve_review" if endpoint.endswith("create-pr") else "reject_review",
+            "correlation_key": "42",
+            "target_service": "aifactory",
+            "method": "POST",
+            "endpoint": endpoint,
+            "payload": {},
+            "rationale": "prepared earlier",
+        },
+    )
+    assert resp.json()["status_code"] == 409
+    assert resp.json()["ok"] is False
+    assert paths == [("GET", "/api/tasks/ai-7")]
+
+
+def test_execute_guards_apply_correction_even_with_other_action_kind(store, tmp_path):
+    paths = []
+
+    def handler(request):
+        paths.append((request.method, request.url.path))
+        return httpx.Response(200, json={"reviewReason": "needs_input"})
+
+    app = create_app()
+    app.dependency_overrides[store_dep] = lambda: store
+    app.dependency_overrides[action_transport_dep] = lambda: httpx.MockTransport(handler)
+    app.dependency_overrides[audit_dep] = lambda: AuditStore(f"sqlite:///{tmp_path / 'audit.db'}")
+    resp = TestClient(app).post(
+        "/api/actions/execute",
+        json={
+            "kind": "recover",
+            "correlation_key": "42",
+            "target_service": "aifactory",
+            "method": "POST",
+            "endpoint": "/api/tasks/ai-7/apply-correction",
+            "payload": {},
+            "rationale": "prepared earlier",
+        },
+    )
+    assert resp.json()["status_code"] == 409
+    assert paths == [("GET", "/api/tasks/ai-7")]
+
+
 def test_propose_recover(store):
     _seed(store, service=Service.AIFACTORY, correlation_key="42", task_id="ai-7", status="in_progress")
     action = propose_recover(store, "42")

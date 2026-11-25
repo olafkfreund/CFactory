@@ -4,8 +4,11 @@ audit trail and the live activity feed.
 
 from __future__ import annotations
 
+import posixpath
+import re
 from http import HTTPStatus
 from typing import Annotated
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +24,61 @@ from .models import WorkItem
 from .store import WorkItemStore
 
 router = APIRouter(tags=["actions"])
+
+
+def _pause_refusal(
+    action: PreparedAction, transport: httpx.BaseTransport | None
+) -> dict[str, object] | None:
+    if action.target_service != "aifactory":
+        return None
+    paths = [action.endpoint, *(step.endpoint for step in action.follow_ups)]
+    task_ids = set()
+    for endpoint in paths:
+        path = posixpath.normpath(re.sub(r"/+", "/", unquote(urlsplit(endpoint).path)))
+        match = re.match(r"/api/tasks/([^/]+)/", path)
+        if match and (
+            action.kind in ("approve_review", "reject_review") or path.endswith("/apply-correction")
+        ):
+            task_ids.add(match.group(1))
+    if not task_ids and action.kind in ("approve_review", "reject_review"):
+        return {
+            "status_code": 409,
+            "ok": False,
+            "error": "cannot verify AIFactory review task",
+            "steps": [],
+        }
+    settings = get_settings()
+    headers = (
+        {"Authorization": f"Bearer {token}"} if (token := settings.token_for("aifactory")) else {}
+    )
+    try:
+        with httpx.Client(
+            base_url=settings.aifactory_api_url, timeout=10.0, transport=transport, headers=headers
+        ) as client:
+            for task_id in task_ids:
+                response = client.get(f"/api/tasks/{task_id}")
+                response.raise_for_status()
+                task = response.json()
+                if not isinstance(task, dict):
+                    raise ValueError("invalid AIFactory task response")
+                if task.get("reviewReason") in (
+                    "needs_input",
+                    "approval_rejected",
+                ):
+                    return {
+                        "status_code": 409,
+                        "ok": False,
+                        "error": "Answer in AIFactory before reviewing this task",
+                        "steps": [],
+                    }
+    except (httpx.HTTPError, ValueError):
+        return {
+            "status_code": 503,
+            "ok": False,
+            "error": "could not verify AIFactory pause state",
+            "steps": [],
+        }
+    return None
 
 
 @router.post("/api/actions/propose")
@@ -71,7 +129,10 @@ async def execute_prepared_action(
     Requires the ``write`` scope when API keys are configured; in local
     single-user mode (no keys) it is open."""
     settings = get_settings()
-    result = await run_in_threadpool(execute_action, action, settings=settings, transport=transport)
+    refusal = await run_in_threadpool(_pause_refusal, action, transport)
+    result = refusal or await run_in_threadpool(
+        execute_action, action, settings=settings, transport=transport
+    )
     # Remove also prunes the card from CFactory's own board, not just the
     # upstream factory. The upstream DELETE is best-effort: an orphaned/failed
     # task whose upstream is already gone (404) must STILL leave the cockpit, so

@@ -567,6 +567,17 @@ class WorkItemStore:
                     for field in _POLL_BLIND_FIELDS:
                         if not new_slice.get(field) and existing.get(field):
                             new_slice[field] = existing[field]
+                    if service == Service.AIFACTORY:
+                        # Polls own these fields; keep unrelated event metadata.
+                        extra = existing.get("extra") or {}
+                        new_slice["extra"] = {
+                            **{
+                                k: v
+                                for k, v in extra.items()
+                                if k not in ("reviewReason", "question", "project_slug")
+                            },
+                            **new_slice["extra"],
+                        }
                     # A poll that re-reports the SAME status/phase must NOT reset
                     # the liveness clock (#105). updated_at (onupdate=_now) drives
                     # the stall age, so re-stamping it on every no-op poll makes a
@@ -582,6 +593,10 @@ class WorkItemStore:
                         and existing.get("status") == new_slice.get("status")
                         and existing.get("phase") == new_slice.get("phase")
                         and (existing.get("usage") or None) == (new_slice.get("usage") or None)
+                        and (
+                            service != Service.AIFACTORY
+                            or (existing.get("extra") or {}) == (new_slice.get("extra") or {})
+                        )
                     )
                     # A dead task never takes a row back from a different task
                     # that already finished there (a completed re-run, #479).

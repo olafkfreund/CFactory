@@ -197,6 +197,8 @@ def propose_approve_review(store: WorkItemStore, correlation_key: str, note: str
     wi = store.get(correlation_key)
     if wi is None:
         return None
+    if wi.aifactory.extra.get("reviewReason") in ("needs_input", "approval_rejected"):
+        return None
     target = _review_target(wi)
     if target is None:
         return None
@@ -230,6 +232,8 @@ def propose_approve_review(store: WorkItemStore, correlation_key: str, note: str
 def propose_reject_review(store: WorkItemStore, correlation_key: str, note: str | None = None):
     wi = store.get(correlation_key)
     if wi is None:
+        return None
+    if wi.aifactory.extra.get("reviewReason") in ("needs_input", "approval_rejected"):
         return None
     target = _review_target(wi)
     if target is None:
@@ -361,6 +365,11 @@ def _nothing_to_act_on(kind: str, wi: WorkItem) -> str:
     use :func:`_review_target`, which skips terminal stages.
     """
     head = f"nothing to {kind} for {wi.correlation_key!r}"
+    if kind in ("approve_review", "reject_review") and wi.aifactory.extra.get("reviewReason") in (
+        "needs_input",
+        "approval_rejected",
+    ):
+        return f"{head}: answer in AIFactory"
     if kind == "approve_plan":
         return f"{head}: no pfactory plan task"
     if kind == "delete_task":

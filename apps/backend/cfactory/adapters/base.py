@@ -37,6 +37,9 @@ class AdapterItem(BaseModel):
     # enabled Approve button and let the click 409 with a lens it never showed.
     # Optional -- absent for every other service and for un-reviewed sessions.
     review: dict[str, Any] | None = None
+    review_reason: str | None = None
+    question: dict[str, Any] | None = None
+    project_slug: str | None = None
 
     def to_state(self) -> ServiceState:
         return ServiceState(
@@ -46,7 +49,12 @@ class AdapterItem(BaseModel):
             repo=self.repo,
             # Carried under `extra` so it rides the same slice map the event path
             # writes to, and the frontend reads one shape either way.
-            extra={"review": self.review} if self.review else {},
+            extra={
+                **({"review": self.review} if self.review else {}),
+                **({"reviewReason": self.review_reason} if self.review_reason else {}),
+                **({"question": self.question} if self.question else {}),
+                **({"project_slug": self.project_slug} if self.project_slug else {}),
+            },
         )
 
 

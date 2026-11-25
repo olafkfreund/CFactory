@@ -40,6 +40,38 @@ class AIFactoryAdapter(BaseHTTPAdapter):
         task_id = first(row, "id", "task_id")
         if task_id is None:
             return None
+        reason = first(row, "reviewReason", "review_reason")
+        question = None
+        if reason in ("needs_input", "approval_rejected"):
+            try:
+                questions = self._get_json(f"/api/tasks/{task_id}/questions")
+                if isinstance(questions, list):
+                    pending = next(
+                        (
+                            q
+                            for q in questions
+                            if isinstance(q, dict)
+                            and q.get("status") in ("open", "expired", "rejected")
+                        ),
+                        None,
+                    )
+                    if pending:
+                        question = {
+                            key: pending[key]
+                            for key in (
+                                "qid",
+                                "question",
+                                "choices",
+                                "needs_approval",
+                                "status",
+                                "asked_at",
+                                "timeout_minutes",
+                            )
+                            if key in pending
+                        }
+            except AdapterError:
+                pass  # The pause reason still survives an unavailable question endpoint.
+        slug = first(row, "project_slug", "projectSlug", "project.slug")
         return AdapterItem(
             correlation_key=str(first(row, "correlation_key", "correlationKey") or task_id),
             service=self.service,
@@ -49,4 +81,7 @@ class AIFactoryAdapter(BaseHTTPAdapter):
             title=first(row, "title", "name", "description"),
             repo=first(row, "repo"),  # W5 (#218): target repo owner/name
             created_at=created_at_of(row),
+            review_reason=reason if isinstance(reason, str) else None,
+            question=question,
+            project_slug=slug if isinstance(slug, str) else None,
         )

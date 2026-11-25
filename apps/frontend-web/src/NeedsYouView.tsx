@@ -16,6 +16,9 @@ import {
   type AttentionKind,
 } from "./needsYou";
 import TaskDetail from "./TaskDetail";
+import { PORTALS } from "./dashboard";
+
+const AIFACTORY_URL = PORTALS.find((p) => p.key === "build")?.url ?? "";
 
 const STAGE_VAR: Record<string, string> = {
   plan: "var(--plan)",
@@ -113,6 +116,13 @@ export default function NeedsYouView({
         <div className="ny-body">
           <h3 className="ny-item-title">{displayTitle(a.wi.title, a.wi.correlation_key)}</h3>
           <p className="ny-why">{a.reason}</p>
+          {(a.wi.aifactory.extra?.reviewReason === "needs_input" || a.wi.aifactory.extra?.reviewReason === "approval_rejected") && a.wi.aifactory.task_id && (
+            <a href={a.wi.aifactory.extra.project_slug
+              ? `${AIFACTORY_URL}/p/${encodeURIComponent(a.wi.aifactory.extra.project_slug)}/tasks/${encodeURIComponent(a.wi.aifactory.task_id)}`
+              : AIFACTORY_URL}>
+              Answer in AIFactory
+            </a>
+          )}
           <div className="ny-meta">
             <span>{a.service}</span>
             <span className="ny-tag">{KIND_LABEL[a.kind]}</span>

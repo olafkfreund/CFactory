@@ -6,6 +6,7 @@ vi.mock("./LiveAgents", () => ({ default: () => null, AgentTerminal: () => null 
 
 import { attentionFor, attentionList, lastActivityAge } from "./needsYou";
 import NeedsYouView from "./NeedsYouView";
+import TaskActions from "./TaskActions";
 import { fmtAge } from "./format";
 import type { WorkItem } from "./api";
 
@@ -121,6 +122,27 @@ describe("needsYou", () => {
   it("keeps the generic review copy when no gate verdict is present", () => {
     const a = attentionFor(wi({ p: "done", a: "done", t: "human_review" }));
     expect(a?.reason).toBe("Verified — awaiting your review before merge.");
+  });
+
+  it("shows the question and AIFactory task link, and blocks review actions", () => {
+    const item = wi({ a: "human_review" });
+    item.aifactory.task_id = "task-7";
+    item.aifactory.extra = {
+      reviewReason: "needs_input",
+      project_slug: "widgets",
+      question: {
+        qid: "q1", question: "Which format?", choices: ["JSON", "CSV"],
+        needs_approval: false, status: "open", asked_at: "2026-11-25T10:00:00Z",
+        timeout_minutes: 30,
+      },
+    };
+    expect(attentionFor(item)?.reason).toBe("Which format?");
+    const html = renderToStaticMarkup(createElement(NeedsYouView, { items: [item], progress: {} }));
+    expect(html).toContain("/p/widgets/tasks/task-7");
+    expect(html).toContain("Answer in AIFactory");
+    const actions = renderToStaticMarkup(createElement(TaskActions, { wi: item }));
+    expect(actions).toContain("Approve / Reject: Answer in AIFactory");
+    expect(actions).toContain('aria-disabled="true"');
   });
 
   it("does not name a gate on a clean scan / passing dependency review", () => {

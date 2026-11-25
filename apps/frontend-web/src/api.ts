@@ -319,6 +319,17 @@ export const ServiceStateSchema = z.object({
       dependency_review: DependencyReviewSchema.optional(),
       votes: VoteSplitSchema.optional(),
       review: PlanReviewSchema.optional(),
+      reviewReason: z.string().optional(),
+      question: z.object({
+        qid: z.string(),
+        question: z.string(),
+        choices: z.array(z.string()).nullable(),
+        needs_approval: z.boolean(),
+        status: z.string(),
+        asked_at: z.string(),
+        timeout_minutes: z.number(),
+      }).optional(),
+      project_slug: z.string().optional(),
     })
     .loose()
     .optional(),

@@ -420,6 +420,22 @@ describe("mounted project routes", () => {
     );
   });
 
+  it("asks the server again when returning to a project after the fleet view", async () => {
+    dom.window.history.replaceState({}, "", "/p/alpha/planning");
+    await mount(<RouteProbe />);
+    const first = api.resolveProject.mock.calls.length;
+    expect(first).toBeGreaterThan(0);
+    for (const path of ["/planning", "/p/alpha/planning"]) {
+      dom.window.history.pushState({}, "", path);
+      await act(async () => {
+        dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+        await Promise.resolve();
+      });
+    }
+    expect(api.resolveProject.mock.calls.length).toBeGreaterThan(first);
+    expect(api.resolveProject).toHaveBeenLastCalledWith("default", "alpha");
+  });
+
   it("ignores a deferred resolve response that arrives after a route change", async () => {
     let resolveAlpha!: (value: { project: ServerProject }) => void;
     api.resolveProject.mockImplementation((_tenant: string, ref: string) => {

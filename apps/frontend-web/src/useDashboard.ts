@@ -297,14 +297,21 @@ export function useDashboard(): Dashboard {
 
   useEffect(() => {
     const ref = routeState.projectRef;
-    if (!ref || !connectionsLoaded || connectionsError !== null) {
+    if (!ref) {
+      // leaving the project: a later visit asks the server again instead of reusing this outcome
+      setResolved(null);
+      return;
+    }
+    if (!connectionsLoaded || connectionsError !== null) {
       return;
     }
     if (resolvedForRoute !== null) return;
     let cancelled = false;
+    // a catalog reload bumps the sequence: an outcome from before it must not be written back
+    const seq = projectsSeqRef.current;
     resolveProject(tenant, ref)
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || seq !== projectsSeqRef.current) return;
         const nextProject = "project" in res ? toCockpitProject(res.project) : null;
         setResolved({
           tenant,
@@ -314,7 +321,7 @@ export function useDashboard(): Dashboard {
         });
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (cancelled || seq !== projectsSeqRef.current) return;
         setResolved({
           tenant,
           ref,

@@ -840,7 +840,11 @@ BOARD_TOOLS: list[dict[str, Any]] = [
     {
         "name": "cfactory_resolve_project",
         "description": "Resolve a project by canonical slug, id, or alias within this tenant.",
-        "inputSchema": {"type": "object", "required": ["ref"], "properties": {"ref": {"type": "string"}}},
+        "inputSchema": {
+            "type": "object",
+            "required": ["ref"],
+            "properties": {"ref": {"type": "string"}},
+        },
     },
     {
         "name": "cfactory_create_git_repository",

@@ -34,6 +34,7 @@ from . import (
     routes_install,
     routes_investigations,
     routes_live_agents,
+    routes_projects,
     routes_services,
     routes_well_known,
     routes_workitems,
@@ -200,6 +201,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_actions.router)
     app.include_router(routes_cards.router)
     app.include_router(routes_git_config.router)
+    app.include_router(routes_projects.router)
     if get_settings().investigations != "off":
         app.include_router(routes_investigations.router)
     # The git-provider install callback (RFC-0020 §3.4 phase 4). Outside the

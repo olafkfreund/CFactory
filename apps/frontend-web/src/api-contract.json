@@ -160,6 +160,12 @@
     "/api/tenants/{tenant}/git-repositories/{repository_id}:default": [
       "post"
     ],
+    "/api/tenants/{tenant}/projects": [
+      "get"
+    ],
+    "/api/tenants/{tenant}/projects/resolve": [
+      "get"
+    ],
     "/api/tokens": [
       "get"
     ],

@@ -1,0 +1,44 @@
+{
+  "repositories": [
+    {"id": 2, "project": "acme/other", "aifactory_project_id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "created_at": "2026-01-01"},
+    {"id": 1, "project": "acme/widgets", "aifactory_project_id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "created_at": "2026-01-02"},
+    {"id": 3, "project": "beta/widgets", "aifactory_project_id": "another-project", "created_at": "2026-01-03"},
+    {"id": 4, "project": "acme/widgets", "created_at": null},
+    {"id": 5, "project": "same/demo", "aifactory_project_id": "abcdefgh-one", "created_at": "2026-02-01"},
+    {"id": 6, "project": "same/demo", "aifactory_project_id": "abcdefgh-two", "created_at": "2026-02-02"},
+    {"id": 7, "project": "same/demo", "aifactory_project_id": "abcdefgh-three", "created_at": "2026-02-03"}
+  ],
+  "expected_projects": [
+    {"id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "name": "acme/other", "created_at": "2026-01-01", "repository_ids": [1, 2], "repo_paths": ["acme/other", "acme/widgets"]},
+    {"id": "another-project", "name": "beta/widgets", "created_at": "2026-01-03", "repository_ids": [3], "repo_paths": ["beta/widgets"]},
+    {"id": "abcdefgh-one", "name": "demo", "created_at": "2026-02-01", "repository_ids": [5], "repo_paths": ["same/demo"]},
+    {"id": "abcdefgh-two", "name": "demo", "created_at": "2026-02-02", "repository_ids": [6], "repo_paths": ["same/demo"]},
+    {"id": "abcdefgh-three", "name": "demo", "created_at": "2026-02-03", "repository_ids": [7], "repo_paths": ["same/demo"]},
+    {"id": "repo:4", "name": "acme/widgets", "created_at": "", "repository_ids": [4], "repo_paths": ["acme/widgets"]}
+  ],
+  "extra_projects": [
+    {"id": "manual", "name": "Else", "slug": "DEMO", "created_at": "", "repository_ids": [9], "repo_paths": ["else/project"]}
+  ],
+  "expected_slugs": {
+    "5d78d4b9-35f9-4445-92c1-78f3ff60a494": "acme-other",
+    "another-project": "beta-widgets",
+    "abcdefgh-one": "demo-abcdefgh",
+    "abcdefgh-three": "demo-abcdefgh-3",
+    "abcdefgh-two": "demo-abcdefgh-2",
+    "repo:4": "acme-widgets",
+    "manual": "DEMO"
+  },
+  "references": [
+    {"ref": "ACME-OTHER", "id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494"},
+    {"ref": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494"},
+    {"ref": "DEMO", "id": "manual"},
+    {"ref": "else", "id": "manual"},
+    {"ref": "else-manual", "id": "manual"},
+    {"ref": "else-project", "id": "manual"},
+    {"ref": "acme-other-5d78d4b9", "id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494"},
+    {"ref": "demo-abcdefgh", "id": "abcdefgh-one"},
+    {"ref": "same-demo", "id": null},
+    {"ref": "acme-widgets", "id": "repo:4"},
+    {"ref": "missing", "id": null}
+  ]
+}

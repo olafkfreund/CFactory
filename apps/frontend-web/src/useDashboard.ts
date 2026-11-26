@@ -114,12 +114,15 @@ export function useDashboard(): Dashboard {
   const [connections, setConnections] = useState<GitConnections | null>(null);
   const [projects, setProjects] = useState<CockpitProject[]>([]);
   const [tenant, setTenant] = useState<string>("default");
-  const [resolvedRef, setResolvedRef] = useState<{ ref: string; project: CockpitProject | null } | null>(null);
+  const [resolved, setResolved] = useState<{
+    tenant: string;
+    ref: string;
+    project: CockpitProject | null;
+    error: string | null;
+  } | null>(null);
   const [connectionsLoaded, setConnectionsLoaded] = useState(false);
   const [connectionsError, setConnectionsError] = useState<string | null>(null);
-  const [routeState, setRouteState] = useState(() =>
-    initialRouteState(window.location.pathname),
-  );
+  const [routeState, setRouteState] = useState(() => initialRouteState(window.location.pathname));
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,16 +148,30 @@ export function useDashboard(): Dashboard {
   const toastIdRef = useRef(0);
   const pinIdRef = useRef(0);
   const alarmTickRef = useRef(0);
-  const scopeRef = useRef<{ ref: string | null; project: CockpitProject | null; projects: CockpitProject[]; cards: Card[]; defaultRepoId: number | null | undefined }>({ ref: null, project: null, projects: [], cards: [], defaultRepoId: null });
+  const projectsSeqRef = useRef(0);
+  const scopeRef = useRef<{
+    ref: string | null;
+    project: CockpitProject | null;
+    projects: CockpitProject[];
+    cards: Card[];
+    defaultRepoId: number | null | undefined;
+  }>({ ref: null, project: null, projects: [], cards: [], defaultRepoId: null });
   const [alarmKey, setAlarmKey] = useState<string | null>(null);
 
   const ingest = useCallback((incoming: WorkItem[]) => {
     const events = diffEvents(statesRef.current, incoming, seededRef.current).filter((ev) => {
       const scope = scopeRef.current;
       if (scope.ref === null) return true;
-      return scope.project !== null && filterWorkItemsForProject(
-        incoming, scope.project, scope.cards, scope.projects, scope.defaultRepoId,
-      ).some((item) => item.correlation_key === ev.key);
+      return (
+        scope.project !== null &&
+        filterWorkItemsForProject(
+          incoming,
+          scope.project,
+          scope.cards,
+          scope.projects,
+          scope.defaultRepoId,
+        ).some((item) => item.correlation_key === ev.key)
+      );
     });
     if (!seededRef.current) {
       seededRef.current = true;
@@ -226,72 +243,89 @@ export function useDashboard(): Dashboard {
       })),
     [projects],
   );
-  const directMatch = useMemo(() => {
-    if (!routeState.projectRef) return undefined;
-    const lower = routeState.projectRef.toLowerCase();
-    const canonical = projects.filter((p) => (p.slug ?? p.id).toLowerCase() === lower);
-    if (canonical.length) return canonical.length === 1 ? canonical[0] : null;
-    const ids = projects.filter((p) => p.id.toLowerCase() === lower);
-    if (ids.length) return ids.length === 1 ? ids[0] : null;
-    return undefined;
-  }, [projects, routeState.projectRef]);
-  const activeProject = useMemo(() => {
-    if (!routeState.projectRef) return null;
-    if (directMatch !== undefined) return directMatch;
-    if (resolvedRef?.ref === routeState.projectRef) {
-      const targetId = resolvedRef.project?.id;
-      return targetId
-        ? (projects.find((p) => p.id === targetId) ?? resolvedRef.project)
-        : null;
-    }
-    return null;
-  }, [directMatch, projects, resolvedRef, routeState.projectRef]);
+  const resolvedForRoute =
+    routeState.projectRef !== null &&
+    resolved?.tenant === tenant &&
+    (resolved.ref === routeState.projectRef ||
+      (resolved.project !== null &&
+        (resolved.project.slug ?? resolved.project.id) === routeState.projectRef))
+      ? resolved
+      : null;
+  const activeProject = useMemo(
+    () => (resolvedForRoute ? resolvedForRoute.project : null),
+    [resolvedForRoute],
+  );
   const activeProjectSlug = useMemo(
     () => (activeProject ? (activeProject.slug ?? activeProject.id) : undefined),
     [activeProject],
   );
+  const effectiveConnectionsError =
+    connectionsError ?? (routeState.projectRef !== null ? (resolvedForRoute?.error ?? null) : null);
   const projectsReady =
     connectionsLoaded &&
-    (routeState.projectRef === null ||
-      directMatch !== undefined ||
-      resolvedRef?.ref === routeState.projectRef ||
-      connectionsError !== null);
-  scopeRef.current = { ref: routeState.projectRef, project: activeProject, projects, cards, defaultRepoId: connections?.default_repository_id };
+    (routeState.projectRef === null || resolvedForRoute !== null || connectionsError !== null);
+  scopeRef.current = {
+    ref: routeState.projectRef,
+    project: activeProject,
+    projects,
+    cards,
+    defaultRepoId: connections?.default_repository_id,
+  };
   const items = useMemo(
     () =>
       routeState.projectRef === null
         ? allItems
         : activeProject
-          ? filterWorkItemsForProject(allItems, activeProject, cards, projects, connections?.default_repository_id)
+          ? filterWorkItemsForProject(
+              allItems,
+              activeProject,
+              cards,
+              projects,
+              connections?.default_repository_id,
+            )
           : [],
-    [allItems, routeState.projectRef, activeProject, cards, projects, connections?.default_repository_id],
+    [
+      allItems,
+      routeState.projectRef,
+      activeProject,
+      cards,
+      projects,
+      connections?.default_repository_id,
+    ],
   );
   const visibleKeys = new Set(items.map((item) => item.correlation_key));
 
   useEffect(() => {
     const ref = routeState.projectRef;
-    if (!ref || !connectionsLoaded || connectionsError !== null || directMatch !== undefined) {
+    if (!ref || !connectionsLoaded || connectionsError !== null) {
       return;
     }
-    if (resolvedRef?.ref === ref) return;
+    if (resolvedForRoute !== null) return;
     let cancelled = false;
     resolveProject(tenant, ref)
       .then((res) => {
         if (cancelled) return;
-        setResolvedRef({
+        const nextProject = "project" in res ? toCockpitProject(res.project) : null;
+        setResolved({
+          tenant,
           ref,
-          project: "project" in res ? toCockpitProject(res.project) : null,
+          project: nextProject,
+          error: null,
         });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setConnectionsError(err instanceof Error ? err.message : String(err));
-        setResolvedRef({ ref, project: null });
+        setResolved({
+          tenant,
+          ref,
+          project: null,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [routeState.projectRef, connectionsLoaded, connectionsError, directMatch, resolvedRef?.ref, tenant]);
+  }, [routeState.projectRef, connectionsLoaded, connectionsError, resolvedForRoute, tenant]);
 
   // Sync URL on popstate (browser back/forward).
   useEffect(() => {
@@ -338,9 +372,11 @@ export function useDashboard(): Dashboard {
 
   const setView = useCallback(
     (nextView: View) => {
-      const slug = ["tokens", "audit", "services", "preferences"].includes(nextView) ? null : activeProject
-        ? (activeProject.slug ?? activeProject.id)
-        : routeState.projectRef;
+      const slug = ["tokens", "audit", "services", "preferences"].includes(nextView)
+        ? null
+        : activeProject
+          ? (activeProject.slug ?? activeProject.id)
+          : routeState.projectRef;
       const nextPath = buildCockpitPath(slug, nextView);
       if (window.location.pathname !== nextPath) {
         window.history.pushState({}, "", nextPath);
@@ -352,7 +388,11 @@ export function useDashboard(): Dashboard {
 
   const setProjectSlug = useCallback(
     (nextSlug: string | null) => {
-      const nextView = nextSlug === null || ["tokens", "audit", "services", "preferences"].includes(routeState.view) ? "overview" : routeState.view;
+      const nextView =
+        nextSlug === null ||
+        ["tokens", "audit", "services", "preferences"].includes(routeState.view)
+          ? "overview"
+          : routeState.view;
       const nextPath = buildCockpitPath(nextSlug, nextView);
       if (window.location.pathname !== nextPath) {
         window.history.pushState({}, "", nextPath);
@@ -371,20 +411,24 @@ export function useDashboard(): Dashboard {
   );
 
   const retryProjects = useCallback(async () => {
+    const seq = ++projectsSeqRef.current;
     setConnectionsError(null);
     setConnectionsLoaded(false);
-    setResolvedRef(null);
+    setResolved(null);
     try {
       const settings = await fetchSettings();
+      if (seq !== projectsSeqRef.current) return;
       setTenant(settings.tenant);
       const [data, serverProjects] = await Promise.all([
         fetchGitConnections(settings.tenant),
         fetchProjects(settings.tenant),
       ]);
+      if (seq !== projectsSeqRef.current) return;
       setConnections(data);
       setProjects(serverProjects.map(toCockpitProject));
       setConnectionsLoaded(true);
     } catch (err) {
+      if (seq !== projectsSeqRef.current) return;
       setConnectionsError(err instanceof Error ? err.message : String(err));
       setConnectionsLoaded(true);
     }
@@ -500,7 +544,7 @@ export function useDashboard(): Dashboard {
     projects,
     breadcrumbProjects,
     connectionsLoaded: projectsReady,
-    connectionsError,
+    connectionsError: effectiveConnectionsError,
     defaultRepositoryId: connections?.default_repository_id,
     setProjectSlug,
     busy,
@@ -508,7 +552,10 @@ export function useDashboard(): Dashboard {
     error,
     tick,
     progress,
-    toasts: routeState.projectRef === null ? toasts : toasts.filter((toast) => visibleKeys.has(toast.ev.key)),
+    toasts:
+      routeState.projectRef === null
+        ? toasts
+        : toasts.filter((toast) => visibleKeys.has(toast.ev.key)),
     copilotOpen,
     setCopilotOpen,
     stageFilter,

@@ -776,10 +776,7 @@ export async function fetchProjects(tenant: string): Promise<ServerProject[]> {
   return getJson(tenantPath(tenant, "projects"), ProjectsResponseSchema, "projects");
 }
 
-export async function resolveProject(
-  tenant: string,
-  ref: string,
-): Promise<ProjectResolveResponse> {
+export async function resolveProject(tenant: string, ref: string): Promise<ProjectResolveResponse> {
   const params = new URLSearchParams({ ref });
   return getJson(
     tenantPath(tenant, `projects/resolve?${params.toString()}`),

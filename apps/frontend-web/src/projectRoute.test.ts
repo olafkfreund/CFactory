@@ -136,13 +136,37 @@ describe("project filters", () => {
     expect(filterWorkItemsForProject(items, null, [], [], null)).toBe(items);
     const beta = { ...active, id: "beta", repositoryIds: [2], repoPaths: ["acme/other"] };
     const conflicting = [item("task-two", "acme/widgets"), item("unknown", "acme/widgets")];
-    expect(filterWorkItemsForProject(conflicting, active, cards, [active, beta], 1).map((w) => w.correlation_key)).toEqual(["unknown"]);
-    expect(filterWorkItemsForProject(conflicting, beta, cards, [active, beta], 1).map((w) => w.correlation_key)).toEqual(["task-two"]);
-    expect(filterWorkItemsForProject([item("unknown", "acme/widgets")], active, [], [active, { ...beta, repoPaths: ["acme/widgets"] }], 1)).toEqual([]);
-    expect(filterWorkItemsForProject([item("task-one", "acme/widgets")], active, [cards[0]!, { ...cards[0]!, repository_id: 2 }], [active, beta], 1)).toEqual([]);
+    expect(
+      filterWorkItemsForProject(conflicting, active, cards, [active, beta], 1).map(
+        (w) => w.correlation_key,
+      ),
+    ).toEqual(["unknown"]);
+    expect(
+      filterWorkItemsForProject(conflicting, beta, cards, [active, beta], 1).map(
+        (w) => w.correlation_key,
+      ),
+    ).toEqual(["task-two"]);
+    expect(
+      filterWorkItemsForProject(
+        [item("unknown", "acme/widgets")],
+        active,
+        [],
+        [active, { ...beta, repoPaths: ["acme/widgets"] }],
+        1,
+      ),
+    ).toEqual([]);
+    expect(
+      filterWorkItemsForProject(
+        [item("task-one", "acme/widgets")],
+        active,
+        [cards[0]!, { ...cards[0]!, repository_id: 2 }],
+        [active, beta],
+        1,
+      ),
+    ).toEqual([]);
   });
 
-  it("initialises route state, rewrites redirects/aliases, and renders project-scoped planning views", () => {
+  it("initialises route state and renders project-scoped planning views", () => {
     expect(initialRouteState("/")).toEqual({
       view: "overview",
       projectRef: null,

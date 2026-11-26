@@ -74,17 +74,21 @@ export function filterWorkItemsForProject(
   for (const card of cards) {
     if (!card.correlation_key) continue;
     const repoId = card.repository_id ?? defaultRepoId ?? null;
-    byKey.set(card.correlation_key,
-      byKey.has(card.correlation_key) && byKey.get(card.correlation_key) !== repoId ? null : repoId);
+    byKey.set(
+      card.correlation_key,
+      byKey.has(card.correlation_key) && byKey.get(card.correlation_key) !== repoId ? null : repoId,
+    );
   }
   return items.filter((item) => {
     if (byKey.has(item.correlation_key)) {
       return project.repositoryIds.includes(byKey.get(item.correlation_key) ?? -1);
     }
     const paths = [item.pfactory.repo, item.aifactory.repo, item.tfactory.repo].filter(Boolean);
-    const owners = projects.filter((candidate) => paths.some((repo) =>
-      candidate.repoPaths.some((path) => path.toLowerCase() === repo?.toLowerCase()),
-    ));
+    const owners = projects.filter((candidate) =>
+      paths.some((repo) =>
+        candidate.repoPaths.some((path) => path.toLowerCase() === repo?.toLowerCase()),
+      ),
+    );
     return owners.length === 1 && owners[0]?.id === project.id;
   });
 }

@@ -515,8 +515,6 @@ describe("projects API (#52)", () => {
     await expect(resolveProject("acme", "acme/widgets")).resolves.toEqual({
       project: sampleProject,
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/tenants/acme/projects/resolve?ref=acme%2Fwidgets",
-    );
+    expect(fetchMock).toHaveBeenCalledWith("/api/tenants/acme/projects/resolve?ref=acme%2Fwidgets");
   });
 });

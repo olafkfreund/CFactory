@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime
+from datetime import UTC, datetime
+from math import trunc
 from typing import Any
 
 from . import git_config_ops
@@ -47,7 +48,8 @@ def derive_projects(repos: list[dict[str, Any]]) -> list[dict[str, Any]]:
             primary_path if project["id"].startswith("repo:") else primary_path.rsplit("/", 1)[-1]
         )
         project["repository_ids"].sort()
-        project["repo_paths"].sort(key=str.casefold)
+        # Server order is canonical: Unicode casefold, with the original path breaking ties.
+        project["repo_paths"].sort(key=lambda path: (path.casefold(), path))
     names = {project["id"]: project["name"] for project in result}
     for project in result:
         if not project["id"].startswith("repo:") and any(
@@ -62,7 +64,11 @@ def derive_projects(repos: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _created(project: dict[str, Any]) -> float:
     try:
-        return datetime.fromisoformat(project["created_at"].replace("Z", "+00:00")).timestamp()
+        value = project["created_at"]
+        created = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            created = created.replace(tzinfo=UTC)
+        return trunc(created.timestamp() * 1000)
     except (ValueError, AttributeError):
         return 0
 
@@ -87,6 +93,8 @@ def project_slugs(projects: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def matching_projects(projects: list[dict[str, Any]], ref: str) -> list[dict[str, Any]]:
+    if not ref:
+        return []
     lower = ref.lower()
     slugs = project_slugs(projects)
     canonical = [p for p in projects if slugs[p["id"]].lower() == lower]
@@ -98,7 +106,7 @@ def matching_projects(projects: list[dict[str, Any]], ref: str) -> list[dict[str
     return [
         p
         for p in projects
-        if p.get("slug", "").lower() == lower
+        if (isinstance(p.get("slug"), str) and p["slug"] and p["slug"].lower() == lower)
         or slugify(p["name"], p["id"]) == lower
         or f"{slugify(p['name'], p['id'])}-{slugify(p['id'], 'project')[:8]}" == lower
         or any(slugify(path, p["id"]) == lower for path in p["repo_paths"])

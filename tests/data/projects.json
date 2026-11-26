@@ -1,23 +1,37 @@
 {
   "repositories": [
-    {"id": 2, "project": "acme/other", "aifactory_project_id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "created_at": "2026-01-01"},
-    {"id": 1, "project": "acme/widgets", "aifactory_project_id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "created_at": "2026-01-02"},
-    {"id": 3, "project": "beta/widgets", "aifactory_project_id": "another-project", "created_at": "2026-01-03"},
+    {"id": 2, "project": "acme/other", "aifactory_project_id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "created_at": "2026-01-01T00:00:00Z"},
+    {"id": 1, "project": "acme/widgets", "aifactory_project_id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "created_at": "2026-01-02T00:00:00Z"},
+    {"id": 3, "project": "beta/widgets", "aifactory_project_id": "another-project", "created_at": "2026-01-03T00:00:00Z"},
     {"id": 4, "project": "acme/widgets", "created_at": null},
-    {"id": 5, "project": "same/demo", "aifactory_project_id": "abcdefgh-one", "created_at": "2026-02-01"},
-    {"id": 6, "project": "same/demo", "aifactory_project_id": "abcdefgh-two", "created_at": "2026-02-02"},
-    {"id": 7, "project": "same/demo", "aifactory_project_id": "abcdefgh-three", "created_at": "2026-02-03"}
+    {"id": 5, "project": "same/demo", "aifactory_project_id": "abcdefgh-one", "created_at": "2026-02-01T00:00:00Z"},
+    {"id": 6, "project": "same/demo", "aifactory_project_id": "abcdefgh-two", "created_at": "2026-02-02T00:00:00Z"},
+    {"id": 7, "project": "same/demo", "aifactory_project_id": "abcdefgh-three", "created_at": "2026-02-03T00:00:00Z"},
+    {"id": 8, "project": "acme/a-b", "aifactory_project_id": "punctuation", "created_at": "2026-03-01T00:00:00Z", "server_canonical": true},
+    {"id": 9, "project": "acme/a_b", "aifactory_project_id": "punctuation", "created_at": "2026-03-01T00:00:00Z", "server_canonical": true},
+    {"id": 10, "project": "acme/ß", "aifactory_project_id": "unicode", "created_at": "2026-03-02T00:00:00Z", "server_canonical": true},
+    {"id": 11, "project": "acme/ss", "aifactory_project_id": "unicode", "created_at": "2026-03-02T00:00:00Z", "server_canonical": true},
+    {"id": 12, "project": "acme/sort", "aifactory_project_id": "sort-a", "created_at": "2026-03-03T00:00:00Z", "server_canonical": true},
+    {"id": 13, "project": "acme/sort", "aifactory_project_id": "sort_a", "created_at": "2026-03-03T00:00:00Z", "server_canonical": true}
   ],
   "expected_projects": [
-    {"id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "name": "acme/other", "created_at": "2026-01-01", "repository_ids": [1, 2], "repo_paths": ["acme/other", "acme/widgets"]},
-    {"id": "another-project", "name": "beta/widgets", "created_at": "2026-01-03", "repository_ids": [3], "repo_paths": ["beta/widgets"]},
-    {"id": "abcdefgh-one", "name": "demo", "created_at": "2026-02-01", "repository_ids": [5], "repo_paths": ["same/demo"]},
-    {"id": "abcdefgh-two", "name": "demo", "created_at": "2026-02-02", "repository_ids": [6], "repo_paths": ["same/demo"]},
-    {"id": "abcdefgh-three", "name": "demo", "created_at": "2026-02-03", "repository_ids": [7], "repo_paths": ["same/demo"]},
+    {"id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494", "name": "acme/other", "created_at": "2026-01-01T00:00:00Z", "repository_ids": [1, 2], "repo_paths": ["acme/other", "acme/widgets"]},
+    {"id": "another-project", "name": "beta/widgets", "created_at": "2026-01-03T00:00:00Z", "repository_ids": [3], "repo_paths": ["beta/widgets"]},
+    {"id": "abcdefgh-one", "name": "demo", "created_at": "2026-02-01T00:00:00Z", "repository_ids": [5], "repo_paths": ["same/demo"]},
+    {"id": "abcdefgh-two", "name": "demo", "created_at": "2026-02-02T00:00:00Z", "repository_ids": [6], "repo_paths": ["same/demo"]},
+    {"id": "abcdefgh-three", "name": "demo", "created_at": "2026-02-03T00:00:00Z", "repository_ids": [7], "repo_paths": ["same/demo"]},
+    {"id": "punctuation", "name": "a-b", "created_at": "2026-03-01T00:00:00Z", "repository_ids": [8, 9], "repo_paths": ["acme/a-b", "acme/a_b"], "server_canonical": true},
+    {"id": "unicode", "name": "ß", "created_at": "2026-03-02T00:00:00Z", "repository_ids": [10, 11], "repo_paths": ["acme/ss", "acme/ß"], "server_canonical": true},
+    {"id": "sort-a", "name": "sort", "created_at": "2026-03-03T00:00:00Z", "repository_ids": [12], "repo_paths": ["acme/sort"], "server_canonical": true},
+    {"id": "sort_a", "name": "sort", "created_at": "2026-03-03T00:00:00Z", "repository_ids": [13], "repo_paths": ["acme/sort"], "server_canonical": true},
     {"id": "repo:4", "name": "acme/widgets", "created_at": "", "repository_ids": [4], "repo_paths": ["acme/widgets"]}
   ],
   "extra_projects": [
-    {"id": "manual", "name": "Else", "slug": "DEMO", "created_at": "", "repository_ids": [9], "repo_paths": ["else/project"]}
+    {"id": "manual", "name": "Else", "slug": "DEMO", "created_at": "", "repository_ids": [12], "repo_paths": ["else/project"]},
+    {"id": "abcdefgh-clock-a", "name": "Clock", "created_at": "2026-04-01T00:00:00.123900Z", "repository_ids": [13], "repo_paths": ["clock/a"]},
+    {"id": "abcdefgh-clock-b", "name": "Clock", "created_at": "2026-04-01T00:00:00.123100Z", "repository_ids": [14], "repo_paths": ["clock/b"]},
+    {"id": "datexxxx-z", "name": "Day", "created_at": "2026-05-01T00:00:00Z", "repository_ids": [15], "repo_paths": ["day/z"]},
+    {"id": "datexxxx-only", "name": "Day", "created_at": "2026-05-01", "repository_ids": [16], "repo_paths": ["day/only"]}
   ],
   "expected_slugs": {
     "5d78d4b9-35f9-4445-92c1-78f3ff60a494": "acme-other",
@@ -26,7 +40,15 @@
     "abcdefgh-three": "demo-abcdefgh-3",
     "abcdefgh-two": "demo-abcdefgh-2",
     "repo:4": "acme-widgets",
-    "manual": "DEMO"
+    "manual": "DEMO",
+    "punctuation": "a-b",
+    "unicode": "unicode",
+    "sort-a": "sort-sort-a",
+    "sort_a": "sort-sort-a-2",
+    "abcdefgh-clock-a": "clock-abcdefgh",
+    "abcdefgh-clock-b": "clock-abcdefgh-2",
+    "datexxxx-z": "day-datexxxx-2",
+    "datexxxx-only": "day-datexxxx"
   },
   "references": [
     {"ref": "ACME-OTHER", "id": "5d78d4b9-35f9-4445-92c1-78f3ff60a494"},

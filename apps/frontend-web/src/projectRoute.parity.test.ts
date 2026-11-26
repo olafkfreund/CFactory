@@ -1,10 +1,24 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import fixture from "../../../tests/data/projects.json";
 import { deriveProjects, findProjectByRef, projectSlugs, slugify } from "./projectRoute";
 import type { CockpitProject } from "./projectRoute";
 
+type FixtureProject = {
+  id: string; name: string; slug?: string; created_at: string; server_canonical?: boolean;
+  repository_ids: number[]; repo_paths: string[];
+};
+type Fixture = {
+  repositories: ({ id: number; project: string; aifactory_project_id: string | null; created_at: string } & Record<string, unknown>)[];
+  expected_projects: FixtureProject[];
+  extra_projects: FixtureProject[];
+  expected_slugs: Record<string, string>;
+  references: { ref: string; id: string | null }[];
+};
+
 describe("project derivation parity fixture", () => {
   it("matches the shared project, slug, and reference cases", () => {
+    // read at run time: the fixture lives outside this package, which the frontend Docker build copies alone
+    const fixture = JSON.parse(readFileSync(new URL("../../../tests/data/projects.json", import.meta.url), "utf8")) as Fixture;
     // The portal differs on ICU path order; PR B makes the server list canonical.
     const canonicalIds = new Set(fixture.expected_projects.filter((p) => "server_canonical" in p).map((p) => p.id));
     const repositories = fixture.repositories.filter((repo) => !canonicalIds.has(repo.aifactory_project_id ?? "")).map((repo) => ({

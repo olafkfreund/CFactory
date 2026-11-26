@@ -43,7 +43,12 @@ def test_project_rules() -> None:
     missing_slug = {"id": "x", "name": "X", "repo_paths": [], "created_at": "", "slug": None}
     assert projects.matching_projects([missing_slug], "") == []
     assert projects.find_project([missing_slug], "missing") is None
-    assert projects.matching_projects([{"id": "x", "name": "X", "repo_paths": [], "created_at": ""}], "") == []
+    assert (
+        projects.matching_projects(
+            [{"id": "x", "name": "X", "repo_paths": [], "created_at": ""}], ""
+        )
+        == []
+    )
 
 
 def test_date_only_is_utc_but_naive_datetime_is_local() -> None:
@@ -51,7 +56,7 @@ def test_date_only_is_utc_but_naive_datetime_is_local() -> None:
     # Compared against this process's own local time, so other tests' TZ state can't break it.
     day = projects._created({"created_at": "2026-05-01"})
     assert day == projects._created({"created_at": "2026-05-01T00:00:00Z"})
-    local = trunc(datetime(2026, 5, 1).timestamp() * 1000)
+    local = trunc(datetime(2026, 5, 1).timestamp() * 1000)  # noqa: DTZ001 - naive on purpose
     assert projects._created({"created_at": "2026-05-01T00:00:00"}) == local
 
 
@@ -68,9 +73,7 @@ def test_rest_and_mcp_are_read_scoped_and_tenant_bound(
             acme_connection.id,
             GitRepositoryCreate(project=path, aifactory_project_id="acme-project"),
         )
-    other_store.create_repository(
-        other_connection.id, GitRepositoryCreate(project="other/private")
-    )
+    other_store.create_repository(other_connection.id, GitRepositoryCreate(project="other/private"))
     settings = Settings(multi_tenant=True)
     keystore = auth.KeyStore({"reader-key": {READ}, "writer-key": {"write"}})
     monkeypatch.setattr(api_deps, "get_settings", lambda: settings)
@@ -78,8 +81,14 @@ def test_rest_and_mcp_are_read_scoped_and_tenant_bound(
     monkeypatch.setattr(routes_git_config, "get_settings", lambda: settings)
     monkeypatch.setattr(mcp, "get_settings", lambda: settings)
     monkeypatch.setattr(mcp, "get_keystore", lambda: keystore)
-    monkeypatch.setattr(mcp, "cards_store_dep", lambda tenant=None: cards.scoped(tenant or "default"))
-    monkeypatch.setattr(mcp, "get_audit_store", lambda: AuditStore(f"sqlite:///{tmp_path / 'audit.db'}", hmac_secret="test"))
+    monkeypatch.setattr(
+        mcp, "cards_store_dep", lambda tenant=None: cards.scoped(tenant or "default")
+    )
+    monkeypatch.setattr(
+        mcp,
+        "get_audit_store",
+        lambda: AuditStore(f"sqlite:///{tmp_path / 'audit.db'}", hmac_secret="test"),  # noqa: S106 - test-only HMAC key
+    )
     app = create_app()
     app.dependency_overrides[auth.keystore_dep] = lambda: keystore
     client = TestClient(app)
@@ -87,17 +96,23 @@ def test_rest_and_mcp_are_read_scoped_and_tenant_bound(
     url = "/api/tenants/acme/projects"
     listed = client.get(url, headers=headers)
     assert listed.status_code == 200
-    assert listed.json() == [{
-        "id": "acme-project", "name": "widgets", "slug": "widgets", "created_at": listed.json()[0]["created_at"],
-        "repository_ids": [1, 2], "repo_paths": ["acme/other", "acme/widgets"],
-    }]
+    assert listed.json() == [
+        {
+            "id": "acme-project",
+            "name": "widgets",
+            "slug": "widgets",
+            "created_at": listed.json()[0]["created_at"],
+            "repository_ids": [1, 2],
+            "repo_paths": ["acme/other", "acme/widgets"],
+        }
+    ]
     assert client.get(f"{url}/resolve", params={"ref": "missing"}, headers=headers).json() == {
         "error": "unknown"
     }
     assert (
-        client.get(f"{url}/resolve", params={"ref": "widgets"}, headers=headers).json()[
-            "project"
-        ]["id"]
+        client.get(f"{url}/resolve", params={"ref": "widgets"}, headers=headers).json()["project"][
+            "id"
+        ]
         == "acme-project"
     )
     assert client.get(url, headers={**headers, "X-Tenant-Id": "other"}).status_code == 403
@@ -106,7 +121,10 @@ def test_rest_and_mcp_are_read_scoped_and_tenant_bound(
     assert len(other_projects) == 1
     assert other_projects[0]["repo_paths"] == ["other/private"]
     assert other_projects[0]["id"] != "acme-project"
-    assert client.get(url, headers={**headers, "Authorization": "Bearer writer-key"}).status_code == 403
+    assert (
+        client.get(url, headers={**headers, "Authorization": "Bearer writer-key"}).status_code
+        == 403
+    )
 
     assert mcp.TOOL_SCOPES["cfactory_list_projects"] == READ
     assert mcp.TOOL_SCOPES["cfactory_resolve_project"] == READ
@@ -140,8 +158,14 @@ def test_rest_and_mcp_are_read_scoped_and_tenant_bound(
     )
     assert json.loads(other.json()["result"]["content"][0]["text"]) == other_projects
     denied = client.post(
-        "/mcp", headers={**headers, "Authorization": "Bearer writer-key"},
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "cfactory_list_projects", "arguments": {}}},
+        "/mcp",
+        headers={**headers, "Authorization": "Bearer writer-key"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "cfactory_list_projects", "arguments": {}},
+        },
     )
     assert denied.status_code == 403
     assert "read" in denied.json()["detail"]

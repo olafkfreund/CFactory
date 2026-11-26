@@ -1,103 +1,28 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { CardSchema, GitConnectionsSchema, WorkItemSchema } from "./api";
+import { CardSchema, WorkItemSchema } from "./api";
 import BacklogView from "./BacklogView";
 import PlanningBoard from "./PlanningBoard";
 import type { CockpitProject } from "./projectRoute";
 import {
   buildCockpitPath,
-  deriveProjects,
   filterCardsForProject,
   filterWorkItemsForProject,
-  findProjectByRef,
   parseCockpitRoute,
-  projectSlug,
-  projectSlugs,
-  slugify,
 } from "./projectRoute";
 import { initialRouteState } from "./useDashboard";
 
 const project = (id: string, name: string, createdAt = "2026-01-01"): CockpitProject => ({
   id,
   name,
+  slug: name.toLowerCase(),
   createdAt,
   repositoryIds: [1],
   repoPaths: ["acme/widgets"],
 });
 
 describe("project routes", () => {
-  it("derives grouped and fallback projects from git connections", () => {
-    const connections = GitConnectionsSchema.parse({
-      connections: [
-        {
-          id: 1,
-          tenant_id: "default",
-          provider: "github",
-          base_url: "https://github.com",
-          label: "github",
-          status: "configured",
-          repositories: [
-            {
-              id: 1,
-              connection_id: 1,
-              tenant_id: "default",
-              project: "acme/widgets",
-              aifactory_project_id: "uuid-a",
-              created_at: "2026-01-02",
-            },
-            {
-              id: 2,
-              connection_id: 1,
-              tenant_id: "default",
-              project: "acme/other",
-              aifactory_project_id: "uuid-a",
-              created_at: "2026-01-01",
-            },
-            {
-              id: 3,
-              connection_id: 1,
-              tenant_id: "default",
-              project: "else/widgets",
-              aifactory_project_id: "uuid-b",
-            },
-            { id: 4, connection_id: 1, tenant_id: "default", project: "acme/free" },
-          ],
-        },
-      ],
-    });
-    const projects = deriveProjects(connections);
-    expect(projects).toHaveLength(3);
-    expect(projects[0]).toMatchObject({
-      id: "uuid-a",
-      name: "acme/other",
-      createdAt: "2026-01-01",
-      repositoryIds: [1, 2],
-      repoPaths: ["acme/other", "acme/widgets"],
-    });
-    expect(projects[1]).toMatchObject({ id: "repo:4", name: "acme/free" });
-    expect(projects[2]?.name).toBe("else/widgets");
-    expect(deriveProjects(null)).toEqual([]);
-  });
-
-  it("uses the reference slug order and resolves canonical slugs before IDs and aliases", () => {
-    const older = project("abcdefgh-old", "Demo", "2025-01-01");
-    const newer = project("abcdefgh-new", "Demo", "2026-01-01");
-    const namedLikeId = project("demo", "Other");
-    const projects = [newer, older, namedLikeId];
-    expect(slugify("Café / Widgets", "fallback")).toBe("cafe-widgets");
-    expect(slugify("---", "fallback")).toBe("fallback");
-    expect(projectSlugs(projects).get(older.id)).toBe("demo-abcdefgh");
-    expect(projectSlugs(projects).get(newer.id)).toBe("demo-abcdefgh-2");
-    expect(projectSlug(projects, older)).toBe("demo-abcdefgh");
-    expect(findProjectByRef(projects, "demo")).toBe(namedLikeId);
-    expect(findProjectByRef(projects, "ABCDEFGH-NEW")).toBe(newer);
-    expect(findProjectByRef(projects, "acme-widgets")).toBeUndefined();
-    expect(findProjectByRef([older, newer], "demo")).toBeUndefined();
-    expect(projectSlugs([newer, older])).toEqual(projectSlugs([older, newer]));
-    expect(projectSlugs([{ ...older, slug: "DEMO" }, project("other", "demo")]).get("other")).not.toBe("demo");
-  });
-
   it("parses and builds cross-project and project paths", () => {
     expect(parseCockpitRoute("/")).toEqual({ kind: "all", view: "overview", canonical: "/" });
     expect(parseCockpitRoute("/planning")).toEqual({
@@ -211,13 +136,37 @@ describe("project filters", () => {
     expect(filterWorkItemsForProject(items, null, [], [], null)).toBe(items);
     const beta = { ...active, id: "beta", repositoryIds: [2], repoPaths: ["acme/other"] };
     const conflicting = [item("task-two", "acme/widgets"), item("unknown", "acme/widgets")];
-    expect(filterWorkItemsForProject(conflicting, active, cards, [active, beta], 1).map((w) => w.correlation_key)).toEqual(["unknown"]);
-    expect(filterWorkItemsForProject(conflicting, beta, cards, [active, beta], 1).map((w) => w.correlation_key)).toEqual(["task-two"]);
-    expect(filterWorkItemsForProject([item("unknown", "acme/widgets")], active, [], [active, { ...beta, repoPaths: ["acme/widgets"] }], 1)).toEqual([]);
-    expect(filterWorkItemsForProject([item("task-one", "acme/widgets")], active, [cards[0]!, { ...cards[0]!, repository_id: 2 }], [active, beta], 1)).toEqual([]);
+    expect(
+      filterWorkItemsForProject(conflicting, active, cards, [active, beta], 1).map(
+        (w) => w.correlation_key,
+      ),
+    ).toEqual(["unknown"]);
+    expect(
+      filterWorkItemsForProject(conflicting, beta, cards, [active, beta], 1).map(
+        (w) => w.correlation_key,
+      ),
+    ).toEqual(["task-two"]);
+    expect(
+      filterWorkItemsForProject(
+        [item("unknown", "acme/widgets")],
+        active,
+        [],
+        [active, { ...beta, repoPaths: ["acme/widgets"] }],
+        1,
+      ),
+    ).toEqual([]);
+    expect(
+      filterWorkItemsForProject(
+        [item("task-one", "acme/widgets")],
+        active,
+        [cards[0]!, { ...cards[0]!, repository_id: 2 }],
+        [active, beta],
+        1,
+      ),
+    ).toEqual([]);
   });
 
-  it("initialises route state, rewrites redirects/aliases, and renders project-scoped planning views", () => {
+  it("initialises route state and renders project-scoped planning views", () => {
     expect(initialRouteState("/")).toEqual({
       view: "overview",
       projectRef: null,

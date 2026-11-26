@@ -10,6 +10,10 @@ import {
   HealthSchema,
   proposeAction,
   ProcessDetailSchema,
+  ProjectResolveResponseSchema,
+  ProjectsResponseSchema,
+  resolveProject,
+  fetchProjects,
   VerificationBlockSchema,
   ServiceStateSchema,
   ServiceStatusSchema,
@@ -465,5 +469,52 @@ describe("proposeAction error mapping (#467)", () => {
     await expect(proposeAction("approve_review", "42")).rejects.toThrow(
       "no actionable task for this item",
     );
+  });
+});
+
+describe("projects API (#52)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const sampleProject = {
+    id: "5d78d4b9-35f9-4445-92c1-78f3ff60a494",
+    name: "widgets",
+    slug: "widgets",
+    repository_ids: [1, 2],
+    repo_paths: ["acme/other", "acme/widgets"],
+    created_at: "2026-01-01",
+  };
+
+  it("parses project list and resolve responses", () => {
+    expect(ProjectsResponseSchema.parse([sampleProject])).toEqual([sampleProject]);
+    expect(ProjectResolveResponseSchema.parse({ project: sampleProject })).toEqual({
+      project: sampleProject,
+    });
+    expect(ProjectResolveResponseSchema.parse({ error: "unknown" })).toEqual({
+      error: "unknown",
+    });
+    expect(ProjectResolveResponseSchema.parse({ error: "ambiguous" })).toEqual({
+      error: "ambiguous",
+    });
+    expect(() => ProjectResolveResponseSchema.parse({ error: "other" })).toThrow();
+  });
+
+  it("calls the tenant projects and resolve endpoints", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify([sampleProject]), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ project: sampleProject }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchProjects("acme")).resolves.toEqual([sampleProject]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/tenants/acme/projects");
+
+    await expect(resolveProject("acme", "acme/widgets")).resolves.toEqual({
+      project: sampleProject,
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/tenants/acme/projects/resolve?ref=acme%2Fwidgets");
   });
 });

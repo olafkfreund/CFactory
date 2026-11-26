@@ -256,7 +256,7 @@ export default function App() {
   return (
     <AppShell
       portal="cockpit"
-      portalProject={activeProject && activeProjectSlug && !activeProject.id.startsWith("repo:") ? { slug: activeProjectSlug, portals: ["plan", "build", "test", "cockpit"] } : undefined}
+      portalProject={activeProject && activeProjectSlug && !activeProject.id.startsWith("repo:") ? { slug: activeProjectSlug, portals: ["plan", "build", "test", "cockpit", "meet"] } : undefined}
       nav={NAV.filter((entry) => entry.id !== "settings").map(({ id, label, Icon }) => ({ id, label: scoped && ["tokens", "audit", "services"].includes(id) ? `${label} (fleet-wide)` : label, icon: <Icon size={18} />, ...(id === "needs" ? { badge: needsCount } : {}) }))}
       activeNav={view}
       onNavigate={(id) => setView(id as typeof view)}

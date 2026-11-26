@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CardSchema, GitConnectionsSchema, WorkItemSchema } from "./api";
-import type { Card, GitConnections, WorkItem } from "./api";
+import type { Card, GitConnections, ServerProject, WorkItem } from "./api";
 import { useDashboard } from "./useDashboard";
 import ProjectBreadcrumb from "./ProjectBreadcrumb";
 import PortalSwitcher from "./PortalSwitcher";
@@ -18,6 +18,8 @@ const api = vi.hoisted(() => ({
   patchCard: vi.fn(),
   fetchSettings: vi.fn(),
   fetchGitConnections: vi.fn(),
+  fetchProjects: vi.fn(),
+  resolveProject: vi.fn(),
   fetchProgress: vi.fn(),
   fetchHealth: vi.fn(),
   fetchCardSyncState: vi.fn(),
@@ -32,7 +34,23 @@ vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
   ...api,
 }));
-vi.mock("./LiveAgents", () => ({ default: ({ onOpenConsole }: { onOpenConsole?: (agent: unknown) => void }) => <button onClick={() => onOpenConsole?.({ correlation_key: "alpha-task", ws_path: "/console", title: "Alpha agent", phase: null })}>Live agent console</button>, AgentTerminal: () => null }));
+vi.mock("./LiveAgents", () => ({
+  default: ({ onOpenConsole }: { onOpenConsole?: (agent: unknown) => void }) => (
+    <button
+      onClick={() =>
+        onOpenConsole?.({
+          correlation_key: "alpha-task",
+          ws_path: "/console",
+          title: "Alpha agent",
+          phase: null,
+        })
+      }
+    >
+      Live agent console
+    </button>
+  ),
+  AgentTerminal: () => null,
+}));
 
 const connections: GitConnections = GitConnectionsSchema.parse({
   default_repository_id: 1,
@@ -63,6 +81,24 @@ const connections: GitConnections = GitConnectionsSchema.parse({
     },
   ],
 });
+const serverProjects: ServerProject[] = [
+  {
+    id: "alpha-id",
+    name: "Server Alpha",
+    slug: "alpha",
+    repository_ids: [1],
+    repo_paths: ["acme/alpha"],
+    created_at: "",
+  },
+  {
+    id: "beta-id",
+    name: "Server Beta",
+    slug: "beta",
+    repository_ids: [2],
+    repo_paths: ["acme/beta"],
+    created_at: "",
+  },
+];
 const card = (key: string, repo: number): Card =>
   CardSchema.parse({
     card_key: key,
@@ -118,8 +154,13 @@ beforeEach(() => {
     Event: dom.window.Event,
     HTMLElement: dom.window.HTMLElement,
     IS_REACT_ACT_ENVIRONMENT: true,
-    requestAnimationFrame: (callback: FrameRequestCallback) => dom.window.setTimeout(() => { callback(performance.now()); }, 0),
-    cancelAnimationFrame: (id: number) => { dom.window.clearTimeout(id); },
+    requestAnimationFrame: (callback: FrameRequestCallback) =>
+      dom.window.setTimeout(() => {
+        callback(performance.now());
+      }, 0),
+    cancelAnimationFrame: (id: number) => {
+      dom.window.clearTimeout(id);
+    },
   });
   dom.window.HTMLElement.prototype.scrollIntoView = () => undefined;
   Object.assign(dom.window.HTMLElement.prototype, {
@@ -134,9 +175,22 @@ beforeEach(() => {
     work("beta-task", "acme/beta"),
   ]);
   api.fetchCards.mockResolvedValue([card("alpha-task", 1), card("beta-task", 2)]);
-  api.patchCard.mockImplementation((key: string, patch: object) => Promise.resolve({ ...card(key, 1), ...patch }));
+  api.patchCard.mockImplementation((key: string, patch: object) =>
+    Promise.resolve({ ...card(key, 1), ...patch }),
+  );
   api.fetchSettings.mockResolvedValue({ tenant: "default" });
   api.fetchGitConnections.mockResolvedValue(connections);
+  api.fetchProjects.mockResolvedValue(serverProjects);
+  api.resolveProject.mockImplementation((_tenant: string, ref: string) => {
+    const lower = ref.toLowerCase();
+    const match = serverProjects.find(
+      (p) =>
+        p.slug.toLowerCase() === lower ||
+        p.id.toLowerCase() === lower ||
+        p.repo_paths.some((r) => r.replace("/", "-").toLowerCase() === lower),
+    );
+    return Promise.resolve(match ? { project: match } : { error: "unknown" as const });
+  });
   api.fetchProgress.mockResolvedValue([]);
   api.fetchHealth.mockResolvedValue({ upstreams: {} });
   api.fetchCardSyncState.mockResolvedValue({
@@ -185,6 +239,7 @@ function RouteProbe() {
       <span data-testid="path">
         {d.projectRef ?? "all"}:{d.view}
       </span>
+      <span data-testid="active-name">{d.activeProject?.name ?? "none"}</span>
       <span data-testid="items">{d.items.map((item) => item.correlation_key).join(",")}</span>
       <span data-testid="pins">{d.pins.map((pin) => pin.key).join(",")}</span>
       <span data-testid="toasts">{d.toasts.map((toast) => toast.ev.key).join(",")}</span>
@@ -272,7 +327,7 @@ describe("mounted project routes", () => {
   });
 
   it("exposes project fetch failure and retries", async () => {
-    api.fetchGitConnections.mockRejectedValueOnce(new Error("connection unavailable"));
+    api.fetchProjects.mockRejectedValueOnce(new Error("projects unavailable"));
     api.refresh.mockRejectedValueOnce(new Error("refresh unavailable"));
     dom.window.history.replaceState({}, "", "/p/alpha");
     await mount(<App />);
@@ -287,34 +342,28 @@ describe("mounted project routes", () => {
   });
 
   it("offers project choices for an ambiguous alias without linking it to siblings", async () => {
-    api.fetchGitConnections.mockResolvedValueOnce(
-      GitConnectionsSchema.parse({
-        ...connections,
-        connections: [
-          {
-            ...connections.connections[0],
-            repositories: [
-              {
-                id: 1,
-                connection_id: 1,
-                tenant_id: "default",
-                project: "acme/shared",
-                aifactory_project_id: "alpha",
-              },
-              {
-                id: 2,
-                connection_id: 1,
-                tenant_id: "default",
-                project: "acme/shared",
-                aifactory_project_id: "beta",
-              },
-            ],
-          },
-        ],
-      }),
-    );
+    api.fetchProjects.mockResolvedValueOnce([
+      {
+        id: "alpha",
+        name: "shared",
+        slug: "shared-alpha",
+        repository_ids: [1],
+        repo_paths: ["acme/shared"],
+        created_at: "",
+      },
+      {
+        id: "beta",
+        name: "shared",
+        slug: "shared-beta",
+        repository_ids: [2],
+        repo_paths: ["acme/shared"],
+        created_at: "",
+      },
+    ]);
+    api.resolveProject.mockResolvedValueOnce({ error: "ambiguous" });
     dom.window.history.replaceState({}, "", "/p/acme-shared");
     await mount(<App />);
+    expect(api.resolveProject).toHaveBeenCalledWith("default", "acme-shared");
     expect(host.textContent).toContain("Choose a project");
     expect(host.querySelectorAll(".mc-panel button")).toHaveLength(3);
     expect(host.querySelector('a[href*="/p/"]')).toBeNull();
@@ -327,6 +376,222 @@ describe("mounted project routes", () => {
     );
     expect(dom.window.location.pathname).toBe("/");
   });
+
+  it("resolves /p/<ref> through the server for slug, id and alias routes and uses the returned project", async () => {
+    const customProject: ServerProject = {
+      id: "alpha-id",
+      name: "Resolver Only Name",
+      slug: "server-only-slug",
+      repository_ids: [1],
+      repo_paths: ["acme/alpha"],
+      created_at: "",
+    };
+    api.resolveProject.mockResolvedValue({ project: customProject });
+
+    dom.window.history.replaceState({}, "", "/p/alpha/planning");
+    await mount(<RouteProbe />);
+    expect(api.resolveProject).toHaveBeenCalledWith("default", "alpha");
+    expect(dom.window.location.pathname).toBe("/p/server-only-slug/planning");
+    expect(host.querySelector('[data-testid="active-name"]')?.textContent).toBe(
+      "Resolver Only Name",
+    );
+    expect(host.querySelector('[data-testid="items"]')?.textContent).toBe("alpha-task");
+
+    dom.window.history.pushState({}, "", "/p/alpha-id/planning");
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+      await Promise.resolve();
+    });
+    expect(api.resolveProject).toHaveBeenCalledWith("default", "alpha-id");
+    expect(dom.window.location.pathname).toBe("/p/server-only-slug/planning");
+    expect(host.querySelector('[data-testid="active-name"]')?.textContent).toBe(
+      "Resolver Only Name",
+    );
+
+    dom.window.history.pushState({}, "", "/p/acme-alpha/planning");
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+      await Promise.resolve();
+    });
+    expect(api.resolveProject).toHaveBeenCalledWith("default", "acme-alpha");
+    expect(dom.window.location.pathname).toBe("/p/server-only-slug/planning");
+    expect(host.querySelector('[data-testid="active-name"]')?.textContent).toBe(
+      "Resolver Only Name",
+    );
+  });
+
+  it("asks the server again when returning to a project after the fleet view", async () => {
+    dom.window.history.replaceState({}, "", "/p/alpha/planning");
+    await mount(<RouteProbe />);
+    const first = api.resolveProject.mock.calls.length;
+    expect(first).toBeGreaterThan(0);
+    for (const path of ["/planning", "/p/alpha/planning"]) {
+      dom.window.history.pushState({}, "", path);
+      await act(async () => {
+        dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+        await Promise.resolve();
+      });
+    }
+    expect(api.resolveProject.mock.calls.length).toBeGreaterThan(first);
+    expect(api.resolveProject).toHaveBeenLastCalledWith("default", "alpha");
+  });
+
+  it("ignores a deferred resolve response that arrives after a route change", async () => {
+    let resolveAlpha!: (value: { project: ServerProject }) => void;
+    api.resolveProject.mockImplementation((_tenant: string, ref: string) => {
+      if (ref === "alpha") {
+        return new Promise<{ project: ServerProject }>((resolve) => {
+          resolveAlpha = resolve;
+        });
+      }
+      return Promise.resolve({ project: must(serverProjects[1]) });
+    });
+
+    dom.window.history.replaceState({}, "", "/p/alpha/planning");
+    await mount(<RouteProbe />);
+    expect(host.querySelector('[data-testid="active-name"]')?.textContent).toBe("none");
+
+    dom.window.history.pushState({}, "", "/p/beta/planning");
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="active-name"]')?.textContent).toBe("Server Beta");
+    expect(host.querySelector('[data-testid="items"]')?.textContent).toBe("beta-task");
+
+    await act(async () => {
+      resolveAlpha({ project: must(serverProjects[0]) });
+      await Promise.resolve();
+    });
+    expect(dom.window.location.pathname).toBe("/p/beta/planning");
+    expect(host.querySelector('[data-testid="active-name"]')?.textContent).toBe("Server Beta");
+    expect(host.querySelector('[data-testid="items"]')?.textContent).toBe("beta-task");
+  });
+
+  it("does not block another project route after a resolve error on one ref", async () => {
+    api.resolveProject.mockImplementation((_tenant: string, ref: string) => {
+      if (ref === "broken-ref") {
+        return Promise.reject(new Error("resolve explosion"));
+      }
+      return Promise.resolve({ project: must(serverProjects[1]) });
+    });
+
+    dom.window.history.replaceState({}, "", "/p/broken-ref");
+    await mount(<App />);
+    expect(host.textContent).toContain("Could not load projects");
+    expect(host.textContent).toContain("resolve explosion");
+
+    dom.window.history.pushState({}, "", "/p/beta/settings");
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+      await Promise.resolve();
+    });
+    expect(host.textContent).not.toContain("Could not load projects");
+    expect(host.textContent).toContain("Project Settings");
+    expect(host.textContent).toContain("Server Beta");
+  });
+
+  it("keeps only the newest response when catalog loads overlap", async () => {
+    let resolveFirst!: (value: ServerProject[]) => void;
+    let callCount = 0;
+    api.fetchProjects.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 1) {
+        return new Promise<ServerProject[]>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve([
+        {
+          id: "fresh-id",
+          name: "Fresh Catalog Project",
+          slug: "fresh",
+          repository_ids: [1],
+          repo_paths: ["acme/alpha"],
+          created_at: "",
+        },
+      ]);
+    });
+
+    function CatalogProbe() {
+      const d = useDashboard();
+      return (
+        <div>
+          <span data-testid="catalog">{d.projects.map((p) => p.name).join(",")}</span>
+          <button
+            onClick={() => {
+              void d.retryProjects();
+            }}
+          >
+            Reload catalog
+          </button>
+        </div>
+      );
+    }
+
+    await mount(<CatalogProbe />);
+    await click(must(host.querySelector("button")));
+    expect(host.querySelector('[data-testid="catalog"]')?.textContent).toBe(
+      "Fresh Catalog Project",
+    );
+
+    await act(async () => {
+      resolveFirst([
+        {
+          id: "stale-id",
+          name: "Stale Catalog Project",
+          slug: "stale",
+          repository_ids: [1],
+          repo_paths: ["acme/alpha"],
+          created_at: "",
+        },
+      ]);
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="catalog"]')?.textContent).toBe(
+      "Fresh Catalog Project",
+    );
+  });
+
+  it("links Meet to <meet url>/p/<slug> for a grouped project and plain Meet URL for a repo: project", async () => {
+    const repoProject: ServerProject = {
+      id: "repo:3",
+      name: "acme/free",
+      slug: "acme-free",
+      repository_ids: [3],
+      repo_paths: ["acme/free"],
+      created_at: "",
+    };
+    const allProjects = [...serverProjects, repoProject];
+    api.fetchProjects.mockResolvedValue(allProjects);
+    api.resolveProject.mockImplementation((_tenant: string, ref: string) => {
+      const match = allProjects.find((p) => p.slug === ref || p.id === ref);
+      return Promise.resolve(match ? { project: match } : { error: "unknown" as const });
+    });
+    dom.window.history.replaceState({}, "", "/p/alpha/settings");
+    await mount(<App />);
+    expect(host.textContent).toContain("Server Alpha");
+    const groupedMeet = must(
+      [...host.querySelectorAll<HTMLAnchorElement>(".f-portal-switcher__item")].find((el) =>
+        el.textContent.includes("Meet"),
+      ),
+    );
+    expect(groupedMeet.getAttribute("href")).toBe("https://rfactory.freundcloud.org.uk/p/alpha");
+
+    dom.window.history.pushState({}, "", "/p/acme-free/settings");
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+      await Promise.resolve();
+    });
+    expect(host.textContent).toContain("Project Settings");
+    expect(host.textContent).toContain("acme/free");
+    const repoMeet = must(
+      [...host.querySelectorAll<HTMLAnchorElement>(".f-portal-switcher__item")].find((el) =>
+        el.textContent.includes("Meet"),
+      ),
+    );
+    expect(repoMeet.getAttribute("href")).toBe("https://rfactory.freundcloud.org.uk");
+  });
 });
 
 describe("mounted project controls", () => {
@@ -336,29 +601,60 @@ describe("mounted project controls", () => {
     await click(trigger);
     const input = must(host.querySelector(".f-project-switcher__input"));
     await act(async () => {
-      input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      input.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
       input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       await Promise.resolve();
     });
     expect(dom.window.location.pathname).toMatch(/^\/p\//);
     await click(must(host.querySelector(".f-project-switcher__trigger")));
-    await click(must([...host.querySelectorAll(".f-project-switcher__action")].find((button) => button.textContent === "All projects")));
+    await click(
+      must(
+        [...host.querySelectorAll(".f-project-switcher__action")].find(
+          (button) => button.textContent === "All projects",
+        ),
+      ),
+    );
     expect(dom.window.location.pathname).toBe("/");
   });
 
   it("opens navigation by Ctrl+1 through Ctrl+9, search by Ctrl+K, and fleet settings", async () => {
-    api.fetchSettings.mockResolvedValue({ tenant: "default", provider: "claude", model: "claude-opus-5-5", providers: ["claude"] });
+    api.fetchSettings.mockResolvedValue({
+      tenant: "default",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      providers: ["claude"],
+    });
     await mount(<App />);
-    const paths = ["/", "/needs", "/backlog", "/planning", "/pipeline", "/running", "/tokens", "/audit", "/services"];
+    const paths = [
+      "/",
+      "/needs",
+      "/backlog",
+      "/planning",
+      "/pipeline",
+      "/running",
+      "/tokens",
+      "/audit",
+      "/services",
+    ];
     for (let index = 1; index <= 9; index++) {
       await act(async () => {
-        dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: String(index), ctrlKey: true, bubbles: true }));
+        dom.window.dispatchEvent(
+          new dom.window.KeyboardEvent("keydown", {
+            key: String(index),
+            ctrlKey: true,
+            bubbles: true,
+          }),
+        );
         await Promise.resolve();
       });
       expect(dom.window.location.pathname).toBe(paths[index - 1]);
     }
     await act(async () => {
-      dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
+      dom.window.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }),
+      );
       await Promise.resolve();
     });
     expect(host.querySelector('[role="dialog"]')).not.toBeNull();
@@ -367,7 +663,10 @@ describe("mounted project controls", () => {
   });
 
   it("toggles strip stages and clears stage and failure filters together", async () => {
-    api.fetchWorkItems.mockResolvedValue([work("failed-plan", "acme/alpha", "failed"), work("queued-plan", "acme/alpha", "queued")]);
+    api.fetchWorkItems.mockResolvedValue([
+      work("failed-plan", "acme/alpha", "failed"),
+      work("queued-plan", "acme/alpha", "queued"),
+    ]);
     await mount(<App />);
     await click(must(host.querySelector(".f-strip__fail")));
     expect(host.querySelector(".rt-chip--failed.active")).not.toBeNull();
@@ -381,25 +680,54 @@ describe("mounted project controls", () => {
   });
 
   it("clears a failed chip when the palette selects Code", async () => {
-    api.fetchWorkItems.mockResolvedValue([work("failed-plan", "acme/alpha", "failed"), work("queued-plan", "acme/alpha", "queued")]);
+    api.fetchWorkItems.mockResolvedValue([
+      work("failed-plan", "acme/alpha", "failed"),
+      work("queued-plan", "acme/alpha", "queued"),
+    ]);
     await mount(<App />);
     await click(must(host.querySelector(".f-strip__fail")));
     expect(host.querySelector(".rt-chip--failed.active")).not.toBeNull();
-    await click(must([...host.querySelectorAll("button.f-side__item")].find((button) => button.textContent === "Mission Control")));
+    await click(
+      must(
+        [...host.querySelectorAll("button.f-side__item")].find(
+          (button) => button.textContent === "Mission Control",
+        ),
+      ),
+    );
     await act(async () => {
-      dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
+      dom.window.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }),
+      );
       await Promise.resolve();
     });
-    await click(must([...host.querySelectorAll('[role="option"]')].find((row) => row.textContent.includes("Filter board · Code stage"))));
+    await click(
+      must(
+        [...host.querySelectorAll('[role="option"]')].find((row) =>
+          row.textContent.includes("Filter board · Code stage"),
+        ),
+      ),
+    );
     expect(dom.window.location.pathname).toBe("/pipeline");
     expect(host.querySelector(".rt-chip--failed.active")).toBeNull();
   });
 
   it("keeps a live console across views and closes it when project scope changes", async () => {
     await mount(<App />);
-    await click(must([...host.querySelectorAll("button")].find((button) => button.textContent === "Live agent console")));
+    await click(
+      must(
+        [...host.querySelectorAll("button")].find(
+          (button) => button.textContent === "Live agent console",
+        ),
+      ),
+    );
     expect(host.querySelector(".mc-term-modal")?.textContent).toContain("Alpha agent");
-    await click(must([...host.querySelectorAll("button.f-side__item")].find((button) => button.textContent === "Pipeline")));
+    await click(
+      must(
+        [...host.querySelectorAll("button.f-side__item")].find(
+          (button) => button.textContent === "Pipeline",
+        ),
+      ),
+    );
     expect(host.querySelector(".mc-term-modal")?.textContent).toContain("Alpha agent");
     dom.window.history.pushState({}, "", "/p/beta/running");
     await act(async () => {
@@ -410,16 +738,42 @@ describe("mounted project controls", () => {
   });
 
   it("keeps a scoped Active Tasks console across views without polling hidden tasks", async () => {
-    api.fetchWorkItems.mockResolvedValue([work("alpha-task", "acme/alpha", "running"), work("beta-task", "acme/beta", "running")]);
-    api.fetchLiveAgents.mockResolvedValue({ rmux_enabled: true, agents: [{ correlation_key: "alpha-task", ws_path: "/console", title: "Alpha agent", phase: null, streamable: true }] });
+    api.fetchWorkItems.mockResolvedValue([
+      work("alpha-task", "acme/alpha", "running"),
+      work("beta-task", "acme/beta", "running"),
+    ]);
+    api.fetchLiveAgents.mockResolvedValue({
+      rmux_enabled: true,
+      agents: [
+        {
+          correlation_key: "alpha-task",
+          ws_path: "/console",
+          title: "Alpha agent",
+          phase: null,
+          streamable: true,
+        },
+      ],
+    });
     dom.window.history.replaceState({}, "", "/p/alpha/settings");
     await mount(<App />);
     expect(api.fetchLiveAgents).not.toHaveBeenCalled();
-    await click(must([...host.querySelectorAll("button.f-side__item")].find((button) => button.textContent === "Active tasks")));
+    await click(
+      must(
+        [...host.querySelectorAll("button.f-side__item")].find(
+          (button) => button.textContent === "Active tasks",
+        ),
+      ),
+    );
     expect(api.fetchLiveAgents).toHaveBeenCalled();
     await click(must(host.querySelector(".rt-console-btn")));
     expect(host.querySelector(".mc-term-modal")?.textContent).toContain("Alpha agent");
-    await click(must([...host.querySelectorAll("button.f-side__item")].find((button) => button.textContent === "Pipeline")));
+    await click(
+      must(
+        [...host.querySelectorAll("button.f-side__item")].find(
+          (button) => button.textContent === "Pipeline",
+        ),
+      ),
+    );
     expect(host.querySelector(".mc-term-modal")?.textContent).toContain("Alpha agent");
     dom.window.history.pushState({}, "", "/p/beta/running");
     await act(async () => {
@@ -430,11 +784,17 @@ describe("mounted project controls", () => {
   });
 
   it("keeps Observe in a new tab and mounts when storage is blocked", async () => {
-    vi.spyOn(dom.window.Storage.prototype, "getItem").mockImplementation(() => { throw new dom.window.DOMException("blocked", "SecurityError"); });
-    vi.spyOn(dom.window.Storage.prototype, "setItem").mockImplementation(() => { throw new dom.window.DOMException("blocked", "SecurityError"); });
+    vi.spyOn(dom.window.Storage.prototype, "getItem").mockImplementation(() => {
+      throw new dom.window.DOMException("blocked", "SecurityError");
+    });
+    vi.spyOn(dom.window.Storage.prototype, "setItem").mockImplementation(() => {
+      throw new dom.window.DOMException("blocked", "SecurityError");
+    });
     await mount(<App />);
     expect(host.textContent).toContain("Mission Control");
-    const observe = must(host.querySelector<HTMLAnchorElement>('a[href="https://observe.freundcloud.org.uk"]'));
+    const observe = must(
+      host.querySelector<HTMLAnchorElement>('a[href="https://observe.freundcloud.org.uk"]'),
+    );
     expect(observe.target).toBe("_blank");
     expect(observe.rel).toContain("noopener");
     await click(must(host.querySelector('[aria-label="Collapse sidebar"]')));
@@ -443,36 +803,87 @@ describe("mounted project controls", () => {
   });
 
   it("caps finished cards at eight and restores project expansion", async () => {
-    api.fetchWorkItems.mockResolvedValue(Array.from({ length: 9 }, (_, i) => work(`done-${String(i)}`, "acme/alpha", "done")));
+    api.fetchWorkItems.mockResolvedValue(
+      Array.from({ length: 9 }, (_, i) => work(`done-${String(i)}`, "acme/alpha", "done")),
+    );
     dom.window.history.replaceState({}, "", "/p/alpha/pipeline");
     await mount(<App />);
-    await click(must([...host.querySelectorAll("button")].find((button) => button.textContent.startsWith("Finished"))));
+    await click(
+      must(
+        [...host.querySelectorAll("button")].find((button) =>
+          button.textContent.startsWith("Finished"),
+        ),
+      ),
+    );
     expect(host.querySelectorAll(".board-finished .f-card")).toHaveLength(8);
-    await click(must([...host.querySelectorAll("button")].find((button) => button.textContent === "Show 1 more")));
+    await click(
+      must(
+        [...host.querySelectorAll("button")].find((button) => button.textContent === "Show 1 more"),
+      ),
+    );
     expect(host.querySelectorAll(".board-finished .f-card")).toHaveLength(9);
     await click(must(host.querySelector('[aria-label="Expand done-0"]')));
     expect(host.querySelector('[aria-label="Collapse done-0"]')).not.toBeNull();
-    await click(must([...host.querySelectorAll("button.f-side__item")].find((button) => button.textContent === "Mission Control")));
-    await click(must([...host.querySelectorAll("button.f-side__item")].find((button) => button.textContent === "Pipeline")));
-    await click(must([...host.querySelectorAll("button")].find((button) => button.textContent.startsWith("Finished"))));
+    await click(
+      must(
+        [...host.querySelectorAll("button.f-side__item")].find(
+          (button) => button.textContent === "Mission Control",
+        ),
+      ),
+    );
+    await click(
+      must(
+        [...host.querySelectorAll("button.f-side__item")].find(
+          (button) => button.textContent === "Pipeline",
+        ),
+      ),
+    );
+    await click(
+      must(
+        [...host.querySelectorAll("button")].find((button) =>
+          button.textContent.startsWith("Finished"),
+        ),
+      ),
+    );
     expect(host.querySelector('[aria-label="Collapse done-0"]')).not.toBeNull();
   });
 
   it("shows the worker subtask when Pipeline progress has no percentage", async () => {
     api.fetchWorkItems.mockResolvedValue([work("alpha-task", "acme/alpha", "running")]);
-    api.fetchProgress.mockResolvedValue([{ correlation_key: "alpha-task", service: "aifactory", phase: "Coding", percent: null, subtask: "Writing tests", updated_at: "2026-01-01" }]);
+    api.fetchProgress.mockResolvedValue([
+      {
+        correlation_key: "alpha-task",
+        service: "aifactory",
+        phase: "Coding",
+        percent: null,
+        subtask: "Writing tests",
+        updated_at: "2026-01-01",
+      },
+    ]);
     dom.window.history.replaceState({}, "", "/p/alpha/pipeline");
     await mount(<App />);
     expect(host.querySelector(".f-card__subtitle")?.textContent).toContain("Writing tests");
   });
 
   it("keeps Open available on pending and rejected pipeline cards", async () => {
-    api.fetchWorkItems.mockResolvedValue([work("pending-plan", "acme/alpha", "pending"), work("rejected-plan", "acme/alpha", "rejected")]);
+    api.fetchWorkItems.mockResolvedValue([
+      work("pending-plan", "acme/alpha", "pending"),
+      work("rejected-plan", "acme/alpha", "rejected"),
+    ]);
     dom.window.history.replaceState({}, "", "/pipeline");
     await mount(<App />);
     for (const key of ["pending-plan", "rejected-plan"]) {
-      if (key === "rejected-plan") await click(must([...host.querySelectorAll("button")].find((button) => button.textContent.startsWith("Finished"))));
-      const card = must([...host.querySelectorAll(".f-card")].find((item) => item.textContent.includes(key)));
+      if (key === "rejected-plan")
+        await click(
+          must(
+            [...host.querySelectorAll("button")].find((button) =>
+              button.textContent.startsWith("Finished"),
+            ),
+          ),
+        );
+      const card = must(
+        [...host.querySelectorAll(".f-card")].find((item) => item.textContent.includes(key)),
+      );
       await click(must(card.querySelector(".f-card__open")));
       expect(host.querySelector('[role="dialog"]')).not.toBeNull();
       const approve = must(host.querySelector<HTMLButtonElement>(".act--approve"));
@@ -551,7 +962,9 @@ describe("mounted project controls", () => {
     await act(async () => {
       title.focus();
       const setter = must(
-        Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")?.set?.bind(title),
+        Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")?.set?.bind(
+          title,
+        ),
       );
       setter("New beta card");
       title.dispatchEvent(new dom.window.KeyboardEvent("keyup", { key: "d", bubbles: true }));
@@ -661,15 +1074,25 @@ describe("mounted project controls", () => {
     );
     await click(codeFailBadge);
     expect(host.textContent).toContain("Code failed but test active");
-    await click(must([...host.querySelectorAll("button")].find((b) => b.textContent.includes("Finished"))));
-    expect(host.querySelector(".board-finished")?.textContent).not.toContain("Code failed but test active");
+    await click(
+      must([...host.querySelectorAll("button")].find((b) => b.textContent.includes("Finished"))),
+    );
+    expect(host.querySelector(".board-finished")?.textContent).not.toContain(
+      "Code failed but test active",
+    );
     expect(host.querySelector(".board-finished")?.textContent).not.toContain("Plan failed task");
     expect(host.querySelector(".board-finished")?.textContent).not.toContain("running-no-failure");
     expect(host.querySelector(".board-finished")?.textContent).not.toContain("queued-no-failure");
-    await click(must([...host.querySelectorAll("button")].find((b) => b.textContent.startsWith("All "))));
+    await click(
+      must([...host.querySelectorAll("button")].find((b) => b.textContent.startsWith("All "))),
+    );
     expect(host.querySelector(".rt-chip--failed.active")).toBeNull();
     await click(must(host.querySelector(".f-side__item:not([aria-current])")));
-    await click(must([...host.querySelectorAll("button.f-side__item")].find((b) => b.textContent === "Pipeline")));
+    await click(
+      must(
+        [...host.querySelectorAll("button.f-side__item")].find((b) => b.textContent === "Pipeline"),
+      ),
+    );
     expect(host.querySelector(".rt-chip--failed.active")).toBeNull();
   });
 
@@ -691,7 +1114,9 @@ describe("mounted project controls", () => {
       await Promise.resolve();
     });
     expect(api.patchCard).toHaveBeenCalledWith("alpha-task", { status: "ready" });
-    expect(host.querySelector(".column--card-ready .card-pl:not(.card-pl--compact)")).not.toBeNull();
+    expect(
+      host.querySelector(".column--card-ready .card-pl:not(.card-pl--compact)"),
+    ).not.toBeNull();
 
     // Dismiss in NeedsYouView hides the item into localStorage and offers Show hidden
     const reviewItem = WorkItemSchema.parse({

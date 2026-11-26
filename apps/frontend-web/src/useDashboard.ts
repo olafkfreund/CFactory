@@ -9,13 +9,16 @@ import {
   fetchGitConnections,
   fetchHealth,
   fetchProgress,
+  fetchProjects,
   fetchSettings,
   fetchWorkItems,
   openFeed,
   refresh as apiRefresh,
+  resolveProject,
   type Card,
   type GitConnections,
   type LiveProgress,
+  type ServerProject,
   type WorkItem,
 } from "./api";
 import { onReopen } from "./onReopen";
@@ -28,13 +31,21 @@ import { TICKER_PREF, type Backend, type View } from "./dashboard";
 import type { BreadcrumbProject } from "./ProjectBreadcrumb";
 import {
   buildCockpitPath,
-  deriveProjects,
   filterWorkItemsForProject,
-  findProjectByRef,
   parseCockpitRoute,
-  projectSlugs,
   type CockpitProject,
 } from "./projectRoute";
+
+function toCockpitProject(project: ServerProject): CockpitProject {
+  return {
+    id: project.id,
+    name: project.name,
+    slug: project.slug,
+    createdAt: project.created_at,
+    repositoryIds: project.repository_ids,
+    repoPaths: project.repo_paths,
+  };
+}
 
 export interface ToastEntry {
   id: number;
@@ -101,6 +112,9 @@ export function useDashboard(): Dashboard {
   const [allItems, setAllItems] = useState<WorkItem[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
   const [connections, setConnections] = useState<GitConnections | null>(null);
+  const [projects, setProjects] = useState<CockpitProject[]>([]);
+  const [tenant, setTenant] = useState<string>("default");
+  const [resolvedRef, setResolvedRef] = useState<{ ref: string; project: CockpitProject | null } | null>(null);
   const [connectionsLoaded, setConnectionsLoaded] = useState(false);
   const [connectionsError, setConnectionsError] = useState<string | null>(null);
   const [routeState, setRouteState] = useState(() =>
@@ -204,25 +218,44 @@ export function useDashboard(): Dashboard {
     });
   }, []);
 
-  const projects = useMemo(() => deriveProjects(connections), [connections]);
-  const slugsById = useMemo(() => projectSlugs(projects), [projects]);
   const breadcrumbProjects = useMemo<BreadcrumbProject[]>(
     () =>
       projects.map((p) => ({
-        slug: slugsById.get(p.id) ?? p.id,
+        slug: p.slug ?? p.id,
         name: p.name,
       })),
-    [projects, slugsById],
+    [projects],
   );
-  const activeProject = useMemo(
-    () =>
-      routeState.projectRef ? (findProjectByRef(projects, routeState.projectRef) ?? null) : null,
-    [projects, routeState.projectRef],
-  );
+  const directMatch = useMemo(() => {
+    if (!routeState.projectRef) return undefined;
+    const lower = routeState.projectRef.toLowerCase();
+    const canonical = projects.filter((p) => (p.slug ?? p.id).toLowerCase() === lower);
+    if (canonical.length) return canonical.length === 1 ? canonical[0] : null;
+    const ids = projects.filter((p) => p.id.toLowerCase() === lower);
+    if (ids.length) return ids.length === 1 ? ids[0] : null;
+    return undefined;
+  }, [projects, routeState.projectRef]);
+  const activeProject = useMemo(() => {
+    if (!routeState.projectRef) return null;
+    if (directMatch !== undefined) return directMatch;
+    if (resolvedRef?.ref === routeState.projectRef) {
+      const targetId = resolvedRef.project?.id;
+      return targetId
+        ? (projects.find((p) => p.id === targetId) ?? resolvedRef.project)
+        : null;
+    }
+    return null;
+  }, [directMatch, projects, resolvedRef, routeState.projectRef]);
   const activeProjectSlug = useMemo(
-    () => activeProject ? (slugsById.get(activeProject.id) ?? activeProject.id) : undefined,
-    [activeProject, slugsById],
+    () => (activeProject ? (activeProject.slug ?? activeProject.id) : undefined),
+    [activeProject],
   );
+  const projectsReady =
+    connectionsLoaded &&
+    (routeState.projectRef === null ||
+      directMatch !== undefined ||
+      resolvedRef?.ref === routeState.projectRef ||
+      connectionsError !== null);
   scopeRef.current = { ref: routeState.projectRef, project: activeProject, projects, cards, defaultRepoId: connections?.default_repository_id };
   const items = useMemo(
     () =>
@@ -234,6 +267,31 @@ export function useDashboard(): Dashboard {
     [allItems, routeState.projectRef, activeProject, cards, projects, connections?.default_repository_id],
   );
   const visibleKeys = new Set(items.map((item) => item.correlation_key));
+
+  useEffect(() => {
+    const ref = routeState.projectRef;
+    if (!ref || !connectionsLoaded || connectionsError !== null || directMatch !== undefined) {
+      return;
+    }
+    if (resolvedRef?.ref === ref) return;
+    let cancelled = false;
+    resolveProject(tenant, ref)
+      .then((res) => {
+        if (cancelled) return;
+        setResolvedRef({
+          ref,
+          project: "project" in res ? toCockpitProject(res.project) : null,
+        });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setConnectionsError(err instanceof Error ? err.message : String(err));
+        setResolvedRef({ ref, project: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [routeState.projectRef, connectionsLoaded, connectionsError, directMatch, resolvedRef?.ref, tenant]);
 
   // Sync URL on popstate (browser back/forward).
   useEffect(() => {
@@ -261,7 +319,7 @@ export function useDashboard(): Dashboard {
       return;
     }
     if (routeState.projectRef && activeProject) {
-      const canonicalSlug = slugsById.get(activeProject.id) ?? activeProject.id;
+      const canonicalSlug = activeProject.slug ?? activeProject.id;
       const canonicalPath = buildCockpitPath(canonicalSlug, routeState.view);
       if (routeState.projectRef !== canonicalSlug || window.location.pathname !== canonicalPath) {
         if (window.location.pathname !== canonicalPath) {
@@ -276,12 +334,12 @@ export function useDashboard(): Dashboard {
         }
       }
     }
-  }, [routeState.redirectTo, routeState.projectRef, routeState.view, activeProject, slugsById]);
+  }, [routeState.redirectTo, routeState.projectRef, routeState.view, activeProject]);
 
   const setView = useCallback(
     (nextView: View) => {
       const slug = ["tokens", "audit", "services", "preferences"].includes(nextView) ? null : activeProject
-        ? (slugsById.get(activeProject.id) ?? activeProject.id)
+        ? (activeProject.slug ?? activeProject.id)
         : routeState.projectRef;
       const nextPath = buildCockpitPath(slug, nextView);
       if (window.location.pathname !== nextPath) {
@@ -289,7 +347,7 @@ export function useDashboard(): Dashboard {
       }
       setRouteState({ view: nextView, projectRef: slug, redirectTo: null });
     },
-    [activeProject, slugsById, routeState.projectRef],
+    [activeProject, routeState.projectRef],
   );
 
   const setProjectSlug = useCallback(
@@ -315,10 +373,16 @@ export function useDashboard(): Dashboard {
   const retryProjects = useCallback(async () => {
     setConnectionsError(null);
     setConnectionsLoaded(false);
+    setResolvedRef(null);
     try {
       const settings = await fetchSettings();
-      const data = await fetchGitConnections(settings.tenant);
+      setTenant(settings.tenant);
+      const [data, serverProjects] = await Promise.all([
+        fetchGitConnections(settings.tenant),
+        fetchProjects(settings.tenant),
+      ]);
       setConnections(data);
+      setProjects(serverProjects.map(toCockpitProject));
       setConnectionsLoaded(true);
     } catch (err) {
       setConnectionsError(err instanceof Error ? err.message : String(err));
@@ -435,7 +499,7 @@ export function useDashboard(): Dashboard {
     activeProjectSlug,
     projects,
     breadcrumbProjects,
-    connectionsLoaded,
+    connectionsLoaded: projectsReady,
     connectionsError,
     defaultRepositoryId: connections?.default_repository_id,
     setProjectSlug,

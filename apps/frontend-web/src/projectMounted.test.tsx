@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CardSchema, GitConnectionsSchema, WorkItemSchema } from "./api";
-import type { Card, GitConnections, WorkItem } from "./api";
+import type { Card, GitConnections, ServerProject, WorkItem } from "./api";
 import { useDashboard } from "./useDashboard";
 import ProjectBreadcrumb from "./ProjectBreadcrumb";
 import PortalSwitcher from "./PortalSwitcher";
@@ -18,6 +18,8 @@ const api = vi.hoisted(() => ({
   patchCard: vi.fn(),
   fetchSettings: vi.fn(),
   fetchGitConnections: vi.fn(),
+  fetchProjects: vi.fn(),
+  resolveProject: vi.fn(),
   fetchProgress: vi.fn(),
   fetchHealth: vi.fn(),
   fetchCardSyncState: vi.fn(),
@@ -63,6 +65,24 @@ const connections: GitConnections = GitConnectionsSchema.parse({
     },
   ],
 });
+const serverProjects: ServerProject[] = [
+  {
+    id: "alpha",
+    name: "alpha",
+    slug: "alpha",
+    repository_ids: [1],
+    repo_paths: ["acme/alpha"],
+    created_at: "",
+  },
+  {
+    id: "beta",
+    name: "beta",
+    slug: "beta",
+    repository_ids: [2],
+    repo_paths: ["acme/beta"],
+    created_at: "",
+  },
+];
 const card = (key: string, repo: number): Card =>
   CardSchema.parse({
     card_key: key,
@@ -137,6 +157,8 @@ beforeEach(() => {
   api.patchCard.mockImplementation((key: string, patch: object) => Promise.resolve({ ...card(key, 1), ...patch }));
   api.fetchSettings.mockResolvedValue({ tenant: "default" });
   api.fetchGitConnections.mockResolvedValue(connections);
+  api.fetchProjects.mockResolvedValue(serverProjects);
+  api.resolveProject.mockResolvedValue({ error: "unknown" });
   api.fetchProgress.mockResolvedValue([]);
   api.fetchHealth.mockResolvedValue({ upstreams: {} });
   api.fetchCardSyncState.mockResolvedValue({
@@ -272,7 +294,7 @@ describe("mounted project routes", () => {
   });
 
   it("exposes project fetch failure and retries", async () => {
-    api.fetchGitConnections.mockRejectedValueOnce(new Error("connection unavailable"));
+    api.fetchProjects.mockRejectedValueOnce(new Error("projects unavailable"));
     api.refresh.mockRejectedValueOnce(new Error("refresh unavailable"));
     dom.window.history.replaceState({}, "", "/p/alpha");
     await mount(<App />);
@@ -287,34 +309,28 @@ describe("mounted project routes", () => {
   });
 
   it("offers project choices for an ambiguous alias without linking it to siblings", async () => {
-    api.fetchGitConnections.mockResolvedValueOnce(
-      GitConnectionsSchema.parse({
-        ...connections,
-        connections: [
-          {
-            ...connections.connections[0],
-            repositories: [
-              {
-                id: 1,
-                connection_id: 1,
-                tenant_id: "default",
-                project: "acme/shared",
-                aifactory_project_id: "alpha",
-              },
-              {
-                id: 2,
-                connection_id: 1,
-                tenant_id: "default",
-                project: "acme/shared",
-                aifactory_project_id: "beta",
-              },
-            ],
-          },
-        ],
-      }),
-    );
+    api.fetchProjects.mockResolvedValueOnce([
+      {
+        id: "alpha",
+        name: "shared",
+        slug: "shared-alpha",
+        repository_ids: [1],
+        repo_paths: ["acme/shared"],
+        created_at: "",
+      },
+      {
+        id: "beta",
+        name: "shared",
+        slug: "shared-beta",
+        repository_ids: [2],
+        repo_paths: ["acme/shared"],
+        created_at: "",
+      },
+    ]);
+    api.resolveProject.mockResolvedValueOnce({ error: "ambiguous" });
     dom.window.history.replaceState({}, "", "/p/acme-shared");
     await mount(<App />);
+    expect(api.resolveProject).toHaveBeenCalledWith("default", "acme-shared");
     expect(host.textContent).toContain("Choose a project");
     expect(host.querySelectorAll(".mc-panel button")).toHaveLength(3);
     expect(host.querySelector('a[href*="/p/"]')).toBeNull();
@@ -326,6 +342,52 @@ describe("mounted project routes", () => {
       ),
     );
     expect(dom.window.location.pathname).toBe("/");
+  });
+
+  it("resolves /p/<ref> through the server and canonicalizes the URL", async () => {
+    api.resolveProject.mockResolvedValueOnce({
+      project: must(serverProjects[0]),
+    });
+    dom.window.history.replaceState({}, "", "/p/acme-alpha/planning");
+    await mount(<RouteProbe />);
+    expect(api.resolveProject).toHaveBeenCalledWith("default", "acme-alpha");
+    expect(dom.window.location.pathname).toBe("/p/alpha/planning");
+    expect(host.querySelector('[data-testid="path"]')?.textContent).toBe("alpha:planning");
+    expect(host.querySelector('[data-testid="items"]')?.textContent).toBe("alpha-task");
+  });
+
+  it("links Meet to <meet url>/p/<slug> for a grouped project and plain Meet URL for a repo: project", async () => {
+    api.fetchProjects.mockResolvedValue([
+      ...serverProjects,
+      {
+        id: "repo:3",
+        name: "acme/free",
+        slug: "acme-free",
+        repository_ids: [3],
+        repo_paths: ["acme/free"],
+        created_at: "",
+      },
+    ]);
+    dom.window.history.replaceState({}, "", "/p/alpha");
+    await mount(<App />);
+    const groupedMeet = must(
+      [...host.querySelectorAll<HTMLAnchorElement>(".f-portal-switcher__item")].find((el) =>
+        el.textContent.includes("Meet"),
+      ),
+    );
+    expect(groupedMeet.getAttribute("href")).toBe("https://rfactory.freundcloud.org.uk/p/alpha");
+
+    dom.window.history.pushState({}, "", "/p/acme-free");
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
+      await Promise.resolve();
+    });
+    const repoMeet = must(
+      [...host.querySelectorAll<HTMLAnchorElement>(".f-portal-switcher__item")].find((el) =>
+        el.textContent.includes("Meet"),
+      ),
+    );
+    expect(repoMeet.getAttribute("href")).toBe("https://rfactory.freundcloud.org.uk");
   });
 });
 

@@ -754,6 +754,40 @@ export async function fetchGitConnections(tenant: string): Promise<GitConnection
   return getJson(tenantPath(tenant, "git-connections"), GitConnectionsSchema, "git-connections");
 }
 
+export const ServerProjectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  repository_ids: z.array(z.number()),
+  repo_paths: z.array(z.string()),
+  created_at: z.string(),
+});
+export type ServerProject = z.infer<typeof ServerProjectSchema>;
+
+export const ProjectsResponseSchema = z.array(ServerProjectSchema);
+
+export const ProjectResolveResponseSchema = z.union([
+  z.object({ project: ServerProjectSchema }),
+  z.object({ error: z.enum(["unknown", "ambiguous"]) }),
+]);
+export type ProjectResolveResponse = z.infer<typeof ProjectResolveResponseSchema>;
+
+export async function fetchProjects(tenant: string): Promise<ServerProject[]> {
+  return getJson(tenantPath(tenant, "projects"), ProjectsResponseSchema, "projects");
+}
+
+export async function resolveProject(
+  tenant: string,
+  ref: string,
+): Promise<ProjectResolveResponse> {
+  const params = new URLSearchParams({ ref });
+  return getJson(
+    tenantPath(tenant, `projects/resolve?${params.toString()}`),
+    ProjectResolveResponseSchema,
+    "projects resolve",
+  );
+}
+
 // The published capability matrix (RFC-0020 §3.5). What the fleet can actually
 // do on each host, so the reduction a non-GitHub tenant lives with is visible
 // beside the provider selector rather than discovered on a run that quietly

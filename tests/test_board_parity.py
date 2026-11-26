@@ -40,7 +40,7 @@ from cfactory.mcp import INVESTIGATION_TOOLS, MCP_TOOLS, TOOL_SCOPES
 # the surface grew connections and repositories, and a marker per noun is a marker
 # somebody forgets to add. Any future ``cfactory_*_git_*`` tool is caught.
 BOARD_ROUTE_PREFIXES = ("/api/cards", "/api/tenants", "/api/investigations")
-BOARD_TOOL_MARKERS = ("card", "git_", "investigation")
+BOARD_TOOL_MARKERS = ("card", "git_", "investigation", "project")
 
 
 @dataclass(frozen=True)
@@ -211,6 +211,18 @@ BOARD_OPERATIONS: tuple[BoardOperation, ...] = (
         "GET",
         "/api/tenants/{tenant}/git-repositories",
         "cfactory_list_git_repositories",
+    ),
+    BoardOperation(
+        "list_projects",
+        "GET",
+        "/api/tenants/{tenant}/projects",
+        "cfactory_list_projects",
+    ),
+    BoardOperation(
+        "resolve_project",
+        "GET",
+        "/api/tenants/{tenant}/projects/resolve",
+        "cfactory_resolve_project",
     ),
     BoardOperation(
         "create_git_repository",

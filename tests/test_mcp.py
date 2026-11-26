@@ -149,6 +149,8 @@ def test_initialize_and_tools_list(mcp_client):
         "cfactory_start_git_install",
         "cfactory_delete_git_install",
         "cfactory_list_git_repositories",
+        "cfactory_list_projects",
+        "cfactory_resolve_project",
         "cfactory_create_git_repository",
         "cfactory_update_git_repository",
         "cfactory_delete_git_repository",

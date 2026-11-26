@@ -59,7 +59,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from . import card_ops, git_config_ops, investigations
+from . import card_ops, git_config_ops, investigations, projects
 from .api_deps import action_transport_dep, cards_store_dep
 from .audit import get_audit_store
 from .auth import READ, WRITE, extract_key, get_keystore, secret_matches
@@ -833,6 +833,20 @@ BOARD_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "cfactory_list_projects",
+        "description": "List this tenant's derived projects and canonical slugs.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cfactory_resolve_project",
+        "description": "Resolve a project by canonical slug, id, or alias within this tenant.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["ref"],
+            "properties": {"ref": {"type": "string"}},
+        },
+    },
+    {
         "name": "cfactory_create_git_repository",
         "description": (
             "Add a repository to one of this tenant's connections: the project the board syncs "
@@ -1095,6 +1109,8 @@ TOOL_SCOPES: dict[str, str] = {
     "cfactory_start_git_install": WRITE,
     "cfactory_delete_git_install": WRITE,
     "cfactory_list_git_repositories": READ,
+    "cfactory_list_projects": READ,
+    "cfactory_resolve_project": READ,
     "cfactory_create_git_repository": WRITE,
     "cfactory_update_git_repository": WRITE,
     "cfactory_delete_git_repository": WRITE,
@@ -1425,6 +1441,14 @@ def _tool_list_git_repositories(args: dict[str, Any], ctx: ToolContext) -> Any:
     )
 
 
+def _tool_list_projects(_args: dict[str, Any], ctx: ToolContext) -> Any:
+    return projects.list_projects(ctx.cards)
+
+
+def _tool_resolve_project(args: dict[str, Any], ctx: ToolContext) -> Any:
+    return projects.resolve_project(ctx.cards, str(args.get("ref") or ""))
+
+
 def _tool_create_git_repository(args: dict[str, Any], ctx: ToolContext) -> Any:
     fields = {k: v for k, v in args.items() if k != "connection_id"}
     return git_config_ops.create_git_repository(
@@ -1564,6 +1588,8 @@ _TOOL_HANDLERS: dict[str, Callable[[dict[str, Any], ToolContext], Any]] = {
     "cfactory_start_git_install": _tool_start_git_install,
     "cfactory_delete_git_install": _tool_delete_git_install,
     "cfactory_list_git_repositories": _tool_list_git_repositories,
+    "cfactory_list_projects": _tool_list_projects,
+    "cfactory_resolve_project": _tool_resolve_project,
     "cfactory_create_git_repository": _tool_create_git_repository,
     "cfactory_update_git_repository": _tool_update_git_repository,
     "cfactory_delete_git_repository": _tool_delete_git_repository,

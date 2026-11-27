@@ -82,7 +82,7 @@ jobs:
       #     this repo with Write (then GITHUB_TOKEN works, no secret needed), OR
       #   - gh secret set GHCR_PAT --repo olafkfreund/CFactory   (classic PAT,
       #     scope write:packages)
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -296,7 +296,7 @@ jobs:
           ./.github/scripts/assert-signature-location.sh "${FRONTEND_IMAGE}" "${{ steps.build_frontend.outputs.digest }}"
 
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        uses: anchore/sbom-action/download-syft@dfcb83b97731532d72be422cbc51ee64adb6fd56  # v0.24.4
 
       - name: Generate + attest dual SBOMs (SPDX + CycloneDX) for both images
         run: |

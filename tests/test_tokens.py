@@ -299,6 +299,18 @@ def test_generated_empty_is_a_tfactory_terminal_receipt(store):
     assert token_totals(store)["total"]["total_tokens"] == 30
 
 
+def test_delayed_receipt_does_not_reverse_timeline_or_latency(client, store):
+    store.upsert_from_event(_verify("new", "post", minute=1))
+    store.upsert_from_event(_verify("delayed", "pre", minute=0))
+    timeline = client.get("/api/workitems/42/timeline").json()
+    assert [event["updated_at"] for event in timeline["events"]] == [
+        "2026-11-28T00:00:00+00:00",
+        "2026-11-28T00:01:00+00:00",
+    ]
+    assert timeline["span_seconds"] == 60
+    assert client.get("/api/rollups").json()["latency"]["avg_seconds"] == 60
+
+
 def test_tfactory_slice_fallback_yields_to_measured_zero(store):
     store.upsert_from_event(_verify("unmeasured", "pre"))
     store.upsert_snapshot(

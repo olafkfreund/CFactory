@@ -46,6 +46,7 @@ def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | Non
     wi = store.get(correlation_key)
     if wi is None:
         return None
+    timeline = sorted(wi.timeline, key=lambda event: event.updated_at)
     events = [
         {
             "service": e.service.value,
@@ -53,11 +54,11 @@ def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | Non
             "phase": e.phase,
             "updated_at": e.updated_at.isoformat(),
         }
-        for e in wi.timeline
+        for e in timeline
     ]
     span = None
-    if len(wi.timeline) >= _SPAN_MIN_EVENTS:
-        span = (wi.timeline[-1].updated_at - wi.timeline[0].updated_at).total_seconds()
+    if len(timeline) >= _SPAN_MIN_EVENTS:
+        span = (timeline[-1].updated_at - timeline[0].updated_at).total_seconds()
     return {
         "correlation_key": wi.correlation_key,
         "title": wi.title,
@@ -91,7 +92,8 @@ def rollups(store: WorkItemStore) -> dict:
                 cost += usage.cost_usd
         total_events += len(wi.timeline)
         if len(wi.timeline) >= _SPAN_MIN_EVENTS:
-            spans.append((wi.timeline[-1].updated_at - wi.timeline[0].updated_at).total_seconds())
+            times = [event.updated_at for event in wi.timeline]
+            spans.append((max(times) - min(times)).total_seconds())
     latency = None
     if spans:
         latency = {"avg_seconds": sum(spans) / len(spans), "max_seconds": max(spans)}

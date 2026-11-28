@@ -8,7 +8,9 @@ PRAGMAs let a reader run alongside a sustained writer without erroring.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
+from datetime import UTC, datetime
 
 from cfactory.models import CompletionEvent, Service
 from cfactory.store import WorkItemStore
@@ -21,7 +23,7 @@ def _event(key: str, status: str = "in_progress") -> CompletionEvent:
         task_id=f"task-{key}",
         status=status,
         phase="code",
-        updated_at=datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 6, 10, 12, 0, tzinfo=UTC),
     )
 
 
@@ -60,3 +62,46 @@ def test_concurrent_reads_during_writes_do_not_lock(tmp_path):
         t.join(timeout=10)
 
     assert not errors, f"locking errors under concurrency: {errors[:3]}"
+
+
+def test_concurrent_terminal_events_preserve_both_receipts(tmp_path, monkeypatch):
+    store = WorkItemStore(f"sqlite:///{tmp_path / 'receipts.db'}")
+    key = "registered-p1"
+    store.upsert_from_event(_event(key))
+    first_read = threading.Event()
+    allow_first_write = threading.Event()
+    get_row = store._get_row
+
+    def pause_first_read(session, correlation_key, **options):
+        row = get_row(session, correlation_key, **options)
+        if not first_read.is_set():
+            first_read.set()
+            assert allow_first_write.wait(5)
+        return row
+
+    def complete(task_id):
+        return store.upsert_from_event(
+            CompletionEvent(
+                correlation_key=key,
+                service=Service.TFACTORY,
+                task_id=task_id,
+                id=task_id,
+                status="triaged",
+            )
+        )
+
+    monkeypatch.setattr(store, "_get_row", pause_first_read)
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(complete, "handoff")
+        try:
+            assert first_read.wait(5)
+            second = pool.submit(complete, "post-merge")
+            with suppress(TimeoutError):
+                second.result(timeout=0.5)
+        finally:
+            allow_first_write.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+
+    receipts = [event.id for event in store.get(key).timeline if event.id]
+    assert receipts == ["handoff", "post-merge"]

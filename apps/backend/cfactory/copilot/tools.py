@@ -2,19 +2,44 @@
 
 Pure, structured queries over the WorkItem store — used to enrich the copilot's
 context and exposed as read API endpoints for the cockpit UI. Roll-ups aggregate
-the RFC-0001 ``usage`` block carried on each service slice: token totals, cost
-(real dollars for metered work), and latency derived from event timestamps.
+RFC-0001 usage from service slices and distinct TFactory terminal receipts.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
+from typing import Any
 
-from cfactory.store import WorkItemStore
-from cfactory.usage import add_usage, empty_bucket
+from cfactory._contracts.factory_contracts import rollup_usage
+from cfactory.models import Service, TokenUsage, WorkItem
+from cfactory.status_taxonomy import is_terminal
+from cfactory.store import WorkItemStore, rollup_by
+from cfactory.usage import ROLLUP_KEYS, add_usage, empty_bucket
 
 # A timeline span needs two endpoints to measure between.
 _SPAN_MIN_EVENTS = 2
+
+
+def _tfactory_receipts(wi: WorkItem) -> list[TokenUsage]:
+    """Select one cumulative terminal measurement per TFactory task."""
+    latest: dict[str, tuple[datetime, TokenUsage]] = {}
+    for event in wi.timeline:
+        if (
+            event.service != Service.TFACTORY
+            or not event.task_id.strip()
+            or event.phase in ("worker", "worker_progress", "progress")
+            or event.worker is not None
+            or not (is_terminal(event.status) or event.status == "generated_empty")
+            or event.usage is None
+            or event.time is None
+        ):
+            continue
+        previous = latest.get(event.task_id)
+        # Iteration order breaks ties in favor of the later timeline entry.
+        if previous is None or event.time >= previous[0]:
+            latest[event.task_id] = (event.time, event.usage)
+    return [usage for _, usage in latest.values()]
 
 
 def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | None:
@@ -22,18 +47,22 @@ def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | Non
     wi = store.get(correlation_key)
     if wi is None:
         return None
+    timeline = sorted(
+        ((stamp, event) for event in wi.timeline if (stamp := event.updated_at) is not None),
+        key=lambda entry: entry[0],
+    )
     events = [
         {
             "service": e.service.value,
             "status": e.status,
             "phase": e.phase,
-            "updated_at": e.updated_at.isoformat(),
+            "updated_at": stamp.isoformat(),
         }
-        for e in wi.timeline
+        for stamp, e in timeline
     ]
     span = None
-    if len(wi.timeline) >= _SPAN_MIN_EVENTS:
-        span = (wi.timeline[-1].updated_at - wi.timeline[0].updated_at).total_seconds()
+    if len(timeline) >= _SPAN_MIN_EVENTS:
+        span = (timeline[-1][0] - timeline[0][0]).total_seconds()
     return {
         "correlation_key": wi.correlation_key,
         "title": wi.title,
@@ -61,11 +90,14 @@ def rollups(store: WorkItemStore) -> dict:
         for s in (wi.pfactory, wi.aifactory, wi.tfactory):
             if s.status:
                 by_status[s.status] += 1
-            if s.usage:
-                cost += s.usage.cost_usd
+        verify_usage = _tfactory_receipts(wi) or (wi.tfactory.usage,)
+        for usage in (wi.pfactory.usage, wi.aifactory.usage, *verify_usage):
+            if usage is not None:
+                cost += usage.cost_usd
         total_events += len(wi.timeline)
-        if len(wi.timeline) >= _SPAN_MIN_EVENTS:
-            spans.append((wi.timeline[-1].updated_at - wi.timeline[0].updated_at).total_seconds())
+        times = [stamp for event in wi.timeline if (stamp := event.updated_at) is not None]
+        if len(times) >= _SPAN_MIN_EVENTS:
+            spans.append((max(times) - min(times)).total_seconds())
     latency = None
     if spans:
         latency = {"avg_seconds": sum(spans) / len(spans), "max_seconds": max(spans)}
@@ -92,15 +124,22 @@ def _wi_elapsed_seconds(wi) -> int | None:
     return max(0, int((max(times) - min(times)).total_seconds()))
 
 
-def _billing_summary(wi) -> dict | None:
+def _billing_summary(wi: WorkItem, tfactory_receipts: list[TokenUsage]) -> dict | None:
     """Bucket a work item's usage by billing mode so the cockpit shows the right
     metric (#96): real dollars only for metered (api/cloud) work, tokens + time
-    for subscription/local. Sourced from each service's ``by_provider`` rollup
-    (which carries ``billing_mode``). ``None`` when no provider breakdown exists
-    yet (older events) — the cockpit then falls back to the legacy cost display."""
+    for subscription/local. Use provider breakdowns or worker billing modes.
+    Return ``None`` when there is no breakdown for the cockpit to display."""
     by_mode: dict[str, dict] = {}
-    for svc in ("pfactory", "aifactory", "tfactory"):
-        bp = getattr(getattr(wi, svc), "by_provider", None)
+    breakdowns = [wi.pfactory.by_provider, wi.aifactory.by_provider]
+    if tfactory_receipts:
+        breakdowns.extend(
+            usage.by_provider
+            or rollup_by({w.worker_id: w for w in usage.workers or []}, "billing_mode")
+            for usage in tfactory_receipts
+        )
+    else:
+        breakdowns.append(wi.tfactory.by_provider)
+    for bp in breakdowns:
         for vals in (bp or {}).values():
             if not isinstance(vals, dict):
                 continue
@@ -135,7 +174,6 @@ def token_totals(store: WorkItemStore) -> dict:
     — CFactory has no project dimension on the WorkItem yet.
     """
     services = ("pfactory", "aifactory", "tfactory")
-    keys = ("input_tokens", "output_tokens", "total_tokens")
     by_service = {
         s: {
             "input_tokens": 0,
@@ -152,31 +190,35 @@ def token_totals(store: WorkItemStore) -> dict:
     for wi in store.list():
         wi_tot = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
         budget = None
+        tfactory_receipts = _tfactory_receipts(wi)
         for svc in services:
-            u = getattr(wi, svc).usage
+            slice_usage = getattr(wi, svc).usage
+            u = (
+                rollup_usage(tfactory_receipts)
+                if svc == "tfactory" and tfactory_receipts
+                else slice_usage
+            )
             if u is None:
                 continue
             b = by_service[svc]
             b["instrumented"] = True
-            for k in keys:
-                v = getattr(u, k)
+            for k in ROLLUP_KEYS:
+                v = getattr(u, k) or 0
                 b[k] += v
                 wi_tot[k] += v
                 total[k] += v
-            b["cost_usd"] += u.cost_usd
-            wi_tot["cost_usd"] += u.cost_usd
-            total["cost_usd"] += u.cost_usd
-            # Soft budget (v1.3 P2): present only when the contract set one;
-            # carried on a service's terminal usage. Surface it on the row so
-            # the cockpit can render an "over budget" badge. None on the common
-            # (no-budget) case — old rows are unchanged.
-            if u.budget is not None:
-                budget = u.budget.model_dump()
+            # The soft-budget badge describes the current service slice.
+            if slice_usage is not None and slice_usage.budget is not None:
+                budget = slice_usage.budget.model_dump()
         if wi_tot["total_tokens"] or wi_tot["cost_usd"]:
-            row = {"correlation_key": wi.correlation_key, "title": wi.title, **wi_tot}
+            row: dict[str, Any] = {
+                "correlation_key": wi.correlation_key,
+                "title": wi.title,
+                **wi_tot,
+            }
             if budget is not None:
                 row["budget"] = budget
-            billing = _billing_summary(wi)
+            billing = _billing_summary(wi, tfactory_receipts)
             if billing is not None:
                 row["billing"] = billing
             elapsed = _wi_elapsed_seconds(wi)
@@ -358,7 +400,7 @@ def cost_routing(store: WorkItemStore, correlation_key: str) -> dict | None:
         for model, b in by_model.items()
     }
 
-    billing = _billing_summary(wi)
+    billing = _billing_summary(wi, _tfactory_receipts(wi))
     # Actual metered spend (real dollars) — reuse the billing-mode display rule.
     actual_cost = billing["metered_cost_usd"] if billing else None
     routing = _routing_block(wi)

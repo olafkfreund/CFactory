@@ -490,7 +490,10 @@ class WorkItemStore:
         for attempt in range(2):
             try:
                 with self._session.begin() as session:
-                    row = self._get_row(session, event.correlation_key)
+                    if self._engine.dialect.name == "sqlite":
+                        # Claim the writer before reading the JSON timeline.
+                        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                    row = self._get_row(session, event.correlation_key, for_update=True)
                     if row is not None and _already_recorded(row.timeline, event):
                         return row.to_model(), False
 
@@ -760,10 +763,13 @@ class WorkItemStore:
             session.delete(row)
             return True
 
-    def _get_row(self, session: Session, correlation_key: str) -> WorkItemRow | None:
-        return session.scalars(
-            self._select().where(WorkItemRow.correlation_key == correlation_key)
-        ).first()
+    def _get_row(
+        self, session: Session, correlation_key: str, *, for_update: bool = False
+    ) -> WorkItemRow | None:
+        query = self._select().where(WorkItemRow.correlation_key == correlation_key)
+        if for_update:
+            query = query.with_for_update()
+        return session.scalars(query).first()
 
 
 @cache

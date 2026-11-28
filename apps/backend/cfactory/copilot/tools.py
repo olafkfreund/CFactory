@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+from typing import Any
 
 from cfactory._contracts.factory_contracts import rollup_usage
 from cfactory.models import Service, TokenUsage, WorkItem
@@ -46,19 +47,22 @@ def summarize_timeline(store: WorkItemStore, correlation_key: str) -> dict | Non
     wi = store.get(correlation_key)
     if wi is None:
         return None
-    timeline = sorted(wi.timeline, key=lambda event: event.updated_at)
+    timeline = sorted(
+        ((stamp, event) for event in wi.timeline if (stamp := event.updated_at) is not None),
+        key=lambda entry: entry[0],
+    )
     events = [
         {
             "service": e.service.value,
             "status": e.status,
             "phase": e.phase,
-            "updated_at": e.updated_at.isoformat(),
+            "updated_at": stamp.isoformat(),
         }
-        for e in timeline
+        for stamp, e in timeline
     ]
     span = None
     if len(timeline) >= _SPAN_MIN_EVENTS:
-        span = (timeline[-1].updated_at - timeline[0].updated_at).total_seconds()
+        span = (timeline[-1][0] - timeline[0][0]).total_seconds()
     return {
         "correlation_key": wi.correlation_key,
         "title": wi.title,
@@ -91,8 +95,8 @@ def rollups(store: WorkItemStore) -> dict:
             if usage is not None:
                 cost += usage.cost_usd
         total_events += len(wi.timeline)
-        if len(wi.timeline) >= _SPAN_MIN_EVENTS:
-            times = [event.updated_at for event in wi.timeline]
+        times = [stamp for event in wi.timeline if (stamp := event.updated_at) is not None]
+        if len(times) >= _SPAN_MIN_EVENTS:
             spans.append((max(times) - min(times)).total_seconds())
     latency = None
     if spans:
@@ -207,7 +211,11 @@ def token_totals(store: WorkItemStore) -> dict:
             if slice_usage is not None and slice_usage.budget is not None:
                 budget = slice_usage.budget.model_dump()
         if wi_tot["total_tokens"] or wi_tot["cost_usd"]:
-            row = {"correlation_key": wi.correlation_key, "title": wi.title, **wi_tot}
+            row: dict[str, Any] = {
+                "correlation_key": wi.correlation_key,
+                "title": wi.title,
+                **wi_tot,
+            }
             if budget is not None:
                 row["budget"] = budget
             billing = _billing_summary(wi, tfactory_receipts)
